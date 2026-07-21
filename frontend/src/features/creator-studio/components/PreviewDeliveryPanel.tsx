@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ArtifactContentResponse } from '../../../utils/types'
 import { getCreatorArtifactContent, rebuildFinalAssembly } from '../../../services/creatorApi'
+import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import type { CreatorStep } from '../types'
-import { deliveryArtifactPassesFinalReview, isCreatorConflict } from '../logic'
+import { deliveryArtifactPassesFinalReview, isCreatorConflict, resolveCreatorArtifactMediaUrl } from '../logic'
 
 interface PreviewDeliveryPanelProps {
   projectId: string
@@ -23,7 +24,7 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
   const isDelivery = step.id === 'delivery'
   const isFinalReviewPassed = isDelivery && deliveryArtifactPassesFinalReview(currentContent)
   const previewReady = step.state === 'confirmed' || step.state === 'needs_review'
-  const mediaUrl = currentContent?.mediaUrl ?? currentContent?.mediaUrls?.[0]
+  const mediaUrl = resolveCreatorArtifactMediaUrl(projectId, currentContent, getLocalAgentBaseUrl())
 
   useEffect(() => {
     controllerRef.current?.abort()

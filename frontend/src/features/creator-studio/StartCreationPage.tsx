@@ -4,6 +4,7 @@ import { buildClientModelProvidersForRun, uploadLocalArtifactFile, type LocalArt
 import { registerProjectMaterial } from '../../services/creatorApi'
 import type { ProjectMaterial, ProjectMaterialKind } from './types'
 import { buildCreationRequest, buildProjectMaterialStorageRef, creatorStartIdempotencyKey } from './logic'
+import type { CreatorAIGCPolicy, CreatorProductionRoute } from './logic'
 
 type MaterialStatus = 'ready' | 'uploading' | 'success' | 'failed'
 
@@ -27,12 +28,22 @@ const durationOptions = [
 
 const aspectOptions = ['9:16', '16:9', '1:1']
 const platformOptions = ['', '抖音', '小红书', '视频号', 'B站']
+const productionRouteOptions: { value: CreatorProductionRoute; label: string }[] = [
+  { value: 'talking_head', label: '三层口播（IP + 文字特效 + AIGC）' },
+  { value: 'cinematic_story', label: '影视化 Shot（三层画面设计）' },
+]
+const aigcPolicyOptions: { value: CreatorAIGCPolicy; label: string }[] = [
+  { value: 'auto', label: '自动丰富（按 Shot 需要生成）' },
+  { value: 'disabled', label: '纯本地（保留 AIGC 层设计但不执行）' },
+]
 
 export default function StartCreationPage({ onOpenProject }: StartCreationPageProps) {
   const [prompt, setPrompt] = useState('')
   const [durationValue, setDurationValue] = useState('')
   const [aspectRatio, setAspectRatio] = useState('9:16')
   const [platform, setPlatform] = useState('')
+  const [productionRoute, setProductionRoute] = useState<CreatorProductionRoute>('talking_head')
+  const [aigcPolicy, setAigcPolicy] = useState<CreatorAIGCPolicy>('auto')
   const [materials, setMaterials] = useState<MaterialItem[]>([])
   const [projectId, setProjectId] = useState<string>()
   const [starting, setStarting] = useState(false)
@@ -155,6 +166,8 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
         aspectRatio,
         platform: platform || undefined,
         materialCount: materials.length,
+        productionRoute,
+        aigcPolicy,
         modelProviders,
       })
       if (!nextProjectId) {
@@ -190,6 +203,10 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
       <p className="creator-eyebrow">开始创作</p>
       <h1 id="creator-page-title">先说一句，你想拍什么？</h1>
       <p className="creator-intro">写下主题、人物或画面感，接下来的创作会从这里开始。</p>
+      <div className="creator-layer-contract" aria-label="每个 Shot 的三层画面设计">
+        <strong>每个 Shot 都按三层设计</strong>
+        <span>IP A-roll 承载角色口播 · HyperFrames 保证文字与特效 · AIGC 丰富背景和素材</span>
+      </div>
       <label className="creator-prompt-label" htmlFor="creator-prompt">创作想法</label>
       <textarea
         id="creator-prompt"
@@ -249,6 +266,16 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
           <label>发布平台
             <select value={platform} onChange={(event) => setPlatform(event.target.value)} disabled={starting}>
               {platformOptions.map(option => <option key={option} value={option}>{option || '暂不设定'}</option>)}
+            </select>
+          </label>
+          <label>制作方式
+            <select value={productionRoute} onChange={(event) => setProductionRoute(event.target.value as CreatorProductionRoute)} disabled={starting}>
+              {productionRouteOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label>AIGC 丰富层
+            <select value={aigcPolicy} onChange={(event) => setAigcPolicy(event.target.value as CreatorAIGCPolicy)} disabled={starting}>
+              {aigcPolicyOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
         </div>

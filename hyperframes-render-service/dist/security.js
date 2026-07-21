@@ -5,6 +5,14 @@
  */
 import path from "node:path";
 import fs from "node:fs";
+/** Build a normalized allowlist from one required root and optional semicolon-separated roots. */
+export function configuredRoots(primaryRoot, additionalRoots = "") {
+    const roots = [primaryRoot, ...additionalRoots.split(";")]
+        .map((root) => root.trim())
+        .filter((root) => path.isAbsolute(root))
+        .map((root) => path.resolve(root));
+    return [...new Set(roots)];
+}
 /**
  * Resolves `targetPath` and asserts it falls within at least one of the
  * `allowedRoots`.  Throws if the resolved path escapes all allowed roots.

@@ -493,6 +493,9 @@ func main() {
 		projectHandler.RegisterRoutes(r)
 		videoCreationSvc := videoSvc.NewCreationService(videoProjectRepo, &shotRegenerationAgentDispatcher{runner: agentRunner})
 		agentRunner.WithTerminalCallback(func(ctx context.Context, event agentruntime.RunTerminalEvent) error {
+			if err := syncVideoProjectFromAgentTerminal(ctx, videoProjectSvc, event); err != nil {
+				return err
+			}
 			return failShotRegenerationFromAgentTerminal(ctx, videoCreationSvc, videoProjectRepo, event)
 		})
 		shotRegenerationReconciler := videoSvc.NewShotRegenerationReconciler(videoProjectRepo, videoCreationSvc, 5*time.Second, 50)
@@ -931,6 +934,33 @@ func failShotRegenerationFromAgentTerminal(
 		}
 	}
 	return completion.FailShotRegeneration(ctx, userID, projectID, provenance, reason)
+}
+
+type agentProjectTerminalLifecycle interface {
+	MarkAgentRunCompleted(ctx context.Context, userID, projectID, runID string) error
+	MarkAgentRunStopped(ctx context.Context, userID, projectID, runID string) error
+}
+
+func syncVideoProjectFromAgentTerminal(
+	ctx context.Context,
+	projects agentProjectTerminalLifecycle,
+	event agentruntime.RunTerminalEvent,
+) error {
+	if projects == nil {
+		return nil
+	}
+	projectID := metadataString(event.Context, "projectId")
+	if projectID == "" {
+		return nil
+	}
+	switch event.Status {
+	case agentruntime.RunStatusSuccess:
+		return projects.MarkAgentRunCompleted(ctx, event.UserID, projectID, event.RunID)
+	case agentruntime.RunStatusFailed, agentruntime.RunStatusCancelled:
+		return projects.MarkAgentRunStopped(ctx, event.UserID, projectID, event.RunID)
+	default:
+		return nil
+	}
 }
 
 func shotRegenerationProvenanceFromPayload(payload map[string]interface{}) (videoSvc.ShotRegenerationProvenance, bool, error) {

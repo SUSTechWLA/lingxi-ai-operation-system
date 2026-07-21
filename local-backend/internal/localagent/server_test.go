@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,6 +58,39 @@ func TestHealthAndPathsUseLocalDataDir(t *testing.T) {
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 			t.Fatalf("expected directory %q to exist, stat=%v err=%v", dir, info, err)
 		}
+	}
+}
+
+func TestLocalProjectMediaServesOnlyFilesInsideProject(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	videoPath := filepath.Join(root, "projects", "vp-1", "renders", "final.mp4")
+	if err := os.MkdirAll(filepath.Dir(videoPath), 0o755); err != nil {
+		t.Fatalf("create render dir: %v", err)
+	}
+	if err := os.WriteFile(videoPath, []byte("demo-video"), 0o644); err != nil {
+		t.Fatalf("write demo video: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&path="+url.QueryEscape(videoPath), nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != "demo-video" {
+		t.Fatalf("media response status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Content-Type") != "video/mp4" {
+		t.Fatalf("media content type=%q", rec.Header().Get("Content-Type"))
+	}
+
+	outsidePath := filepath.Join(root, "outside.mp4")
+	if err := os.WriteFile(outsidePath, []byte("private"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&path="+url.QueryEscape(outsidePath), nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("outside media status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -345,6 +379,40 @@ func TestReadMCPProvidersBootstrapsBundledIPAvatarWhenConfigIsMissing(t *testing
 	}
 }
 
+func TestReadMCPProvidersAddsBundledIPAvatarToExistingConfig(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "repo", "mcp", "ip_avatar_3d", "server.py")
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatalf("mkdir MCP script dir: %v", err)
+	}
+	if err := os.WriteFile(script, []byte("# test MCP server\n"), 0o644); err != nil {
+		t.Fatalf("write MCP script: %v", err)
+	}
+	t.Setenv("TANGYING_IP_AVATAR_MCP_SCRIPT", script)
+	configDir := filepath.Join(root, "data", "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "mcp-providers.json"), []byte(`{
+  "providers": [{"id":"jimeng","label":"JiMeng","transport":"stdio","command":"python3","args":["jimeng.py"],"enabled":false}]
+}`), 0o600); err != nil {
+		t.Fatalf("write provider config: %v", err)
+	}
+
+	server := NewServer(Config{DataDir: filepath.Join(root, "data")})
+	providers, err := server.ReadMCPProviders()
+	if err != nil {
+		t.Fatalf("ReadMCPProviders: %v", err)
+	}
+	if len(providers) != 2 {
+		t.Fatalf("providers = %#v, want existing plus bundled IP avatar", providers)
+	}
+	provider, ok := localMCPProviderByID(providers, "ip_avatar_3d")
+	if !ok || !provider.Enabled || len(provider.Args) != 1 || provider.Args[0] != script {
+		t.Fatalf("bundled IP avatar provider = %+v, found=%v", provider, ok)
+	}
+}
+
 func TestLocalMCPProviderSettingsSaveAndStatus(t *testing.T) {
 	root := t.TempDir()
 	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -386,14 +454,21 @@ func TestLocalMCPProviderSettingsSaveAndStatus(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
 		t.Fatalf("decode status: %v", err)
 	}
-	if len(status.Providers) != 1 {
-		t.Fatalf("provider count = %d, want 1", len(status.Providers))
+	var jimengStatus *LocalMCPProviderStatus
+	for index := range status.Providers {
+		if status.Providers[index].ID == "jimeng" {
+			jimengStatus = &status.Providers[index]
+			break
+		}
 	}
-	if !status.Providers[0].Reachable {
-		t.Fatalf("provider should be reachable: %+v", status.Providers[0])
+	if jimengStatus == nil {
+		t.Fatalf("saved JiMeng provider is missing from status: %+v", status.Providers)
 	}
-	if len(status.Providers[0].Tools) != 1 || status.Providers[0].Tools[0].Name != "jimeng.generate_video" {
-		t.Fatalf("tools = %+v", status.Providers[0].Tools)
+	if !jimengStatus.Reachable {
+		t.Fatalf("provider should be reachable: %+v", jimengStatus)
+	}
+	if len(jimengStatus.Tools) != 1 || jimengStatus.Tools[0].Name != "jimeng.generate_video" {
+		t.Fatalf("tools = %+v", jimengStatus.Tools)
 	}
 }
 

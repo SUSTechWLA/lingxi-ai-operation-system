@@ -2190,6 +2190,15 @@ try {
     'shot asset workbench should keep material cards focused while still allowing prompt/reference edits and approval locks',
   )
   assert.ok(
+    pageSource.includes('Shot 三层画面设计') &&
+      pageSource.includes('IP A-roll / 3D 角色拍摄层') &&
+      pageSource.includes('HyperFrames / HyperKeyframes 文字特效层') &&
+      pageSource.includes('AIGC 丰富层 / 背景与 B-roll') &&
+      pageSource.includes('已设计 · 本次不执行') &&
+      pageSource.includes('visualLayersFromUnknown'),
+    'every Shot must visibly distinguish the IP A-roll, deterministic text/effects, and optional AIGC enrichment layers',
+  )
+  assert.ok(
     pageSource.includes('disabled={approved}') &&
       pageSource.includes('setApproved(true)') &&
       pageSource.includes('regeneratePromptDraft(') &&
@@ -2197,9 +2206,11 @@ try {
     'shot prompt and reference editing must become read-only after user approval',
   )
   assert.ok(
-    pageSource.includes('AIGC 视频层') &&
-      pageSource.includes('HyperFrames 文字 / 图形层') &&
+    pageSource.includes('IP A-roll / 3D 角色拍摄层') &&
+      pageSource.includes('AIGC 丰富层 / 背景与 B-roll') &&
+      pageSource.includes('HyperFrames / HyperKeyframes 文字特效层') &&
       pageSource.includes('FFmpeg 融合') &&
+      pageSource.includes('request.ipArollPlan') &&
       pageSource.includes('request.aigcPlan') &&
       pageSource.includes('request.hyperframesPlan') &&
       pageSource.includes('request.ffmpegFusionPlan') &&

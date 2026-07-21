@@ -57,6 +57,30 @@ try {
   assert.deepEqual(logic.CREATOR_WORKSPACE_STEP_IDS, [
     'requirements', 'direction', 'script', 'shots', 'preview', 'delivery',
   ], 'workspace must keep the six creation steps in their real order')
+  assert.deepEqual(
+    logic.creatorProjectProgress('COMPLETED', { steps: logic.CREATOR_WORKSPACE_STEP_IDS.map(id => ({ id, state: 'idle' })) }),
+    { label: '已完成 6/6 个步骤', percent: 100 },
+    'a terminal project must not be shown as 0/6 after the agent run completes',
+  )
+  assert.deepEqual(
+    logic.creatorProjectProgress('RUNNING', { steps: [{ id: 'requirements', state: 'confirmed' }, { id: 'script', state: 'needs_review' }] }),
+    { label: '已完成 1/2 个步骤', percent: 50 },
+  )
+  const localRenderContent = {
+    artifact: {
+      projectId: 'vp-1',
+      metadata: { localOnly: true, localPath: '/tmp/tangying/projects/vp-1/renders/final.mp4' },
+    },
+  }
+  assert.equal(
+    logic.resolveCreatorArtifactMediaUrl('vp-1', localRenderContent, 'http://127.0.0.1:18080/'),
+    'http://127.0.0.1:18080/api/local/media?projectId=vp-1&path=%2Ftmp%2Ftangying%2Fprojects%2Fvp-1%2Frenders%2Ffinal.mp4',
+  )
+  assert.equal(
+    logic.resolveCreatorArtifactMediaUrl('vp-1', { ...localRenderContent, mediaUrl: 'https://media.example/final.mp4' }, 'http://127.0.0.1:18080'),
+    'https://media.example/final.mp4',
+  )
+  assert.equal(logic.resolveCreatorArtifactMediaUrl('other-project', localRenderContent, 'http://127.0.0.1:18080'), undefined)
   assert.equal(logic.isCreatorStepReadable({ state: 'confirmed' }), true)
   assert.equal(logic.isCreatorStepReadable({ state: 'needs_attention' }), true)
   assert.equal(logic.canConfirmCreatorStep({ state: 'confirmed', allowedActions: ['confirm'] }), false)
@@ -113,6 +137,16 @@ try {
   assert.equal(logic.didSelectedShotTaskChange(previousTasks, [{ id: 'task-a', shotId: 'shot-a', status: 'running' }, { id: 'task-b', shotId: 'shot-b', status: 'processing' }], 'shot-a'), false, 'other shot changes must not refetch selected shot')
   assert.equal(logic.didSelectedShotTaskChange(previousTasks, [], undefined), false, 'no selected shot must not fan out callbacks')
 
+  const pendingReview = logic.nextPendingCreatorReview([
+    { id: 'approved-script', nodeId: 'script-review', status: 'APPROVED', stage: 'script_generation' },
+    { id: 'pending-preview', nodeId: 'preview-review', status: 'PENDING', stage: 'preview', reviewContent: '检查文字层' },
+  ])
+  assert.equal(pendingReview.id, 'pending-preview', 'creator workspace must surface the next dynamic review gate')
+  assert.equal(logic.creatorStepForAgentReview(pendingReview), 'preview')
+  assert.equal(logic.creatorStepForAgentReview({ stage: 'script_generation', tool: 'video_script_generator' }), 'script')
+  assert.equal(logic.creatorStepForAgentReview({ stage: 'visual_alignment', tool: 'visual_alignment_planner' }), 'shots')
+  assert.equal(logic.creatorStepForAgentReview({ stage: 'publish_copy', tool: 'publish_copy_generator' }), 'delivery')
+
   const hundredShotWindow = logic.shotQueueWindow({
     total: 100, scrollTop: 0, viewportHeight: 480,
   })
@@ -141,6 +175,7 @@ try {
     aspectRatio: '9:16',
     platform: '抖音',
     materialCount: 2,
+    productionRoute: 'cinematic_story',
     modelProviders: {
       text_to_text: { baseUrl: 'https://model.test/v1', model: 'writer', apiKey: 'sk-private' },
     },
@@ -165,6 +200,17 @@ try {
       aspectRatio: '9:16',
       platform: '抖音',
       materialCount: 2,
+      productionRoute: 'cinematic_story',
+      canonicalProfileId: 'cinematic_story',
+      aigcEnabled: true,
+      aigcProvider: 'auto',
+      aigcPolicy: 'auto',
+      visualLayerContract: 'shot_visual_layers_v1',
+      designedLayers: ['ip_aroll', 'hyperframes_text', 'aigc_enrichment'],
+      layerExecutionPolicy: {
+        ip_aroll: 'optional', hyperframes_text: 'required', aigc_enrichment: 'auto',
+      },
+      requiredLayers: ['aigc_main', 'hyperframes_text'],
       modelProviderRefs: {
         text_to_text: { source: 'local_agent', baseUrl: 'https://model.test/v1', model: 'writer' },
       },
@@ -181,6 +227,18 @@ try {
       aspectRatio: '9:16',
       platform: '抖音',
       materialCount: 2,
+      productionRoute: 'cinematic_story',
+      canonicalProfileId: 'cinematic_story',
+      videoType: 'aigc_shot',
+      aigcEnabled: true,
+      aigcProvider: 'auto',
+      aigcPolicy: 'auto',
+      visualLayerContract: 'shot_visual_layers_v1',
+      designedLayers: ['ip_aroll', 'hyperframes_text', 'aigc_enrichment'],
+      layerExecutionPolicy: {
+        ip_aroll: 'optional', hyperframes_text: 'required', aigc_enrichment: 'auto',
+      },
+      requiredLayers: ['aigc_main', 'hyperframes_text'],
       modelProviders: {
         text_to_text: { baseUrl: 'https://model.test/v1', model: 'writer', apiKey: 'sk-private' },
       },
@@ -190,12 +248,67 @@ try {
   const creationCopy = `${creationRequest.project.description} ${creationRequest.agentRun.message}`
   assert.doesNotMatch(creationCopy, /provider|run|trace|artifact/i, 'creator copy must not expose developer vocabulary')
 
+  const talkingHeadRequest = logic.buildCreationRequest({
+    prompt: '树懒阿洛分享三个提高专注力的小技巧，配合简洁标题卡片',
+    durationSec: 15,
+    aspectRatio: '16:9',
+    materialCount: 0,
+    productionRoute: 'talking_head',
+    modelProviders: {
+      text_to_text: { baseUrl: 'https://model.test/v1', model: 'writer', apiKey: 'sk-text' },
+      text_to_image: { baseUrl: 'https://model.test/v1', model: 'image', apiKey: 'sk-image' },
+      text_to_video: { baseUrl: 'https://model.test/v1', model: 'video', apiKey: 'sk-video' },
+    },
+  })
+  assert.equal(talkingHeadRequest.project.mode, 'voice_visual')
+  assert.equal(talkingHeadRequest.project.generationMode, 'provider_api')
+  assert.equal(talkingHeadRequest.project.config.productionRoute, 'talking_head')
+  assert.equal(talkingHeadRequest.project.config.canonicalProfileId, 'talking_head')
+  assert.equal(talkingHeadRequest.project.config.aigcEnabled, true)
+  assert.equal(talkingHeadRequest.project.config.aigcPolicy, 'auto')
+  assert.equal(talkingHeadRequest.project.config.visualLayerContract, 'shot_visual_layers_v1')
+  assert.deepEqual(talkingHeadRequest.project.config.designedLayers, ['ip_aroll', 'hyperframes_text', 'aigc_enrichment'])
+  assert.deepEqual(talkingHeadRequest.project.config.layerExecutionPolicy, {
+    ip_aroll: 'required', hyperframes_text: 'required', aigc_enrichment: 'auto',
+  })
+  assert.deepEqual(talkingHeadRequest.project.config.requiredLayers, ['ip_aroll', 'hyperframes_text'])
+  assert.equal(talkingHeadRequest.project.config.ipRenderMode, 'preview')
+  assert.equal(talkingHeadRequest.agentRun.context.videoType, 'voice_visual')
+  assert.equal(talkingHeadRequest.agentRun.context.aigcEnabled, true)
+  assert.equal(talkingHeadRequest.agentRun.context.aigcProvider, 'auto')
+  assert.equal(talkingHeadRequest.agentRun.context.ipRenderMode, 'preview')
+  assert.deepEqual(Object.keys(talkingHeadRequest.agentRun.context.modelProviders), ['text_to_text', 'text_to_image', 'text_to_video'])
+
+  const localTalkingHeadRequest = logic.buildCreationRequest({
+    prompt: '纯本地树懒口播，但保留未来 AIGC 丰富层的设计',
+    durationSec: 15,
+    aspectRatio: '16:9',
+    materialCount: 0,
+    productionRoute: 'talking_head',
+    aigcPolicy: 'disabled',
+    modelProviders: {
+      text_to_text: { baseUrl: 'https://model.test/v1', model: 'writer', apiKey: 'sk-text' },
+      text_to_video: { baseUrl: 'https://model.test/v1', model: 'video', apiKey: 'sk-video' },
+    },
+  })
+  assert.equal(localTalkingHeadRequest.project.config.aigcEnabled, false)
+  assert.equal(localTalkingHeadRequest.project.config.aigcPolicy, 'disabled')
+  assert.equal(localTalkingHeadRequest.agentRun.context.aigcProvider, 'disabled')
+  assert.deepEqual(localTalkingHeadRequest.agentRun.context.designedLayers, ['ip_aroll', 'hyperframes_text', 'aigc_enrichment'])
+  assert.deepEqual(localTalkingHeadRequest.agentRun.context.layerExecutionPolicy, {
+    ip_aroll: 'required', hyperframes_text: 'required', aigc_enrichment: 'disabled',
+  })
+  assert.deepEqual(Object.keys(localTalkingHeadRequest.agentRun.context.modelProviders), ['text_to_text'])
+  assert.doesNotMatch(JSON.stringify(localTalkingHeadRequest), /sk-video/)
+
   const defaultCreationRequest = logic.buildCreationRequest({
     prompt: '做一个品牌故事',
     aspectRatio: '16:9',
     materialCount: 0,
   })
   assert.equal(defaultCreationRequest.project.targetDurationSec, undefined)
+  assert.equal(defaultCreationRequest.project.mode, 'voice_visual', 'creator defaults to deterministic talking-head production')
+  assert.equal(defaultCreationRequest.project.config.aigcEnabled, true)
   assert.equal(defaultCreationRequest.agentRun.context.durationSec, undefined)
   assert.equal(defaultCreationRequest.agentRun.message, '创作视频：做一个品牌故事')
 
@@ -324,6 +437,9 @@ try {
   assert.match(apiSource, /signal/g, 'creator requests must support AbortSignal')
   assert.match(startPageSource, /storageRef: buildProjectMaterialStorageRef\(nextProjectId, item\.id\)/)
   assert.match(startPageSource, /creatorStartIdempotencyKey\(nextProjectId\)/)
+  assert.match(startPageSource, /productionRoute/)
+  assert.match(startPageSource, /三层口播（IP \+ 文字特效 \+ AIGC）/)
+  assert.match(startPageSource, /纯本地（保留 AIGC 层设计但不执行）/)
   assert.match(startPageSource, /const modelProviders = await buildClientModelProvidersForRun\(\)/, 'creator start resolves runtime providers')
   assert.match(startPageSource, /buildCreationRequest\(\{[\s\S]*modelProviders,[\s\S]*\}\)/, 'creator start sends provider refs and transient runtime providers through the request builder')
   assert.match(reviewSource, /request\.mode === 'instruction'\s*\? await buildClientModelProvidersForRun\(\)\s*:\s*undefined/, 'instruction revisions resolve runtime providers while direct edits do not')

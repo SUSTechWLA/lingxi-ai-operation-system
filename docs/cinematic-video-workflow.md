@@ -86,15 +86,17 @@ resolution_type: 2k 或 4k
 | 角色、场景、道具设定图 | Dreamina `generate_image` MCP | 生成全局参考图 |
 | 情绪化动作、无厘头视觉隐喻 | Dreamina `generate_video` MCP | 生成 3-15 秒独立 shot |
 
-每个需要外部视频生成的 shot 会产出三层用户可读计划：
+每个 Shot 都会产出统一的三层画面设计和合成计划；是否调用 AIGC 不影响设计是否存在：
 
 | 字段 | 说明 |
 |---|---|
+| `visualLayers` | `shot_visual_layers_v1` 统一契约，包含 `ipAroll`、`hyperframes`、`aigc`、`composition`，并记录每层的 `designed`、`enabled`、`required`、`executionPolicy`、安全区和时间窗。 |
+| `ipArollPlan` | 正式 3D IP 拍摄为 2D A-roll 的角色层计划，描述口播、口型、眼神、表情、动作、构图安全区和正式资产来源。 |
 | `aigcPlan` | 给 Dreamina/JiMeng 或其他外部平台的 AIGC 视频层提示词。它来自 shot 画面说明和动作节奏，但只要求生成无文字背景或局部动态素材，并明确预留文字安全区。 |
-| `hyperframesPlan` | 本地 HyperFrames 文字 / 图形层计划。中文标题、字幕、关键帧、流程标签、UI 卡片和精确排版都在这里处理。 |
-| `ffmpegFusionPlan` | 合成计划。上传 AIGC 素材后，系统用 FFmpeg 统一规格、裁剪、叠加、遮盖疑似文字区域，并输出完整 shot。 |
+| `hyperframesPlan` | 本地 HyperFrames / HyperKeyframes 文字特效层计划。中文标题、字幕、关键帧、流程标签、UI 卡片和精确排版都在这里处理。 |
+| `ffmpegFusionPlan` | 合成计划。系统按同一 Shot 时间窗融合 IP A-roll、AIGC 背景/B-roll/局部动态和 HyperFrames 文字特效，统一规格并输出完整 Shot。 |
 
-如果画面包含重要文字，优先让 AIGC 参考图或视频在文字区域留白，文字由 HyperFrames 或 final subtitle 渲染，避免乱码和错误汉字。AIGC 可以生成完整背景，也可以只生成画面中的局部视频窗口；最终完整 shot 由 HyperFrames 层和 AIGC 层合成。
+如果画面包含重要文字，优先让 AIGC 参考图或视频在文字区域留白，文字由 HyperFrames 或 final subtitle 渲染，避免乱码和错误汉字。AIGC 可以生成完整背景，也可以只生成画面中的 B-roll 或局部视频窗口；最终完整 Shot 与 IP A-roll 和文字特效层共同合成。纯本地模式下 `aigcPlan` 仍保留，但 `enabled=false`、`executionPolicy=disabled`，系统不得创建外部生成请求。
 
 ## Shot 产物工作台
 
@@ -102,7 +104,7 @@ resolution_type: 2k 或 4k
 
 | 视频类型 | 用户首先看到 | AIGC 角色 | HyperFrames 角色 | 一致性要求 |
 |---|---|---|---|---|
-| 口播 / 知识类 | 口播稿、HyperFrames 时间线、AIGC 插入位置 | 为口播提供 b-roll、背景、局部动态和情绪素材，不承担跨 shot 主连续性 | 承担标题、字幕、图表、UI 卡片、关键帧和可控文字层 | 以口播信息稳定为主，素材服务表达，不追求复杂角色连续性 |
+| 口播 / 知识类 | 口播稿、正式 IP A-roll、HyperFrames 时间线、AIGC 插入位置 | 为口播提供 b-roll、背景、局部动态和情绪素材，不承担跨 shot 主连续性 | 承担标题、字幕、图表、UI 卡片、关键帧和可控文字层 | IP 角色和声音保持连续；素材服务表达，不追求 AIGC 角色连续性 |
 | 影视 / AIGC shot | 剧本片段、角色 / 场景 / 道具参考、故事板、AIGC 主画面提示词 | 承担主画面、人物动作、场景氛围、运镜和文学化情绪表达 | 只承担字幕、小号说明、安全区压边和少量可控图形 | 必须保持跨 shot 的角色、场景、道具和物理状态连续 |
 
 每个 shot 按 1-6 线性步骤展开。上传、回填、提示词复制、参考图查看、字幕校对和最终视频预览都放在对应步骤内，不另设“高级回填”入口。用户可以从上往下逐步理解创作过程，也可以折叠已经确认的步骤。

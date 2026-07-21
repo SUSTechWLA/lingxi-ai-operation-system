@@ -4,6 +4,16 @@ This runbook is for the initial closed beta launch with controlled technical use
 
 Current beta readiness and launch criteria are tracked in [Release Status](RELEASE_STATUS.md). Historical release notes live in [Changelog](../CHANGELOG.md).
 
+## One-command Source Deployment
+
+After installing the platform dependencies below, a fresh clone can start the Docker backend and HyperFrames service, wait for health, package the desktop client, and open it with one command:
+
+```bash
+bash scripts/one-click-deploy.sh up --open
+```
+
+Use `bash scripts/one-click-deploy.sh status` to verify health and `bash scripts/one-click-deploy.sh down` to stop managed services without deleting named data volumes. The command prints the packaged `.app` and `.dmg` paths.
+
 ## Supported Platforms
 
 - macOS 14+ on Apple Silicon is the primary closed beta target.
@@ -24,6 +34,7 @@ Install Python MCP dependencies:
 ```bash
 python3 -m pip install -r mcp/video_qa/requirements.txt
 python3 -m pip install -r mcp/jimeng/requirements.txt
+python3 -m pip install -r mcp/ip_avatar_3d/requirements.txt
 ```
 
 Install Node dependencies:
@@ -236,7 +247,8 @@ If a shot contains important text, the AIGC layer should leave that region blank
 
 Creator-facing shot workspace checks:
 
-- Entering the `产物` page should auto-select the shot workflow from the creation profile: voice / knowledge shots prioritize narration, HyperFrames timeline, and AIGC insert slots; cinematic / AIGC shots prioritize script intent, continuity references, storyboard/keyframe, AIGC main-layer prompt, and full-shot preview.
+- Entering the `产物` page should auto-select the Shot workflow from the creation profile. Every Shot must visibly separate IP A-roll, HyperFrames/HyperKeyframes text and effects, AIGC enrichment, and composition; voice / knowledge Shots prioritize narration and IP continuity, while cinematic / AIGC Shots prioritize script intent, continuity references, storyboard/keyframes, and AIGC visual direction.
+- With `aigcPolicy=disabled`, the Shot must still expose an AIGC design marked `designed=true`, `enabled=false`, `executionPolicy=disabled`, and it must create zero executable external-generation requests.
 - The shot page should read top-to-bottom as steps 1-6. Upload and backfill actions must live inside the relevant step instead of a separate advanced section.
 - Image artifacts should be visible thumbnails with click-to-enlarge and regeneration guidance. Video artifacts should have inline controls plus a large playback dialog.
 - Subtitle artifacts should be parsed into a time-coded text timeline when available, not shown only as "generated".
@@ -347,12 +359,14 @@ Treat an artifact as real AIGC only when provenance says:
 
 Treat it as fallback when any of these appear:
 
-- `sourceType=fallback_storyboard` or `fallback_preview`.
+- `sourceType=fallback_storyboard`, `fallback_ip_composite`, or `fallback_preview`.
 - `isFallback=true`.
 - `fallbackReason` is non-empty.
 - `sourceSummary.readyVideoCount=0` while video requests exist.
 
 Fallback output is useful for QA and review, but must not be described as a real JiMeng/Dreamina AIGC video result.
+
+For a local three-layer talking-head verification, `fallback_ip_composite` is the expected provenance when AIGC execution is disabled. Confirm that `hyperframes/assets/data.json` contains `shot_visual_layers_v1`, the three `designedLayers`, an execution policy for every layer, readable `visualLayers` summaries on every Shot, and preserved `shotGenerationPlans`. The final MP4 must retain the requested canvas, use the packaged IP A-roll as the continuous picture/audio base, and show HyperFrames text without covering the eyes or mouth.
 
 ## Common Errors
 

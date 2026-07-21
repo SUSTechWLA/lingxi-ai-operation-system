@@ -42,6 +42,15 @@ function localAgentDataDir() {
   return path.join(app.getPath('userData'), 'local-agent')
 }
 
+function ipAvatarResourcePaths() {
+  const root = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..', '..')
+  return {
+    mcpScript: path.join(root, 'mcp', 'ip_avatar_3d', 'server.py'),
+    profile: path.join(root, 'ip-assets', 'main-ip', 'character-profile.json'),
+    videoQAMcpScript: path.join(root, 'mcp', 'video_qa', 'server.py'),
+  }
+}
+
 function startLocalAgent() {
   if (process.env.TANGYING_SKIP_LOCAL_AGENT === 'true') return
   if (localAgentProcess) return
@@ -50,10 +59,14 @@ function startLocalAgent() {
     console.warn(`Local agent binary not found: ${binary}`)
     return
   }
+  const ipAvatar = ipAvatarResourcePaths()
   const launch = buildLocalAgentLaunchOptions({
     localAgentUrl: LOCAL_AGENT_URL,
     cloudApiBase: CLOUD_API_BASE,
     dataDir: localAgentDataDir(),
+    ipAvatarMcpScript: ipAvatar.mcpScript,
+    ipAvatarProfile: ipAvatar.profile,
+    videoQAMcpScript: ipAvatar.videoQAMcpScript,
     session: localRunnerSession,
   })
   localAgentProcess = spawn(binary, launch.args, {

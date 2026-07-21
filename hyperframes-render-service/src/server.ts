@@ -18,18 +18,20 @@ import { renderVideo } from "./render.js";
 import { lintProject } from "./lint.js";
 import { takeSnapshots } from "./snapshot.js";
 import { getJobProgress, listJobIds } from "./queue.js";
-import type { SecurityConfig } from "./security.js";
+import { configuredRoots, type SecurityConfig } from "./security.js";
 import type { RenderRequest, RenderProgress } from "./types.js";
 
 // ── Security config ──────────────────────────────────────────────────
 
 const security: SecurityConfig = {
-  allowedProjectRoots: [
+  allowedProjectRoots: configuredRoots(
     process.env.HYPERFRAMES_PROJECT_ROOT ?? "/data/aios/projects",
-  ],
-  allowedOutputRoots: [
+    process.env.HYPERFRAMES_ADDITIONAL_PROJECT_ROOTS,
+  ),
+  allowedOutputRoots: configuredRoots(
     process.env.HYPERFRAMES_OUTPUT_ROOT ?? "/data/aios/projects",
-  ],
+    process.env.HYPERFRAMES_ADDITIONAL_OUTPUT_ROOTS,
+  ),
 };
 
 // ── Zod schemas ──────────────────────────────────────────────────────

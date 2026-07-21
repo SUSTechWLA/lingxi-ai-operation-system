@@ -186,6 +186,14 @@ func plannerDisallowsToolForDomain(toolName, domain string) bool {
 	if domain != "video_creation" {
 		return false
 	}
+	// Quality checkers are structural companions to producer tools. The plan
+	// compiler inserts them immediately after the matching producer and wires
+	// the quality gate. Selecting one as a standalone heuristic step lets later
+	// profile canonicalization move its producer while leaving an invalid
+	// forward output reference behind.
+	if isQualityCheckerTool(toolName) {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "bash", "python", "llm_api", "external", "video_frame_qa":
 		return true

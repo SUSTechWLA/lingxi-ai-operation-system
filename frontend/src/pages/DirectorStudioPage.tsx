@@ -3710,47 +3710,69 @@ function ShotRequestSummaryCard({
 }
 
 function ShotLayerPlanPanel({ request, mode }: { request: ExternalGenerationRequestContent; mode: ShotWorkspaceMode }) {
-  const textSafeLayout = request.textSafeLayout || request.aigcPlan?.textSafeLayout || 'AIGC 视频层需要给 HyperFrames 标题、字幕和流程标签留出干净区域。'
+	const ipArollPlan = request.ipArollPlan || request.visualLayers?.ipAroll
+	const aigcPlan = request.aigcPlan || request.visualLayers?.aigc
+	const hyperframesPlan = request.hyperframesPlan || request.visualLayers?.hyperframes
+	const compositionPlan = request.ffmpegFusionPlan || request.visualLayers?.composition
+  const textSafeLayout = request.textSafeLayout || aigcPlan?.textSafeLayout || aigcPlan?.safeArea || 'AIGC 丰富层需要给 IP 主体和 HyperFrames 标题、字幕、流程标签留出干净区域。'
+  const ipArollDetail = [
+    ipArollPlan?.description || 'IP A-roll 使用正式 3D 角色拍摄为 2D，负责口播、口型、眼神、表情和角色连续性。',
+    ipArollPlan?.prompt,
+    ipArollPlan?.safeArea ? `安全区：${ipArollPlan.safeArea}` : '',
+  ].filter(Boolean).join('\n\n')
   const aigcDetail = [
-    request.aigcPlan?.prompt || request.prompt,
-    request.aigcPlan?.avoidGeneratedText ? '必须不要生成文字、字幕、Logo、水印或可读汉字，避免乱码。' : '',
-    request.aigcPlan?.requiresBlankArea ? textSafeLayout : '',
+    aigcPlan?.description || 'AIGC 负责无文字背景、B-roll 和局部动态素材，增加信息密度与视觉变化。',
+    aigcPlan?.prompt || request.prompt,
+    aigcPlan?.avoidGeneratedText ? '必须不要生成文字、字幕、Logo、水印或可读汉字，避免乱码。' : '',
+    aigcPlan?.requiresBlankArea ? textSafeLayout : '',
   ].filter(Boolean).join('\n\n')
   const hyperframesDetail = [
-    request.hyperframesPlan?.prompt || 'HyperFrames 负责本 shot 的精确文字、关键帧、字幕、UI 卡片和图形包装。',
-    request.hyperframesPlan?.locks?.length ? `锁定内容：${request.hyperframesPlan.locks.join('、')}` : '',
+    hyperframesPlan?.description || 'HyperFrames 负责本 shot 的精确文字、关键帧、字幕、UI 卡片和图形包装。',
+    hyperframesPlan?.prompt,
+    hyperframesPlan?.locks?.length ? `锁定内容：${hyperframesPlan.locks.join('、')}` : '',
   ].filter(Boolean).join('\n\n')
   const ffmpegDetail = [
-    request.ffmpegFusionPlan?.plan || 'FFmpeg 会把 AIGC 背景或局部素材与 HyperFrames 文字层合成为完整 shot。',
-    request.ffmpegFusionPlan?.mode ? `融合模式：${request.ffmpegFusionPlan.mode}` : '',
-    request.ffmpegFusionPlan?.outputArtifactKind ? `输出产物：${request.ffmpegFusionPlan.outputArtifactKind}` : '',
+    compositionPlan?.description || 'FFmpeg 会把 AIGC 背景/插入素材、IP A-roll 主体与 HyperFrames 文字层合成为完整 shot。',
+    compositionPlan?.plan,
+    compositionPlan?.layerOrder?.length ? `层级顺序：${compositionPlan.layerOrder.join(' → ')}` : '',
+    compositionPlan?.mode ? `融合模式：${compositionPlan.mode}` : '',
+    compositionPlan?.outputArtifactKind ? `输出产物：${compositionPlan.outputArtifactKind}` : '',
   ].filter(Boolean).join('\n\n')
 
   return (
     <div className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-xs font-black text-ink-soft">分层创作计划</div>
+          <div className="text-xs font-black text-ink-soft">Shot 三层画面设计</div>
           <p className="mt-1 text-xs leading-5 text-ink-muted">
-            {mode === 'aigc_shot' ? 'AIGC 负责主画面和镜头表达，HyperFrames 只做字幕 / 简单说明，最后 FFmpeg 融合。' : 'HyperFrames 负责可控文字、字幕和素材时间线，AIGC 只做插入素材，最后 FFmpeg 融合。'}
+            IP A-roll、HyperFrames 文字/特效和 AIGC 丰富层始终分别描述；执行策略只决定本次是否生成可选层，不会删除设计。
           </p>
         </div>
-        <span className="rounded-full bg-primary-soft px-2.5 py-1 text-[11px] font-black text-primary-dark">{mode === 'aigc_shot' ? '连续性优先' : '文字留白'}</span>
+        <span className="rounded-full bg-primary-soft px-2.5 py-1 text-[11px] font-black text-primary-dark">{mode === 'aigc_shot' ? 'Shot 连续性优先' : 'IP 口播优先'}</span>
       </div>
       <div className="mt-3 rounded-lg bg-white p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">
         {textSafeLayout}
       </div>
       <div className="mt-3 space-y-2">
         <CompactLayerPlanRow
+          icon={<FiUserCheck />}
+          title="IP A-roll / 3D 角色拍摄层"
+          summary="角色口播、口型、表情、动作和品牌连续性。"
+          status={layerExecutionLabel(ipArollPlan)}
+          detail={ipArollDetail}
+        />
+        <CompactLayerPlanRow
           icon={<FiVideo />}
-          title={mode === 'aigc_shot' ? 'AIGC 视频层 / 主画面层' : 'AIGC 视频层 / 插入层'}
-          summary={mode === 'aigc_shot' ? '角色、场景、镜头、情绪和运动。' : '背景或局部动态，不生成文字。'}
+          title="AIGC 丰富层 / 背景与 B-roll"
+          summary="背景、局部动态和补充素材；不生成可读文字。"
+          status={layerExecutionLabel(aigcPlan)}
           detail={aigcDetail}
         />
         <CompactLayerPlanRow
           icon={<FiLayers />}
-          title="HyperFrames 文字 / 图形层"
-          summary={mode === 'aigc_shot' ? '字幕、少量说明和安全文字。' : '中文标题、字幕、关键帧和 UI 图形。'}
+          title="HyperFrames / HyperKeyframes 文字特效层"
+          summary="精确中文、字幕、标题、信息卡片和可控关键帧特效。"
+          status={layerExecutionLabel(hyperframesPlan)}
           detail={hyperframesDetail}
         />
         <CompactLayerPlanRow
@@ -3768,11 +3790,13 @@ function CompactLayerPlanRow({
   icon,
   title,
   summary,
+  status,
   detail,
 }: {
   icon: ReactNode
   title: string
   summary: string
+  status?: string
   detail: string
 }) {
   return (
@@ -3781,7 +3805,10 @@ function CompactLayerPlanRow({
         <div className="flex items-center gap-2">
           <span className="mt-0.5 text-primary">{icon}</span>
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-black text-ink">{title}</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-xs font-black text-ink">{title}</div>
+              {status ? <span className="rounded-full bg-background-card px-2 py-0.5 text-[10px] font-black text-primary-dark ring-1 ring-line">{status}</span> : null}
+            </div>
             <p className="truncate text-xs leading-5 text-ink-muted">{summary}</p>
           </div>
         </div>
@@ -3789,6 +3816,14 @@ function CompactLayerPlanRow({
       <pre className="mt-3 max-h-48 whitespace-pre-wrap break-words rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">{detail}</pre>
     </details>
   )
+}
+
+function layerExecutionLabel(plan?: ExternalGenerationLayerPlan): string {
+  if (!plan) return '自动规划'
+  if (plan.executionPolicy === 'disabled' || plan.enabled === false) return '已设计 · 本次不执行'
+  if (plan.required || plan.executionPolicy === 'required' || plan.executionPolicy === 'generate') return '本次执行'
+  if (plan.executionPolicy === 'deferred') return '待能力就绪'
+  return '按 Shot 需要执行'
 }
 
 function safePromptText(prompt: string | undefined): string {
@@ -3836,10 +3871,11 @@ function regeneratePromptDraft(
     .join('\n')
   const layerText = request.kind === 'video'
     ? [
+      request.ipArollPlan?.prompt ? `IP A-roll 层：${request.ipArollPlan.prompt}` : 'IP A-roll 层：使用正式 3D IP 角色承载口播、口型、眼神、表情和动作连续性。',
       request.aigcPlan?.prompt ? `AIGC 层：${request.aigcPlan.prompt}` : mode === 'aigc_shot' ? 'AIGC 主画面层：生成完整镜头画面，强调角色、场景、运镜、景别、道具和情绪。' : 'AIGC 插入层：只生成无文字背景或局部动态素材。',
       request.textSafeLayout || request.aigcPlan?.textSafeLayout ? `文字留白：${request.textSafeLayout || request.aigcPlan?.textSafeLayout}` : mode === 'aigc_shot' ? '文字策略：AIGC 不负责字幕和中文文字，字幕交给 HyperFrames 层。' : '文字留白：为 HyperFrames 标题、字幕和流程标签预留干净区域。',
       request.hyperframesPlan?.prompt ? `HyperFrames 层：${request.hyperframesPlan.prompt}` : mode === 'aigc_shot' ? 'HyperFrames 层：只做字幕、少量说明和可控文字，不干扰 AIGC 主画面。' : 'HyperFrames 层：中文文字、字幕、UI 文案和关键帧由本地渲染。',
-      request.ffmpegFusionPlan?.plan ? `FFmpeg 融合：${request.ffmpegFusionPlan.plan}` : 'FFmpeg 融合：上传素材后叠加 HyperFrames 层，输出完整 shot。',
+      request.ffmpegFusionPlan?.plan ? `三层融合：${request.ffmpegFusionPlan.plan}` : '三层融合：按 AIGC 背景/插入、IP A-roll 主体、HyperFrames 文字特效的顺序输出完整 shot。',
     ].join('\n')
     : ''
   const parts = [
@@ -5531,18 +5567,37 @@ interface ExternalGenerationReference {
 }
 
 interface ExternalGenerationLayerPlan {
+  layerKey?: string
+  designed?: boolean
+  enabled?: boolean
+  required?: boolean
+  executionPolicy?: string
   role?: string
+  description?: string
   prompt?: string
   plan?: string
   textSafeLayout?: string
+  safeArea?: string
   mode?: string
   keyframeStrategy?: string
   textRenderer?: string
   locks?: string[]
   inputArtifacts?: string[]
+  layerOrder?: string[]
+  artifactKinds?: string[]
   outputArtifactKind?: string
   avoidGeneratedText?: boolean
   requiresBlankArea?: boolean
+}
+
+interface ExternalGenerationVisualLayers {
+  schemaVersion?: string
+  shotId?: string
+  description?: string
+  ipAroll?: ExternalGenerationLayerPlan
+  hyperframes?: ExternalGenerationLayerPlan
+  aigc?: ExternalGenerationLayerPlan
+  composition?: ExternalGenerationLayerPlan
 }
 
 interface ExternalGenerationRequestContent {
@@ -5556,9 +5611,11 @@ interface ExternalGenerationRequestContent {
   overallShotPrompt?: string
   negativePrompt?: string
   references: ExternalGenerationReference[]
+  ipArollPlan?: ExternalGenerationLayerPlan
   aigcPlan?: ExternalGenerationLayerPlan
   hyperframesPlan?: ExternalGenerationLayerPlan
   ffmpegFusionPlan?: ExternalGenerationLayerPlan
+  visualLayers?: ExternalGenerationVisualLayers
   textSafeLayout?: string
   target?: {
     aspectRatio?: string
@@ -5883,9 +5940,11 @@ function externalGenerationRequestFromContent(content: unknown): ExternalGenerat
     overallShotPrompt: stringField(data.overallShotPrompt) || undefined,
     negativePrompt: stringField(data.negativePrompt) || undefined,
     references,
+    ipArollPlan: layerPlanFromUnknown(data.ipArollPlan),
     aigcPlan: layerPlanFromUnknown(data.aigcPlan),
     hyperframesPlan: layerPlanFromUnknown(data.hyperframesPlan),
     ffmpegFusionPlan: layerPlanFromUnknown(data.ffmpegFusionPlan),
+    visualLayers: visualLayersFromUnknown(data.visualLayers),
     textSafeLayout: stringField(data.textSafeLayout) || undefined,
     target: target ? {
       aspectRatio: stringField(target.aspectRatio) || undefined,
@@ -5901,20 +5960,44 @@ function layerPlanFromUnknown(value: unknown): ExternalGenerationLayerPlan | und
   const item = objectField(value)
   if (!item) return undefined
   const plan: ExternalGenerationLayerPlan = {
+    layerKey: stringField(item.layerKey) || undefined,
+    designed: typeof item.designed === 'boolean' ? item.designed : undefined,
+    enabled: typeof item.enabled === 'boolean' ? item.enabled : undefined,
+    required: typeof item.required === 'boolean' ? item.required : undefined,
+    executionPolicy: stringField(item.executionPolicy) || undefined,
     role: stringField(item.role) || undefined,
+    description: stringField(item.description) || undefined,
     prompt: stringField(item.prompt) || undefined,
     plan: stringField(item.plan) || undefined,
     textSafeLayout: stringField(item.textSafeLayout) || undefined,
+    safeArea: stringField(item.safeArea) || undefined,
     mode: stringField(item.mode) || undefined,
     keyframeStrategy: stringField(item.keyframeStrategy) || undefined,
     textRenderer: stringField(item.textRenderer) || undefined,
     locks: stringListField(item.locks),
     inputArtifacts: stringListField(item.inputArtifacts),
+    layerOrder: stringListField(item.layerOrder),
+    artifactKinds: stringListField(item.artifactKinds),
     outputArtifactKind: stringField(item.outputArtifactKind) || undefined,
     avoidGeneratedText: typeof item.avoidGeneratedText === 'boolean' ? item.avoidGeneratedText : undefined,
     requiresBlankArea: typeof item.requiresBlankArea === 'boolean' ? item.requiresBlankArea : undefined,
   }
   return Object.values(plan).some((field) => field !== undefined && field !== '') ? plan : undefined
+}
+
+function visualLayersFromUnknown(value: unknown): ExternalGenerationVisualLayers | undefined {
+  const item = objectField(value)
+  if (!item) return undefined
+  const layers: ExternalGenerationVisualLayers = {
+    schemaVersion: stringField(item.schemaVersion) || undefined,
+    shotId: stringField(item.shotId) || undefined,
+    description: stringField(item.description) || undefined,
+    ipAroll: layerPlanFromUnknown(item.ipAroll),
+    hyperframes: layerPlanFromUnknown(item.hyperframes),
+    aigc: layerPlanFromUnknown(item.aigc),
+    composition: layerPlanFromUnknown(item.composition),
+  }
+  return Object.values(layers).some((field) => field !== undefined && field !== '') ? layers : undefined
 }
 
 function referenceFromUnknown(value: unknown): ExternalGenerationReference | null {

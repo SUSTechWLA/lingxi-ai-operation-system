@@ -1614,6 +1614,13 @@ func TestVideoPromptGeneratorSplitsAIGCHyperframesAndFusionPlans(t *testing.T) {
 		if _, ok := req["ffmpegFusionPlan"].(map[string]interface{}); !ok {
 			t.Fatalf("external request should expose ffmpegFusionPlan, got %#v", req)
 		}
+		if _, ok := req["ipArollPlan"].(map[string]interface{}); !ok {
+			t.Fatalf("external request should expose ipArollPlan, got %#v", req)
+		}
+		visualLayers, ok := req["visualLayers"].(map[string]interface{})
+		if !ok || visualLayers["ipAroll"] == nil || visualLayers["hyperframes"] == nil || visualLayers["aigc"] == nil || visualLayers["composition"] == nil {
+			t.Fatalf("external request should expose the complete three-layer Shot contract, got %#v", req)
+		}
 		aigcPrompt := ensureStringValue(aigcPlan["prompt"])
 		hyperframesPrompt := ensureStringValue(hyperframesPlan["prompt"])
 		for _, key := range []string{"prompt", "promptText", "aigcPrompt", "aigcVideoPrompt"} {
@@ -1641,11 +1648,44 @@ func TestVideoPromptGeneratorSplitsAIGCHyperframesAndFusionPlans(t *testing.T) {
 			t.Fatalf("shot asset package should be a map, got %#v", pkg)
 		}
 		pkgText := ensureStringValue(pkgMap)
-		for _, required := range []string{"aigcPlan", "hyperframesPlan", "ffmpegFusionPlan", "文字安全区", "不要生成文字"} {
+		for _, required := range []string{"ipArollPlan", "aigcPlan", "hyperframesPlan", "ffmpegFusionPlan", "visualLayers", "文字安全区", "不要生成文字"} {
 			if !strings.Contains(pkgText, required) {
 				t.Fatalf("shot asset package should carry non-duplicated layer plans, missing %q in %#v", required, pkgMap)
 			}
 		}
+	}
+}
+
+func TestVideoPromptGeneratorKeepsAIGCDesignWhenExecutionDisabled(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "纯本地三层口播", "", map[string]interface{}{
+		"topic":        "纯本地三层口播",
+		"aigcProvider": "disabled",
+		"shotList": []interface{}{map[string]interface{}{
+			"shotId": "SHOT_LOCAL", "durationSec": 8,
+			"plannedAssetRoute": "aigc_video",
+			"visual":            "IP 在工作室口播，背景未来可以增加抽象动态素材。",
+			"narrationText":     "这次不执行 AIGC，但不能丢掉 AIGC 层设计。",
+		}},
+	}, tool.ToolContext{TaskID: "task-three-layer-local", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("video_prompt_generator failed: %s", result.Error)
+	}
+	if requests := interfaceSliceFromAny(result.Data["externalGenerationRequests"]); len(requests) != 0 {
+		t.Fatalf("disabled AIGC must not create executable external requests: %#v", requests)
+	}
+	packages := interfaceSliceFromAny(result.Data["shotAssetPackages"])
+	if len(packages) != 1 {
+		t.Fatalf("expected one Shot package, got %#v", result.Data["shotAssetPackages"])
+	}
+	pkg, _ := mapValue(packages[0])
+	layers, ok := mapValue(pkg["visualLayers"])
+	if !ok {
+		t.Fatalf("Shot package must keep visualLayers: %#v", pkg)
+	}
+	aigc, ok := mapValue(layers["aigc"])
+	if !ok || aigc["designed"] != true || aigc["executionPolicy"] != "disabled" || aigc["enabled"] != false {
+		t.Fatalf("disabled AIGC must remain designed but non-executable: %#v", aigc)
 	}
 }
 
@@ -2512,9 +2552,51 @@ func TestShotGenerationPlannerRoutesHybridAndExternalNeeds(t *testing.T) {
 	if plans[1]["mode"] != "external_or_user_asset" {
 		t.Fatalf("SHOT_02 should route to external/user asset mode, got %#v", plans[1])
 	}
+	for _, plan := range plans {
+		layers, ok := mapValue(plan["visualLayers"])
+		if !ok || layers["ipAroll"] == nil || layers["hyperframes"] == nil || layers["aigc"] == nil || layers["composition"] == nil {
+			t.Fatalf("every Shot generation plan must expose the three-layer contract: %#v", plan)
+		}
+	}
 	packages, ok := result.Data["shotAssetPackages"].([]map[string]interface{})
 	if !ok || len(packages) != 2 {
 		t.Fatalf("expected shotAssetPackages, got %#v", result.Data["shotAssetPackages"])
+	}
+	if packages[0]["visualLayers"] == nil || packages[1]["visualLayers"] == nil {
+		t.Fatalf("Shot packages must expose visualLayers at the top level: %#v", packages)
+	}
+}
+
+func TestShotGenerationPlannerDisablesOnlyAIGCExecutionNotDesign(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage":           "generation_strategy",
+		"aigcProvider":    "disabled",
+		"aigcEnabled":     false,
+		"productionRoute": "talking_head",
+		"requiredLayers":  []interface{}{"ip_aroll", "hyperframes_text"},
+		"shotList": []interface{}{map[string]interface{}{
+			"shotId": "SHOT_LOCAL", "durationSec": float64(8),
+			"plannedAssetRoute": "aigc_video",
+			"visual":            "树懒 IP 在工作室口播，背景是电影感运动镜头。",
+		}},
+		"htmlAvailable": true,
+	}, tool.ToolContext{TaskID: "task-local-three-layers", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	plans := result.Data["shotGenerationPlans"].([]map[string]interface{})
+	layers, _ := mapValue(plans[0]["visualLayers"])
+	ip, _ := mapValue(layers["ipAroll"])
+	aigc, _ := mapValue(layers["aigc"])
+	if ip["required"] != true || ip["enabled"] != true {
+		t.Fatalf("talking-head IP A-roll must execute: %#v", ip)
+	}
+	if aigc["designed"] != true || aigc["enabled"] != false || aigc["executionPolicy"] != "disabled" {
+		t.Fatalf("AIGC must remain designed while execution is disabled: %#v", aigc)
+	}
+	if requests := interfaceSliceFromAny(result.Data["externalGenerationRequests"]); len(requests) != 0 {
+		t.Fatalf("explicitly disabled AIGC must not create external requests: %#v", requests)
 	}
 }
 

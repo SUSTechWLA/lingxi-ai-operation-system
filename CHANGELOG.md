@@ -4,6 +4,34 @@ All notable release changes are tracked here. README only carries the current ve
 
 ## Unreleased
 
+## v0.2.1 - 2026-07-21
+
+### Added
+
+- Added `scripts/one-click-deploy.sh` to install locked dependencies, start and health-check the Docker backend and HyperFrames, package the desktop client, and optionally open the installed app.
+- Bundled the canonical sloth/studio assets and `ip_avatar_3d` MCP provider in the macOS application.
+- Added creator-facing dynamic Agent review gates and a verified local-only talking-head execution option.
+- Added the canonical `shot_visual_layers_v1` contract: every Shot separately describes IP A-roll, HyperFrames/HyperKeyframes text and effects, AIGC enrichment, and composition.
+- Persisted `shotGenerationPlans`, readable three-layer summaries, execution policy, and required layers into every Shot in the generated HyperFrames project so the editor and renderer share the same contract.
+- Added the local `storyboard_ip_composite` fallback: it preserves the requested canvas, uses continuous IP A-roll as the picture and audio base, and overlays deterministic HyperFrames text instead of replacing the character with a static storyboard.
+
+### Changed
+
+- Local IP preview renders now honor the requested duration and use a practical 1280x720 15fps render profile; publish rendering remains independent.
+- Talking-head and cinematic routes now use an independent AIGC execution policy. Talking-head defaults to automatic per-Shot enrichment; local-only mode keeps the AIGC design but creates no executable AIGC requests.
+- The Shot review UI now exposes all three visual layers, their execution state, safety constraints, prompts, and composition order.
+- Updated root, frontend, and HyperFrames Render Service versions to `0.2.1` and expanded CI coverage for one-click deployment and creator contracts.
+
+### Fixed
+
+- Fixed packaged applications failing to discover macOS speech and Homebrew FFmpeg/FFprobe tools.
+- Fixed dynamic planning dropping `ipRenderMode`, AIGC policy, route, required-layer, and three-layer Shot context.
+- Fixed dynamically selected `ip_aroll_director` steps running before narration existed; the compiler now orders them after the canonical script and injects the script output.
+- Fixed manually retried local nodes remaining blocked by a terminal parent run, completed Agent runs not closing their video projects, local-only videos not loading in the packaged player, and completed projects displaying `0/6` progress.
+- Fixed `aigcProvider=disabled` still producing executable external-generation requests during prompt planning.
+- Fixed required local IP renders being marked successful when their MCP output did not satisfy the required video asset count.
+- Fixed Docker images missing video pipeline manifests, idempotency key truncation, bigint CAS binding, and duplicate plan steps.
+
 ## v0.2.0 - 2026-07-21
 
 ### Added

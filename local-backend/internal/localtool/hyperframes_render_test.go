@@ -1,6 +1,7 @@
 package localtool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -213,8 +214,8 @@ func TestHyperFramesRenderExecutorFastStoryboardRender(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not available")
 	}
-	if err := exec.Command("python3", "-c", "import PIL").Run(); err != nil {
-		t.Skip("python3 Pillow is not available")
+	if _, err := storyboardPythonPath(context.Background()); err != nil {
+		t.Skip("Python with Pillow is not available")
 	}
 
 	root := t.TempDir()
@@ -296,6 +297,74 @@ func TestHyperFramesRenderExecutorFastStoryboardRender(t *testing.T) {
 	}
 }
 
+func TestHyperFramesFastFallbackCompositesIPArollAtRequestedCanvas(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not available")
+	}
+	if _, err := storyboardPythonPath(context.Background()); err != nil {
+		t.Skip("Python with Pillow is not available")
+	}
+
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "projects", "project_vertical", "hyperframes")
+	mediaDir := filepath.Join(projectDir, "assets", "media")
+	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ipVideo := filepath.Join(mediaDir, "ip_aroll_main-fixture.mp4")
+	if output, err := exec.Command(
+		"ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=0x00ff00:s=360x640:r=12:d=2",
+		"-c:v", "libx264", "-pix_fmt", "yuv420p", ipVideo,
+	).CombinedOutput(); err != nil {
+		t.Fatalf("create IP fixture: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+	data := map[string]interface{}{
+		"visualLayerContract": "shot_visual_layers_v1",
+		"aRollAssetPackages":  []map[string]interface{}{{"shotId": "AROLL_MAIN", "kind": "ip_aroll_video"}},
+		"shotList": []map[string]interface{}{{
+			"shotId": "SHOT_01", "durationSec": 2, "screenText": []string{"一个 Shot，三层协同"},
+			"narrationText": "IP A-roll 承载角色口播，HyperFrames 保证文字质量。",
+		}},
+	}
+	dataBytes, _ := json.Marshal(data)
+	if err := os.WriteFile(filepath.Join(projectDir, "assets", "data.json"), dataBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TANGYING_FAST_STORYBOARD_RENDER", "1")
+	executor := NewHyperFramesRenderExecutor(root, "http://127.0.0.1:19999", 0)
+	result, err := executor.Execute(context.Background(), Job{
+		ID: "job-ip-composite", ProjectID: "project_vertical", Command: CommandHyperFramesRender,
+		Payload: map[string]interface{}{
+			"projectDir": "local://projects/project_vertical/hyperframes",
+			"fps":        float64(12), "width": float64(360), "height": float64(640),
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute IP composite fallback: %v", err)
+	}
+	if result.Output["renderJobId"] != "storyboard_ip_composite" {
+		t.Fatalf("render job = %#v, want storyboard_ip_composite", result.Output["renderJobId"])
+	}
+	finalPath := filepath.Join(root, "projects", "project_vertical", "renders", "final.mp4")
+	sampleCmd := exec.Command(
+		"ffmpeg", "-v", "error", "-ss", "0.5", "-i", finalPath,
+		"-vf", "crop=2:2:180:320", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+	)
+	var sampleStderr bytes.Buffer
+	sampleCmd.Stderr = &sampleStderr
+	pixel, err := sampleCmd.Output()
+	if err != nil || len(pixel) < 3 {
+		t.Fatalf("sample composited frame: bytes=%d err=%v stderr=%s", len(pixel), err, sampleStderr.String())
+	}
+	if pixel[1] < 150 || int(pixel[1]) < int(pixel[0])+80 || int(pixel[1]) < int(pixel[2])+80 {
+		t.Fatalf("center pixel %#v does not retain the green IP A-roll base", pixel[:3])
+	}
+}
+
 func TestHyperFramesFallbackProvenanceIsProductionIneligible(t *testing.T) {
 	provenance := hyperframesRenderProvenance(&hyperFramesRenderResponse{JobID: "storyboard_fast_render"})
 	if provenance["executionMode"] != "fallback" || provenance["productionEligible"] != false {
@@ -303,6 +372,13 @@ func TestHyperFramesFallbackProvenanceIsProductionIneligible(t *testing.T) {
 	}
 	if provenance["fallbackReason"] != "storyboard_fast_render" {
 		t.Fatalf("fallback reason missing: %#v", provenance)
+	}
+	ipComposite := hyperframesRenderProvenance(&hyperFramesRenderResponse{JobID: "storyboard_ip_composite"})
+	if ipComposite["executionMode"] != "fallback" || ipComposite["productionEligible"] != false {
+		t.Fatalf("IP composite fallback must remain production-ineligible: %#v", ipComposite)
+	}
+	if ipComposite["sourceType"] != "fallback_ip_composite" || ipComposite["providerName"] != "local-ip-storyboard-compositor" {
+		t.Fatalf("IP composite provenance must identify the local three-layer compositor: %#v", ipComposite)
 	}
 }
 

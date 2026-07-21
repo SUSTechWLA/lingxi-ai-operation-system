@@ -3,7 +3,7 @@ import { fetchVideoProjects } from '../../services/api'
 import { getCreationView } from '../../services/creatorApi'
 import type { CreationView } from './types'
 import type { VideoProject } from '../../utils/types'
-import { mapWithConcurrency, prioritizeCreationViewProjects } from './logic'
+import { creatorProjectProgress, mapWithConcurrency, prioritizeCreationViewProjects } from './logic'
 
 interface VideoLibraryPageProps {
   onContinueProject: (projectId: string, stepId: string) => void
@@ -86,7 +86,7 @@ function ProjectGroup({ title, projects, onContinueProject }: { title: string; p
       <h2>{title}</h2>
       <div className="creator-project-grid">
         {projects.map(({ project, view }) => {
-          const progress = projectProgress(view)
+          const progress = creatorProjectProgress(project.status, view)
           const stepId = view?.activeStep || 'requirements'
           return (
             <article key={project.id} className="creator-project-card">
@@ -123,15 +123,6 @@ function projectStatusLabel(status: VideoProject['status']): string {
   if (status === 'COMPLETED') return '已完成'
   if (status === 'ARCHIVED') return '已归档'
   return '待开始'
-}
-
-function projectProgress(view: CreationView | undefined): { label: string; percent: number } {
-  if (!view || view.steps.length === 0) return { label: '正在准备创作', percent: 0 }
-  const complete = view.steps.filter(step => step.state === 'confirmed').length
-  return {
-    label: `已完成 ${complete}/${view.steps.length} 个步骤`,
-    percent: Math.round((complete / view.steps.length) * 100),
-  }
 }
 
 function formatUpdatedAt(value: string): string {

@@ -272,13 +272,17 @@ func hyperframesRenderProvenance(result *hyperFramesRenderResponse) map[string]i
 	fallbackReason := ""
 	executionMode := "real"
 	productionEligible := true
-	if jobID == "storyboard_fast_render" {
+	if jobID == "storyboard_fast_render" || jobID == "storyboard_ip_composite" {
 		sourceType = "fallback_storyboard"
 		providerName = "local-storyboard-renderer"
 		isFallback = true
-		fallbackReason = "storyboard_fast_render"
+		fallbackReason = jobID
 		executionMode = "fallback"
 		productionEligible = false
+		if jobID == "storyboard_ip_composite" {
+			sourceType = "fallback_ip_composite"
+			providerName = "local-ip-storyboard-compositor"
+		}
 	}
 	return map[string]interface{}{
 		"schemaVersion":      2,

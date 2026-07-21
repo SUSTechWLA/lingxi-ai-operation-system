@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.2.0-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.2.1-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -35,11 +35,17 @@
 
 ## 当前版本
 
-**v0.2.0 - Creator Studio + canonical 3D IP A-roll release**
+**v0.2.1 - One-click desktop + canonical three-layer Shot production**
+
+- 新增源码仓一键部署：自动安装锁定依赖、启动 Docker 后端与 HyperFrames、等待健康检查、打包 macOS 客户端，并可直接打开安装态应用。
+- 每个 Shot 统一使用 `shot_visual_layers_v1`：IP A-roll 负责正式 3D 角色口播，HyperFrames / HyperKeyframes 负责精确文字和可控特效，AIGC 负责无文字背景、B-roll 或局部动态素材；三层设计与合成计划始终存在。
+- 制作路线与 AIGC 执行策略已解耦：口播默认按 Shot 自动使用 AIGC 丰富层，也可选择纯本地执行；`aigcEnabled=false` 只禁止本次 AIGC 调用，不会删除该层的提示词、安全区和未来重启执行所需设计。
+- 已安装 App 内置正式 IP 资产与 MCP provider，并显式发现 macOS `say`、Homebrew FFmpeg/FFprobe；本地预览严格遵守用户时长。
+- 动态审核 UI 可随真实 Agent review gate 推进；MCP 必需素材失败时会 fail closed，不再把失败渲染伪装成成功。
 
 - Closed beta runbook、beta smoke、fallback fixture、diagnostics、artifact provenance 和 readiness gate 已就绪。
 - 视频流水线已对齐 shot 级生产闭环：语义/画面变化切分、3-15 秒时长校验、candidate 级 QA、保守 repair loop、accepted shot gate、FFmpeg final assembly 和 final QA。
-- Shot 素材包已拆成可读的三层制作计划：AIGC 负责无文字背景或局部动态并预留文字安全区，HyperFrames 负责中文标题、字幕、关键帧和 UI 图形层，FFmpeg 负责裁剪、叠加和合成完整 shot。
+- Shot 素材包已拆成可读的三层画面设计与一份合成计划：`ipArollPlan`、`hyperframesPlan`、`aigcPlan` 和 `ffmpegFusionPlan`，并统一收敛到 `visualLayers` 契约。
 - 桌面端已修复 local runner 登录态注入时的重启问题；已安装客户端可以先启动本地 agent，再平滑切换为带用户会话的 runner。
 - 即梦 CLI / MCP 登录配置已归入设置页，和文生图片、文生视频 Provider 一起管理；项目页只保留说明和跳转按钮。
 - Shot 产物页已升级为面向创作者的线性 1-6 步工作台：LLM 先区分口播 / 知识类和影视 / AIGC shot 视频，进入 shot 后自动切到对应流程。
@@ -104,14 +110,14 @@ ip-assets/main-ip/manifests/default-aroll-assets.json
 | 能力 | 体验结果 |
 |---|---|
 | 影视化 / AIGC shot 视频 | 从故事大纲、详细剧本、角色/场景/道具档案、多视角参考图到语义 shot 切分、candidate 生成、shot 级 QA 和返修 |
-| 口播 / 知识类视频 | 先生成口播稿，再按口播设计 HyperFrames、录屏、AIGC 图片/视频素材和最终成片 |
+| 口播 / 知识类视频 | 先生成口播稿，再为每个 Shot 共同设计 3D IP A-roll、HyperFrames 文字特效、可选 AIGC 图片/视频素材和最终合成 |
 | 3D IP 口播层 MCP | 输入口播和本地角色资产，通过 MCP 生成高保真 IP A-roll 视频层，支持口型、眨眼、点头、四肢动作、分段声音 prosody 计划和 HyperGen 控制 schema，系统负责接收、预览和合成 |
 | 分阶段审核 | 方案、脚本、分镜、预览、渲染等节点可确认、拒绝、编辑或重新生成 |
 | 本地执行器 | 用户电脑负责本地文件、HyperFrames 项目、渲染和工具执行 |
 | 即梦 JiMeng MCP 扩展 | 用户显式安装并登录 Dreamina CLI 后，可通过本地 MCP 自动生成 AIGC 素材 |
 | Shot 级抽帧 QA | 每个 shot candidate 独立 QA，失败后生成保守 repairPlan，只有通过或人工批准的 candidate 才能进入 final assembly |
 | 手动外部生成兜底 | 没有可用模型或未启用即梦时，系统仍会展示可复制提示词和参考图信息 |
-| Shot 产物工作台 | 按 1-6 步线性展示剧本/口播、参考图、AIGC 层、HyperFrames 层、字幕时间轴、上传回填和完整 shot 预览 |
+| Shot 产物工作台 | 按 1-6 步线性展示剧本/口播、参考图、IP A-roll、AIGC 丰富层、HyperFrames/HyperKeyframes 文字特效层、字幕时间轴、上传回填和完整 Shot 预览 |
 
 ## 创作流程
 
@@ -120,16 +126,19 @@ flowchart LR
   A["一句话视频需求"] --> B["云端 Agent 编排"]
   B --> C["方案 / 脚本 / 分镜"]
   C --> D["语义 Shot 切分 3-15 秒"]
-  D --> E["Shot candidate 生成"]
-  E --> F["Shot QA / Repair loop"]
-  F --> G["Accepted shots gate"]
+  D --> E["Shot 三层画面设计"]
+  E --> F["分层生成 + 合成 candidate"]
+  F --> Q["Shot QA / Repair loop"]
+  Q --> G["Accepted shots gate"]
   G --> H["FFmpeg 拼接 + 全局音频字幕"]
   H --> I["Final QA / 交付包"]
 ```
 
 Shot split policy 固定为 `minShotDurationSec=3`、`maxShotDurationSec=15`、`preferredShotDurationSec=6-8`、`splitByScriptSemantics=true`、`splitByVisualChange=true`。切分优先参考剧情节点、场景、主体、动作、景别、视角、焦段、情绪节奏和旁白/对白语义段落；超过 15 秒必须继续拆分，短于 3 秒只在连续且合并后不超过 15 秒时合并。
 
-每个需要外部生成的视频 shot 会输出独立的 `aigcPlan`、`hyperframesPlan` 和 `ffmpegFusionPlan`。AIGC 提示词来自该 shot 的画面说明和动作节奏，但只要求生成背景或局部动态素材；中文文字、标题、字幕、流程标签和 UI 文案由 HyperFrames 本地精确渲染，避免 AIGC 生成乱码或错字。上传回填后，FFmpeg 再把 AIGC 素材与 HyperFrames 层融合成完整 shot。
+每个 Shot 都会输出 `visualLayers`，并明确拆分为 `ipArollPlan`、`hyperframesPlan`、`aigcPlan` 与 `ffmpegFusionPlan`。IP A-roll 提示词描述正式 3D 角色的口播、口型、表情和动作；AIGC 提示词只生成无文字背景、B-roll 或局部动态并预留主体/文字安全区；中文文字、标题、字幕、流程标签和 UI 文案由 HyperFrames / HyperKeyframes 精确渲染。最终合成器按同一个 Shot 时间窗融合三层。即使本次选择纯本地，`aigcPlan.designed=true` 仍保留，`executionPolicy=disabled` 且不会创建外部生成请求。
+
+生成后的 `hyperframes/assets/data.json` 会在顶层和每个 Shot 同时保存 `designedLayers`、`layerExecutionPolicy`、`requiredLayers`、`visualLayers` 与可读的三层设计摘要。纯本地降级渲染使用 `storyboard_ip_composite`：IP A-roll 保持为连续画面和音频底层，HyperFrames 透明文字层按同一时间窗叠加，AIGC 设计保留但不伪造已执行状态。
 
 产物页按创作流程展示 shot，而不是按底层文件路径展示。口播视频进入后优先看口播稿、HyperFrames 时间线和 AIGC 插入素材；影视/AIGC shot 视频进入后优先看剧本片段、跨 shot 一致性、角色/场景/道具参考图、故事板、AIGC 主画面提示词和完整 shot。图片可点击放大并基于选中内容生成返工提示词；视频可在弹窗中大尺寸播放；字幕文件会解析成时间轴，方便用户直接校对。
 
@@ -155,20 +164,23 @@ Shot split policy 固定为 `minShotDurationSec=3`、`maxShotDurationSec=15`、`
 
 ## 快速开始
 
-> 当前 release 分支适合作为初版受控内测上线基线、工程演示版和私有部署原型。真实商用前建议先用自己的模型账号、即梦账号和本地 runner 跑完整链路。
+macOS 14+ Apple Silicon、Docker、Node.js 24、Go 1.25、Python 3.11+、Blender 和 FFmpeg 就绪后：
 
 ```bash
-# 本地 Agent
-bash scripts/start-local-backend.sh
-
-# 桌面前端
-bash scripts/start-frontend.sh
-
-# 云端 Backend
-bash scripts/start-cloud-backend.sh
+git clone https://github.com/SUSTechWLA/tangying-ai-operation-system.git
+cd tangying-ai-operation-system
+git checkout release
+bash scripts/one-click-deploy.sh up --open
 ```
 
-打开桌面端后，进入“躺营导演台”，输入视频主题，选择“口播知识视频”或“影视/AIGC shot 视频”入口即可开始。
+状态检查与停止：
+
+```bash
+bash scripts/one-click-deploy.sh status
+bash scripts/one-click-deploy.sh down
+```
+
+命令会保留数据库和项目数据卷，输出 `.app` 与 `.dmg` 的绝对路径。打开客户端后选择“三层口播（IP + 文字特效 + AIGC）”可让系统按 Shot 自动丰富画面；若暂时不配置 AIGC provider，在“AIGC 丰富层”选择“纯本地（保留 AIGC 层设计但不执行）”即可使用默认树懒 IP、演播室和本地文字层完成视频。
 
 Closed beta 安装、诊断和 smoke 验证见 [Closed Beta Runbook](docs/BETA_RUNBOOK.md)。快速自检可运行：
 

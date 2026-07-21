@@ -69,15 +69,22 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 		}
 	} else {
 		// Legacy demo fallback.
+		shotList := shotListWithThreeLayerDesign(job.Payload)
+		layerExecutionPolicy, requiredLayers := projectLayerPolicyFromShots(shotList)
 		data := map[string]interface{}{
-			"topic":              topic,
-			"script":             script,
-			"shotList":           job.Payload["shotList"],
-			"videoPrompts":       job.Payload["videoPrompts"],
-			"shotAssetPackages":  job.Payload["shotAssetPackages"],
-			"aRollAssetPackages": job.Payload["aRollAssetPackages"],
-			"style":              job.Payload["style"],
-			"publishCopy":        job.Payload["publishCopy"],
+			"topic":                topic,
+			"script":               script,
+			"visualLayerContract":  "shot_visual_layers_v1",
+			"designedLayers":       canonicalDesignedShotLayers(),
+			"layerExecutionPolicy": layerExecutionPolicy,
+			"requiredLayers":       requiredLayers,
+			"shotList":             shotList,
+			"shotGenerationPlans":  job.Payload["shotGenerationPlans"],
+			"videoPrompts":         job.Payload["videoPrompts"],
+			"shotAssetPackages":    job.Payload["shotAssetPackages"],
+			"aRollAssetPackages":   job.Payload["aRollAssetPackages"],
+			"style":                job.Payload["style"],
+			"publishCopy":          job.Payload["publishCopy"],
 		}
 		dataJSON, _ := json.MarshalIndent(data, "", "  ")
 		if err := os.WriteFile(filepath.Join(assetsDir, "data.json"), dataJSON, 0o644); err != nil {
@@ -114,10 +121,11 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 		}
 
 		manifest := map[string]interface{}{
-			"entry":     "index.html",
-			"data":      "assets/data.json",
-			"projectId": projectID,
-			"tool":      "hyperframes_project_generator",
+			"entry":               "index.html",
+			"data":                "assets/data.json",
+			"projectId":           projectID,
+			"tool":                "hyperframes_project_generator",
+			"visualLayerContract": "shot_visual_layers_v1",
 		}
 		manifestJSON, _ := json.MarshalIndent(manifest, "", "  ")
 		if err := os.WriteFile(filepath.Join(projectRoot, "manifest.json"), manifestJSON, 0o644); err != nil {
@@ -137,10 +145,11 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 	}
 
 	return &Result{Output: map[string]interface{}{
-		"projectDir": localRef,
-		"entry":      "index.html",
-		"files":      files,
-		"summary":    "HyperFrames project generated locally",
+		"projectDir":          localRef,
+		"entry":               "index.html",
+		"files":               files,
+		"summary":             "HyperFrames project generated locally with the canonical three-layer Shot contract",
+		"visualLayerContract": "shot_visual_layers_v1",
 		"artifacts": []map[string]interface{}{
 			{
 				"unitId":         "hyperframes-project",
@@ -156,9 +165,10 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 				"producedByTool": "hyperframes_project_generator",
 				"producedByRole": "渲染制片",
 				"metadata": map[string]interface{}{
-					"entry":      "index.html",
-					"fileCount":  len(files),
-					"projectDir": localRef,
+					"entry":               "index.html",
+					"fileCount":           len(files),
+					"projectDir":          localRef,
+					"visualLayerContract": "shot_visual_layers_v1",
 				},
 			},
 		},
@@ -182,13 +192,14 @@ func (e *HyperFramesProjectExecutor) writeCompositionProject(projectRoot, assets
 	}
 
 	data := map[string]interface{}{
-		"compositionSpec": spec,
-		"cards":           cards,
-		"captions":        captions,
-		"style":           style,
-		"projectId":       projectID,
-		"topic":           topic,
-		"generatedAt":     time.Now().UTC().Format(time.RFC3339),
+		"compositionSpec":     spec,
+		"cards":               cards,
+		"captions":            captions,
+		"style":               style,
+		"projectId":           projectID,
+		"topic":               topic,
+		"visualLayerContract": "shot_visual_layers_v1",
+		"generatedAt":         time.Now().UTC().Format(time.RFC3339),
 	}
 	dataJSON, _ := json.MarshalIndent(data, "", "  ")
 	if err := os.WriteFile(filepath.Join(assetsDir, "data.json"), dataJSON, 0o644); err != nil {
@@ -209,16 +220,17 @@ func (e *HyperFramesProjectExecutor) writeCompositionProject(projectRoot, assets
 
 	// 4. Write manifest.json.
 	manifest := map[string]interface{}{
-		"entry":       "index.html",
-		"data":        "assets/data.json",
-		"style":       "assets/style.css",
-		"projectId":   projectID,
-		"tool":        "hyperframes_project_generator",
-		"specVersion": spec.SpecVersion,
-		"projectType": spec.ProjectType,
-		"durationSec": spec.DurationSec,
-		"fps":         spec.FPS,
-		"generatedAt": time.Now().UTC().Format(time.RFC3339),
+		"entry":               "index.html",
+		"data":                "assets/data.json",
+		"style":               "assets/style.css",
+		"projectId":           projectID,
+		"tool":                "hyperframes_project_generator",
+		"visualLayerContract": "shot_visual_layers_v1",
+		"specVersion":         spec.SpecVersion,
+		"projectType":         spec.ProjectType,
+		"durationSec":         spec.DurationSec,
+		"fps":                 spec.FPS,
+		"generatedAt":         time.Now().UTC().Format(time.RFC3339),
 	}
 	manifestJSON, _ := json.MarshalIndent(manifest, "", "  ")
 	if err := os.WriteFile(filepath.Join(projectRoot, "manifest.json"), manifestJSON, 0o644); err != nil {
@@ -455,6 +467,162 @@ func shotListItemsFromPayload(payload map[string]interface{}) []interface{} {
 		}
 	}
 	return nil
+}
+
+func canonicalDesignedShotLayers() []interface{} {
+	return []interface{}{"ip_aroll", "hyperframes_text", "aigc_enrichment"}
+}
+
+func shotListWithThreeLayerDesign(payload map[string]interface{}) []interface{} {
+	shots := shotListItemsFromPayload(payload)
+	if len(shots) == 0 {
+		return nil
+	}
+	plansByShotID := map[string]map[string]interface{}{}
+	for _, item := range interfaceSlice(payload["shotGenerationPlans"]) {
+		plan := mapFromInterface(item)
+		shotID := firstStringFromMap(plan, "shotId", "id")
+		if shotID == "" {
+			continue
+		}
+		if layers := mapFromMap(plan, "visualLayers"); layers != nil {
+			plansByShotID[shotID] = layers
+		}
+	}
+
+	decorated := make([]interface{}, 0, len(shots))
+	for index, item := range shots {
+		original := mapFromInterface(item)
+		if original == nil {
+			decorated = append(decorated, item)
+			continue
+		}
+		shot := cloneStringInterfaceMap(original)
+		shotID := firstStringFromMap(shot, "shotId", "id")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", index+1)
+			shot["shotId"] = shotID
+		}
+		layers := cloneStringInterfaceMap(plansByShotID[shotID])
+		if layers == nil {
+			layers = map[string]interface{}{}
+		}
+		layers["schemaVersion"] = "shot_visual_layers_v1"
+		layers["shotId"] = shotID
+		ensureReadableShotLayer(layers, "ipAroll", "ip_aroll", "generate", true, ipArollDesignSummary(shot))
+		ensureReadableShotLayer(layers, "hyperframes", "hyperframes_text", "generate", true, hyperframesDesignSummary(shot))
+		ensureReadableShotLayer(layers, "aigc", "aigc_enrichment", "planned", false, aigcDesignSummary(shot))
+		policy, required := layerPolicyFromVisualLayers(layers)
+		shot["visualLayerContract"] = "shot_visual_layers_v1"
+		shot["designedLayers"] = canonicalDesignedShotLayers()
+		shot["layerExecutionPolicy"] = policy
+		shot["requiredLayers"] = required
+		shot["visualLayers"] = layers
+		decorated = append(decorated, shot)
+	}
+	return decorated
+}
+
+func cloneStringInterfaceMap(source map[string]interface{}) map[string]interface{} {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[string]interface{}, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func ensureReadableShotLayer(layers map[string]interface{}, mapKey, layerKey, defaultPolicy string, defaultRequired bool, summary string) {
+	layer := cloneStringInterfaceMap(mapFromMap(layers, mapKey))
+	if layer == nil {
+		layer = map[string]interface{}{}
+	}
+	if strings.TrimSpace(stringFromMap(layer, "layerKey")) == "" {
+		layer["layerKey"] = layerKey
+	}
+	if strings.TrimSpace(stringFromMap(layer, "executionPolicy")) == "" {
+		layer["executionPolicy"] = defaultPolicy
+	}
+	if _, exists := layer["required"]; !exists {
+		layer["required"] = defaultRequired
+	}
+	layer["designed"] = true
+	layer["designSummary"] = summary
+	layers[mapKey] = layer
+}
+
+func ipArollDesignSummary(shot map[string]interface{}) string {
+	narration := strings.TrimSpace(firstStringFromMap(shot, "narrationText", "scriptText", "mainAction"))
+	if narration == "" {
+		return "IP A-roll：默认 3D IP 角色在整个 Shot 时间窗内保持连续口播主体。"
+	}
+	return "IP A-roll：默认 3D IP 角色在整个 Shot 时间窗内连续口播。口播内容：" + narration
+}
+
+func hyperframesDesignSummary(shot map[string]interface{}) string {
+	texts := make([]string, 0)
+	for _, item := range interfaceSlice(shot["screenText"]) {
+		if value, ok := item.(string); ok && strings.TrimSpace(value) != "" {
+			texts = append(texts, strings.TrimSpace(value))
+		}
+	}
+	if len(texts) == 0 {
+		return "HyperFrames 文字层：使用确定性排版与可控关键帧呈现字幕和关键词，不把可读文字交给 AIGC。"
+	}
+	return "HyperFrames 文字层：准确呈现「" + strings.Join(texts, " / ") + "」，并使用可控关键帧完成进入、强调和退出。"
+}
+
+func aigcDesignSummary(shot map[string]interface{}) string {
+	intent := strings.TrimSpace(firstStringFromMap(shot, "mainAction"))
+	if intent == "" {
+		intent = "规划与本 Shot 口播主题相关的背景、B-roll 或局部插入镜头，为 IP 主体和文字层保留安全区"
+	}
+	return "AIGC 丰富层：" + intent + "；仅生成视觉素材，不生成可读文字、字幕、Logo 或水印。"
+}
+
+func layerPolicyFromVisualLayers(layers map[string]interface{}) (map[string]interface{}, []interface{}) {
+	policy := map[string]interface{}{}
+	required := make([]interface{}, 0, 3)
+	for _, definition := range []struct {
+		mapKey   string
+		layerKey string
+	}{
+		{mapKey: "ipAroll", layerKey: "ip_aroll"},
+		{mapKey: "hyperframes", layerKey: "hyperframes_text"},
+		{mapKey: "aigc", layerKey: "aigc_enrichment"},
+	} {
+		layer := mapFromMap(layers, definition.mapKey)
+		layerKey := firstStringFromMap(layer, "layerKey")
+		if layerKey == "" {
+			layerKey = definition.layerKey
+		}
+		executionPolicy := firstStringFromMap(layer, "executionPolicy")
+		if executionPolicy == "" {
+			executionPolicy = "planned"
+		}
+		policy[layerKey] = executionPolicy
+		if isRequired, _ := layer["required"].(bool); isRequired {
+			required = append(required, layerKey)
+		}
+	}
+	return policy, required
+}
+
+func projectLayerPolicyFromShots(shots []interface{}) (map[string]interface{}, []interface{}) {
+	if len(shots) > 0 {
+		if shot := mapFromInterface(shots[0]); shot != nil {
+			if policy := mapFromMap(shot, "layerExecutionPolicy"); policy != nil {
+				return policy, interfaceSlice(shot["requiredLayers"])
+			}
+		}
+	}
+	return map[string]interface{}{
+		"ip_aroll":         "generate",
+		"hyperframes_text": "generate",
+		"aigc_enrichment":  "planned",
+	}, []interface{}{"ip_aroll", "hyperframes_text"}
 }
 
 // extractCardsAndCaptions extracts card and caption info from the tracks.

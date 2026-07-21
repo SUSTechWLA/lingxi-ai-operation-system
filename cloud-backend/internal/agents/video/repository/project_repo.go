@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -269,12 +270,12 @@ func (r *ProjectRepository) CompareAndSwapForUser(ctx context.Context, userID st
 		 language=$9, config=$10, current_run_id=$11, local_path_hint=$12,
 		 updated_at=$13, config_revision=$14
 		 FROM revision_guard
-		 WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL AND config_revision=$15
+		 WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL AND config_revision=$15::bigint
 		 AND revision_guard.expected_revision=$15::text`,
 		p.ID, userID, p.Name, p.Description, string(p.Status),
 		string(p.GenerationMode), p.AspectRatio, p.TargetDuration,
 		p.Language, p.Config, p.CurrentRunID, p.LocalPathHint,
-		p.UpdatedAt, nextRevision, expectedRevision,
+		p.UpdatedAt, nextRevision, strconv.FormatInt(expectedRevision, 10),
 	)
 	if err != nil {
 		return false, fmt.Errorf("failed to compare and swap project: %w", err)

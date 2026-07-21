@@ -1011,6 +1011,51 @@ func TestMCPToolCallExecutorReportsMissingReadyVideoAssets(t *testing.T) {
 	}
 }
 
+func TestMCPToolCallExecutorFailsStrictBatchWhenReadyVideoIsMissing(t *testing.T) {
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"isError": true,
+				"content": []map[string]interface{}{{"type": "text", "text": "local render failed"}},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "ip_avatar_3d", Label: "IP Avatar", Endpoint: mcp.URL, Enabled: true}}, nil
+	})
+	result, err := executor.Execute(context.Background(), Job{
+		ID:      "job-strict-ip-render",
+		Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId":               "ip_avatar_3d",
+			"mcpTool":                  "ip_avatar_3d.render_talking_video",
+			"minReadyVideoGenerations": 1,
+			"failOnUnmetRequirements":  true,
+			"externalGenerationRequests": []interface{}{map[string]interface{}{
+				"requestId": "ip_aroll_main",
+				"shotId":    "AROLL_MAIN",
+				"kind":      "ip_aroll_video",
+				"mcpTool":   "ip_avatar_3d.render_talking_video",
+				"arguments": map[string]interface{}{"script": "preview"},
+			}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "required MCP video generation was not satisfied") {
+		t.Fatalf("Execute error = %v, want strict requirement failure", err)
+	}
+	if result != nil {
+		t.Fatalf("strict failed batch result = %#v, want nil", result)
+	}
+}
+
 func TestMCPToolCallExecutorBlocksUnclearVideoPromptBeforeProviderCall(t *testing.T) {
 	callCount := 0
 	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

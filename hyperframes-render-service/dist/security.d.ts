@@ -7,6 +7,8 @@ export interface SecurityConfig {
     allowedProjectRoots: string[];
     allowedOutputRoots: string[];
 }
+/** Build a normalized allowlist from one required root and optional semicolon-separated roots. */
+export declare function configuredRoots(primaryRoot: string, additionalRoots?: string): string[];
 /**
  * Resolves `targetPath` and asserts it falls within at least one of the
  * `allowedRoots`.  Throws if the resolved path escapes all allowed roots.

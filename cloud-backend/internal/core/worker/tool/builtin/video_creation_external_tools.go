@@ -704,6 +704,9 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"script":        {Type: "string", Description: "Approved script", Required: false},
 			"timeWindows":   {Type: "array", Description: "Script-timed windows", Required: true},
 			"assetStrategy": {Type: "string", Description: "Optional asset strategy", Required: false},
+			"aigcProvider":  {Type: "string", Description: "AIGC provider or disabled", Required: false},
+			"aigcEnabled":   {Type: "boolean", Description: "Whether AIGC enrichment may execute", Required: false},
+			"aigcPolicy":    {Type: "string", Description: "Independent AIGC enrichment policy", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"visualAlignmentPlan": {Type: "object", Description: "Visual-to-script alignment plan"},
@@ -795,6 +798,13 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"aigcAvailable":        {Type: "boolean", Description: "Whether AIGC video/image generation is available", Required: false},
 			"htmlAvailable":        {Type: "boolean", Description: "Whether HyperFrames HTML rendering is available", Required: false},
 			"providerCapabilities": {Type: "object", Description: "Optional nested provider capability snapshot", Required: false},
+			"aigcProvider":         {Type: "string", Description: "AIGC execution provider or disabled", Required: false},
+			"aigcEnabled":          {Type: "boolean", Description: "Whether AIGC enrichment may execute", Required: false},
+			"aigcPolicy":           {Type: "string", Description: "Independent AIGC enrichment execution policy", Required: false},
+			"productionRoute":      {Type: "string", Description: "Talking-head or cinematic production route", Required: false},
+			"visualLayerContract":  {Type: "string", Description: "Canonical Shot visual-layer contract version", Required: false},
+			"designedLayers":       {Type: "array", Description: "Layers that every Shot must describe", Required: false},
+			"layerExecutionPolicy": {Type: "object", Description: "Per-layer execution policies", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"shotGenerationPlans":        {Type: "array", Description: "Per-shot generation plans"},
@@ -813,15 +823,21 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		manifest.Idempotent = true
 		manifest.Capabilities = []string{"video_creation", "video_prompt_generation", "text_to_video"}
 		manifest.Parameters = map[string]tool.ParamDef{
-			"shotList":           {Type: "array", Description: "Approved shot list", Required: true},
-			"brief":              {Type: "string", Description: "Original video brief", Required: false},
-			"keyframePrompts":    {Type: "array", Description: "Optional keyframe prompts", Required: false},
-			"style":              {Type: "string", Description: "Visual style", Required: false},
-			"modelHint":          {Type: "string", Description: "Target video generation model", Required: false},
-			"aspectRatio":        {Type: "string", Description: "Video aspect ratio", Required: false},
-			"aigcProvider":       {Type: "string", Description: "Optional automatic AIGC provider, such as jimeng_mcp", Required: false},
-			"referenceAssetPlan": {Type: "object", Description: "Optional cinematic reference asset plan", Required: false},
-			"continuityBible":    {Type: "object", Description: "Optional cinematic continuity bible", Required: false},
+			"shotList":             {Type: "array", Description: "Approved shot list", Required: true},
+			"brief":                {Type: "string", Description: "Original video brief", Required: false},
+			"keyframePrompts":      {Type: "array", Description: "Optional keyframe prompts", Required: false},
+			"style":                {Type: "string", Description: "Visual style", Required: false},
+			"modelHint":            {Type: "string", Description: "Target video generation model", Required: false},
+			"aspectRatio":          {Type: "string", Description: "Video aspect ratio", Required: false},
+			"aigcProvider":         {Type: "string", Description: "Optional automatic AIGC provider, such as jimeng_mcp", Required: false},
+			"aigcEnabled":          {Type: "boolean", Description: "Whether AIGC enrichment may execute", Required: false},
+			"aigcPolicy":           {Type: "string", Description: "Independent AIGC enrichment execution policy", Required: false},
+			"productionRoute":      {Type: "string", Description: "Talking-head or cinematic production route", Required: false},
+			"visualLayerContract":  {Type: "string", Description: "Canonical Shot visual-layer contract version", Required: false},
+			"designedLayers":       {Type: "array", Description: "Layers that every Shot must describe", Required: false},
+			"layerExecutionPolicy": {Type: "object", Description: "Per-layer execution policies", Required: false},
+			"referenceAssetPlan":   {Type: "object", Description: "Optional cinematic reference asset plan", Required: false},
+			"continuityBible":      {Type: "object", Description: "Optional cinematic continuity bible", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"videoPrompts":               {Type: "array", Description: "Independent per-shot video prompts"},
@@ -3481,6 +3497,10 @@ func executeShotGenerationPlanner(stage, skillName string, params map[string]int
 	}
 	aigcAvailable := boolParam(params, "aigcAvailable", aigcDefault)
 	htmlAvailable := boolParam(params, "htmlAvailable", htmlDefault)
+	aigcExecutionEnabled := shotAIGCExecutionEnabled(params, nil)
+	if !aigcExecutionEnabled {
+		aigcAvailable = false
+	}
 	renderPreference := renderPreferenceFromToolValue(params["renderPreference"])
 
 	visualPlans := normalizeShotItemsForAssetDecision(params["visualPlans"])
@@ -3498,12 +3518,15 @@ func executeShotGenerationPlanner(stage, skillName string, params map[string]int
 			videoservice.RenderCapabilities{AIGCAvailable: aigcAvailable, HTMLAvailable: htmlAvailable},
 		)
 		enrichShotGenerationPlanInputs(values, &plan)
+		applyShotVisualLayerExecutionPolicy(params, values, &plan)
 		shotGenerationPlans = append(shotGenerationPlans, structToMap(plan))
 		shotAssetPackages = append(shotAssetPackages, shotAssetPackageFromGenerationPlan(values, plan))
-		externalRequests = append(externalRequests, externalRequestsFromGenerationPlan(plan)...)
+		if shotAIGCExecutionEnabled(params, values) {
+			externalRequests = append(externalRequests, externalRequestsFromGenerationPlan(plan)...)
+		}
 	}
 
-	summary := fmt.Sprintf("已为 %d 个镜头生成逐镜头生成计划，包含 %d 个外部生成请求。", len(shotGenerationPlans), len(externalRequests))
+	summary := fmt.Sprintf("已为 %d 个 Shot 生成三层画面计划（IP A-roll、HyperFrames 文字/特效、AIGC 丰富层），包含 %d 个可执行外部生成请求。", len(shotGenerationPlans), len(externalRequests))
 	return tool.SuccessResult(map[string]interface{}{
 		"content":                    buildShotGenerationPlanReviewContent(shotGenerationPlans),
 		"shotGenerationPlans":        shotGenerationPlans,
@@ -3514,6 +3537,55 @@ func executeShotGenerationPlanner(stage, skillName string, params map[string]int
 			jsonArtifact(stage, "shot_generation_plans.json", skillName, "SHOT_GENERATION_PLAN", true),
 		},
 	})
+}
+
+func applyShotVisualLayerExecutionPolicy(params, values map[string]interface{}, plan *videomodel.ShotGenerationPlan) {
+	if plan == nil {
+		return
+	}
+	aigcEnabled := shotAIGCExecutionEnabled(params, values)
+	if !aigcEnabled {
+		plan.VisualLayers.AIGC.Enabled = false
+		plan.VisualLayers.AIGC.Required = false
+		plan.VisualLayers.AIGC.ExecutionPolicy = videomodel.LayerExecutionDisabled
+	}
+
+	productionRoute := strings.ToLower(firstNonEmptyString(values, "productionRoute"))
+	if productionRoute == "" {
+		productionRoute = strings.ToLower(stringParam(params, "productionRoute", ""))
+	}
+	requiredLayers := append(
+		stringListFromInterface(params["requiredLayers"]),
+		stringListFromInterface(values["requiredLayers"])...,
+	)
+	requiredLayerText := strings.Join(requiredLayers, " ")
+	ipRequired := containsAny(productionRoute, "talking", "voice_visual", "口播") || containsAny(requiredLayerText, "ip_aroll")
+	plan.VisualLayers.IPAroll.Required = ipRequired
+	if ipRequired {
+		plan.VisualLayers.IPAroll.Enabled = true
+		plan.VisualLayers.IPAroll.ExecutionPolicy = videomodel.LayerExecutionGenerate
+	}
+	if containsAny(requiredLayerText, "aigc_main", "aigc_enrichment") {
+		plan.VisualLayers.AIGC.Required = aigcEnabled
+	}
+}
+
+func shotAIGCExecutionEnabled(params, values map[string]interface{}) bool {
+	provider := firstNonEmptyString(values, "aigcProvider")
+	if provider == "" {
+		provider = stringParam(params, "aigcProvider", "")
+	}
+	aigcEnabled := !isDisabledAIGCProvider(provider)
+	if value, ok := boolFromToolMap(values, "aigcEnabled"); ok {
+		aigcEnabled = value
+	} else if value, ok := boolFromToolMap(params, "aigcEnabled"); ok {
+		aigcEnabled = value
+	}
+	policy := firstNonEmptyString(values, "aigcPolicy")
+	if policy == "" {
+		policy = stringParam(params, "aigcPolicy", "")
+	}
+	return aigcEnabled && !isDisabledAIGCProvider(policy)
 }
 
 func mergeShotGenerationToolValues(shotMap map[string]interface{}, visualPlans []map[string]interface{}, index int) map[string]interface{} {
@@ -3702,6 +3774,7 @@ func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan vid
 		"durationSec":    normalizedDurationSec(firstValueInMap(shotMap, "durationSec", "duration", "seconds")),
 		"visual":         firstNonEmptyString(shotMap, "visual", "visualIntent", "description", "sceneSummary"),
 		"generationPlan": planMap,
+		"visualLayers":   planMap["visualLayers"],
 		"requiredAssets": planMap["requiredAssets"],
 		"fusionPlan":     planMap["fusionPlan"],
 		"status":         videomodel.ReviewStatusPending,
@@ -3845,6 +3918,19 @@ func buildShotGenerationPlanReviewContent(plans []map[string]interface{}) string
 		b.WriteString(fmt.Sprintf("- Required assets: %d\n", assetCount))
 		if reason != "" {
 			b.WriteString(fmt.Sprintf("- Reason: %s\n", reason))
+		}
+		if layers, ok := mapValue(plan["visualLayers"]); ok {
+			for _, layerSpec := range []struct {
+				key   string
+				label string
+			}{
+				{key: "ipAroll", label: "IP A-roll"},
+				{key: "hyperframes", label: "HyperFrames text/effects"},
+				{key: "aigc", label: "AIGC enrichment"},
+			} {
+				layer, _ := mapValue(layers[layerSpec.key])
+				b.WriteString(fmt.Sprintf("- %s: `%s` — %s\n", layerSpec.label, firstNonEmptyString(layer, "executionPolicy"), firstNonEmptyString(layer, "description")))
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -4835,6 +4921,11 @@ func ensureVideoPromptShotAssetPackages(pkg map[string]interface{}) {
 				"allowedSharedConsistency":     []string{"主要角色", "主要道具", "主场景", "全片风格"},
 			},
 		}
+		for _, key := range []string{"visualLayers", "ipArollPlan", "aigcPlan", "hyperframesPlan", "ffmpegFusionPlan"} {
+			if value, exists := prompt[key]; exists && value != nil {
+				packageItem[key] = value
+			}
+		}
 		packages = append(packages, packageItem)
 	}
 	if len(packages) > 0 {
@@ -4854,6 +4945,8 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 	artifacts := make([]interface{}, 0, len(shots)*5)
 	shotGuides := make([]interface{}, 0, len(shots))
 	routeCounts := map[string]int{}
+	aigcExecutionEnabled := !isDisabledAIGCProvider(stringParam(params, "aigcProvider", ""))
+	productionRoute := strings.ToLower(stringParam(params, "productionRoute", ""))
 
 	for i, shot := range shots {
 		shotID := firstStringInMap(shot, "shotId", "id", "cardId")
@@ -4906,8 +4999,42 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			MaterialHints:     materialHints,
 		})
 		layerPlan := buildShotLayerPlan(shotID, duration, visual, narration, camera, lighting, composition, shotSize, assetIntent, humorBeat, timeRelationship, tone, actionBeats, videoPrompt)
+		ipRequired := containsAny(productionRoute, "talking", "voice_visual", "口播")
+		ipExecutionPolicy := "auto"
+		if ipRequired {
+			ipExecutionPolicy = "required"
+		}
+		ipArollPlan := map[string]interface{}{
+			"layerKey":        "ip_aroll",
+			"designed":        true,
+			"enabled":         true,
+			"required":        ipRequired,
+			"executionPolicy": ipExecutionPolicy,
+			"role":            "character_aroll_subject",
+			"description":     "使用正式 3D IP 角色拍摄为 2D A-roll，承载口播、口型、眼神、表情和角色连续性。",
+			"prompt":          fmt.Sprintf("树懒 IP 在正式演播室中完成 %s 的口播与表演：%s", shotID, narration),
+			"renderer":        "ip_avatar_3d",
+			"artifactKinds":   []string{"IP_AROLL_VIDEO", "AROLL_ASSET_PACKAGE"},
+			"safeArea":        "IP 主体不得遮挡字幕、标题和关键数据；为 AIGC 插入层与文字层保留构图安全区。",
+			"zIndex":          10,
+			"startSec":        0,
+			"durationSec":     duration,
+		}
+		submitExternalRequest := aigcExecutionEnabled && shouldSubmitExternalVideoRequest(shot, visual, materialHints)
+		aigcExecutionPolicy := "optional"
+		if !aigcExecutionEnabled {
+			aigcExecutionPolicy = "disabled"
+		} else if submitExternalRequest {
+			aigcExecutionPolicy = "generate"
+		}
 		aigcPlan := map[string]interface{}{
+			"layerKey":            "aigc_enrichment",
+			"designed":            true,
+			"enabled":             submitExternalRequest,
+			"required":            false,
+			"executionPolicy":     aigcExecutionPolicy,
 			"role":                "background_or_partial_video",
+			"description":         "生成无文字背景、B-roll 或局部动态素材，丰富信息密度和视觉节奏，不替代 IP 口播与精确文字层。",
 			"prompt":              layerPlan.AIGCPrompt,
 			"textSafeLayout":      layerPlan.TextSafeLayout,
 			"avoidGeneratedText":  true,
@@ -4916,24 +5043,43 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"canBePartialInsert":  true,
 		}
 		hyperframesPlan := map[string]interface{}{
+			"layerKey":         "hyperframes_text",
+			"designed":         true,
+			"enabled":          true,
+			"required":         true,
+			"executionPolicy":  "required",
 			"role":             "exact_text_keyframes_overlay",
+			"description":      "负责所有精确文字、字幕、标题、UI/信息卡片和可控关键帧特效。",
 			"prompt":           layerPlan.HyperframesPrompt,
 			"textRenderer":     "local_hyperframes",
 			"keyframeStrategy": "local_precise_layout",
 			"locks":            []string{"中文文字", "字幕", "标题", "流程标签", "UI 卡片"},
 		}
 		ffmpegFusionPlan := map[string]interface{}{
-			"mode":               "aigc_background_or_insert_plus_hyperframes_overlay",
+			"mode":               "three_layer_shot_composition",
 			"plan":               layerPlan.FFmpegFusionPlan,
-			"inputArtifacts":     []string{"SHOT_VIDEO_CLIP", "HYPERFRAMES_SHOT"},
+			"description":        "将 AIGC 背景/插入素材、IP A-roll 主体和 HyperFrames 文字特效按同一 Shot 时间窗合成。",
+			"layerOrder":         []string{"aigc_enrichment", "ip_aroll", "hyperframes_text"},
+			"inputArtifacts":     []string{"SHOT_VIDEO_CLIP", "IP_AROLL_VIDEO", "HYPERFRAMES_SHOT"},
 			"outputArtifactKind": "COMPOSITED_SHOT_VIDEO",
 			"textSafeRequired":   true,
 		}
+		visualLayers := map[string]interface{}{
+			"schemaVersion": "shot_visual_layers_v1",
+			"shotId":        shotID,
+			"description":   "同一 Shot 始终设计 IP A-roll、HyperFrames 文字/特效和 AIGC 丰富素材三层；执行策略决定当前是否生成可选层。",
+			"ipAroll":       ipArollPlan,
+			"hyperframes":   hyperframesPlan,
+			"aigc":          aigcPlan,
+			"composition":   ffmpegFusionPlan,
+		}
 		negativePrompt := "避免真人写实、跨 shot 依赖、尾帧对齐要求、水印、不可读文字、字幕、Logo、错误汉字、乱码、画面崩坏。"
 		requestID := "extgen_video_" + unitShotID
-		submitExternalRequest := shouldSubmitExternalVideoRequest(shot, visual, materialHints)
 		assetRoute := firstStringInMap(shot, "plannedAssetRoute", "assetRoute", "route", "recommendedMode")
 		routeLabel := userFacingShotRouteLabel(assetRoute, submitExternalRequest)
+		if !aigcExecutionEnabled {
+			routeLabel = "IP A-roll + HyperFrames（保留 AIGC 设计）"
+		}
 		routeCounts[routeLabel]++
 		shotGuide := map[string]interface{}{
 			"shotId":               shotID,
@@ -4949,6 +5095,7 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"hyperframesAction":    "HyperFrames 在本地生成精确文字、UI、字幕或图形包装；如果本 shot 需要 AIGC 素材，会在用户上传确认后合成完整 shot。",
 			"mergedShotPreview":    "AIGC 素材、HyperFrames 文字层和字幕会在后续预览/渲染阶段合并成该 shot 的完整画面。",
 			"aigcLayer":            layerPlan.AIGCPrompt,
+			"ipArollLayer":         ipArollPlan["prompt"],
 			"hyperframesLayer":     layerPlan.HyperframesPrompt,
 			"ffmpegFusion":         layerPlan.FFmpegFusionPlan,
 			"textSafeLayout":       layerPlan.TextSafeLayout,
@@ -4957,6 +5104,7 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"requiresUserAIGC":     submitExternalRequest,
 			"sourceScriptSegment":  narration,
 			"sourceScriptLabel":    "来自口播：" + narration,
+			"visualLayers":         visualLayers,
 		}
 		shotGuides = append(shotGuides, shotGuide)
 
@@ -4971,8 +5119,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"hyperframesPrompt":    layerPlan.HyperframesPrompt,
 			"textSafeLayout":       layerPlan.TextSafeLayout,
 			"aigcPlan":             aigcPlan,
+			"ipArollPlan":          ipArollPlan,
 			"hyperframesPlan":      hyperframesPlan,
 			"ffmpegFusionPlan":     ffmpegFusionPlan,
+			"visualLayers":         visualLayers,
 			"negativePrompt":       negativePrompt,
 			"continuity":           "仅共享主要角色、主要道具、主场景和全片风格；不得依赖其他 shot 的画面。",
 			"materialLibraryHints": materialHints,
@@ -5008,8 +5158,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 				"aigcVideoPrompt":     layerPlan.AIGCPrompt,
 				"overallShotPrompt":   videoPrompt,
 				"aigcPlan":            aigcPlan,
+				"ipArollPlan":         ipArollPlan,
 				"hyperframesPlan":     hyperframesPlan,
 				"ffmpegFusionPlan":    ffmpegFusionPlan,
+				"visualLayers":        visualLayers,
 				"textSafeLayout":      layerPlan.TextSafeLayout,
 				"negativePrompt":      negativePrompt,
 				"references":          references,
@@ -5046,8 +5198,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"composition":       composition,
 			"shotSize":          shotSize,
 			"aigcPlan":          aigcPlan,
+			"ipArollPlan":       ipArollPlan,
 			"hyperframesPlan":   hyperframesPlan,
 			"ffmpegFusionPlan":  ffmpegFusionPlan,
+			"visualLayers":      visualLayers,
 			"textSafeLayout":    layerPlan.TextSafeLayout,
 			"prompts": map[string]interface{}{
 				"videoPrompt":       videoPrompt,

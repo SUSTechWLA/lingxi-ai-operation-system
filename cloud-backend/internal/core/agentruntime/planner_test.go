@@ -2,6 +2,8 @@ package agentruntime
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
@@ -149,6 +151,42 @@ func TestHeuristicPlanner_DoesNotSelectVideoFrameQAAsStandaloneTool(t *testing.T
 	}
 }
 
+func TestHeuristicPlanner_DoesNotSelectQualityCheckerAsStandaloneTool(t *testing.T) {
+	tools := staticToolList{
+		{
+			Name:         "video_script_generator",
+			Capabilities: []string{"video_creation", "script_generation"},
+			Output:       map[string]tool.ParamDef{"script": {Type: "string"}},
+		},
+		{
+			Name:         "shot_splitter",
+			Capabilities: []string{"video_creation", "shot_planning"},
+			Parameters:   map[string]tool.ParamDef{"script": {Type: "string", Required: true}},
+			Output:       map[string]tool.ParamDef{"shotList": {Type: "array"}},
+		},
+		{
+			Name:         "shot_quality_checker",
+			Capabilities: []string{"video_creation", "quality_check"},
+			Parameters:   map[string]tool.ParamDef{"shotList": {Type: "array", Required: true}},
+			Output:       map[string]tool.ParamDef{"passed": {Type: "boolean"}},
+		},
+	}
+	planner := NewHeuristicPlannerWithMaxTools(tools, len(tools))
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请制作一条 15 秒树懒 IP 口播视频",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	for _, step := range plan.Steps {
+		if step.Tool == "shot_quality_checker" {
+			t.Fatalf("quality checkers must be compiler-inserted after their producer, not heuristic-selected: %#v", plan.Steps)
+		}
+	}
+}
+
 func TestHeuristicPlanner_WithBuiltinVideoToolsProducesValidQAFlow(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	builtin.RegisterVideoCreationExternalTools(registry)
@@ -170,6 +208,55 @@ func TestHeuristicPlanner_WithBuiltinVideoToolsProducesValidQAFlow(t *testing.T)
 	}
 	if err := NewPlanGuard(registry, nil).Validate(plan); err != nil {
 		t.Fatalf("prepared heuristic plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestHeuristicPlanner_PreparedTalkingHeadPlanIsIdempotent(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	builtin.RegisterVideoCreationExternalTools(registry)
+	planner := NewHeuristicPlannerWithMaxTools(registry, 8)
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "创作一支 15 秒视频：树懒阿洛用十五秒分享三个让工作更专注的小技巧。使用工作室全身口播画面，加入“先定目标”“关闭干扰”“专注十五分钟”三段清晰文字卡片；只使用本地 IP A-roll 与 HyperFrames 文字层，不生成任何 AIGC 画面。",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"projectId":          "vp-talking-head",
+			"topic":              "树懒阿洛用十五秒分享三个让工作更专注的小技巧。使用工作室全身口播画面，加入“先定目标”“关闭干扰”“专注十五分钟”三段清晰文字卡片；只使用本地 IP A-roll 与 HyperFrames 文字层，不生成任何 AIGC 画面。",
+			"videoType":          "voice_visual",
+			"productionRoute":    "talking_head",
+			"canonicalProfileId": "talking_head",
+			"aigcEnabled":        false,
+			"requiredLayers":     []string{"ip_aroll", "hyperframes_text"},
+			"durationSec":        15,
+			"targetDurationSec":  15,
+			"aspectRatio":        "16:9",
+			"materialCount":      0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	// A retrieved tool can survive beside its canonical profile step when the
+	// plan is prepared at both planner and runner boundaries.
+	plan.Steps = append(plan.Steps,
+		AgentStep{ID: "time_window_planner", Tool: "time_window_planner"},
+		AgentStep{ID: "visual_alignment_planner", Tool: "visual_alignment_planner", DependsOn: []string{"time_window_planner"}},
+	)
+
+	preparedAgain := NewPlanCompiler(registry).PreparePlan(plan)
+	seen := map[string]string{}
+	for _, step := range preparedAgain.Steps {
+		if step.Tool == "" || strings.Contains(strings.ToLower(step.Tool), "quality") || step.Tool == "__quality_gate__" {
+			continue
+		}
+		key := step.Tool
+		if step.Tool == "mcp_generation_runner" {
+			key += ":" + fmt.Sprint(step.Arguments["stage"])
+		}
+		if prior, exists := seen[key]; exists {
+			t.Fatalf("non-quality tool %q was duplicated by repeated preparation in steps %q and %q", key, prior, step.ID)
+		}
+		seen[key] = step.ID
 	}
 }
 

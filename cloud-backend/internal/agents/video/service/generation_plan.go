@@ -30,6 +30,17 @@ func BuildShotGenerationPlan(
 	pref model.RenderPreference,
 	caps RenderCapabilities,
 ) model.ShotGenerationPlan {
+	plan := buildShotGenerationPlan(shot, visual, pref, caps)
+	plan.VisualLayers = buildShotVisualLayerContract(shot, visual, plan, pref, caps)
+	return plan
+}
+
+func buildShotGenerationPlan(
+	shot model.ShotUnit,
+	visual model.VisualPlan,
+	pref model.RenderPreference,
+	caps RenderCapabilities,
+) model.ShotGenerationPlan {
 	signals := scoreShotGenerationSignals(shot, visual, pref)
 	durationSec := resolveShotDuration(shot, visual)
 	if err := model.ValidateShotDuration(model.ShotUnit{DurationSec: durationSec}); err != nil {
@@ -108,6 +119,112 @@ func BuildShotGenerationPlan(
 			"no executable renderer is available for a default preview",
 			[]string{"html_provider_required", "placeholder_accuracy", "provider_availability"},
 		)
+	}
+}
+
+func buildShotVisualLayerContract(
+	shot model.ShotUnit,
+	visual model.VisualPlan,
+	plan model.ShotGenerationPlan,
+	pref model.RenderPreference,
+	caps RenderCapabilities,
+) model.ShotVisualLayerContract {
+	durationSec := float64(resolveShotDuration(shot, visual))
+	if durationSec < 0 {
+		durationSec = 0
+	}
+	signals := scoreShotGenerationSignals(shot, visual, pref)
+	aigcPolicy := model.LayerExecutionOptional
+	if signals.AIGCScore > 0 {
+		aigcPolicy = model.LayerExecutionDeferred
+		if caps.AIGCAvailable {
+			aigcPolicy = model.LayerExecutionGenerate
+		}
+	}
+	hyperframesPolicy := model.LayerExecutionDeferred
+	if caps.HTMLAvailable {
+		hyperframesPolicy = model.LayerExecutionGenerate
+	}
+	outputKind := plan.FusionPlan.OutputArtifactKind
+	if outputKind == "" {
+		outputKind = artifactKindCompositedShotVideo
+	}
+	narration := strings.TrimSpace(shot.Narration)
+	if narration == "" {
+		narration = strings.TrimSpace(shot.MainAction)
+	}
+	if narration == "" {
+		narration = strings.TrimSpace(shot.SceneSummary)
+	}
+	if narration == "" {
+		narration = "本 Shot 的口播与角色表演"
+	}
+	locks := textLocks(shot, visual)
+	hyperframesPrompt := "使用 HyperFrames/HyperKeyframes 精确排版字幕、标题、信息卡片和可控关键帧特效；文字必须与口播一致。"
+	if len(locks) > 0 {
+		hyperframesPrompt += " 锁定内容：" + strings.Join(locks, "；") + "。"
+	}
+
+	return model.ShotVisualLayerContract{
+		SchemaVersion: "shot_visual_layers_v1",
+		ShotID:        shot.ID,
+		Description:   "同一 Shot 由 IP A-roll、HyperFrames 精确文字/特效和 AIGC 丰富素材三层组成，再按统一时间窗合成。",
+		IPAroll: model.ShotVisualLayerDesign{
+			LayerKey:        "ip_aroll",
+			Designed:        true,
+			Enabled:         true,
+			Required:        false,
+			ExecutionPolicy: model.LayerExecutionAuto,
+			Role:            "character_aroll_subject",
+			Description:     "使用正式 3D IP 角色、正式 Armature、表情和声音拍摄为 2D A-roll，承载口播、眼神、口型和表演连续性。",
+			Prompt:          "树懒 IP 在正式演播室中完成本 Shot 表演与口播：" + narration,
+			Renderer:        "ip_avatar_3d",
+			ArtifactKinds:   []string{"IP_AROLL_VIDEO", "AROLL_ASSET_PACKAGE"},
+			SafeArea:        "主体不得遮挡字幕和关键数据；构图需为 AIGC 插入素材与文字层保留安全区。",
+			ZIndex:          10,
+			StartSec:        0,
+			DurationSec:     durationSec,
+		},
+		HyperFrames: model.ShotVisualLayerDesign{
+			LayerKey:        "hyperframes_text",
+			Designed:        true,
+			Enabled:         caps.HTMLAvailable,
+			Required:        true,
+			ExecutionPolicy: hyperframesPolicy,
+			Role:            "exact_text_and_keyframe_effects",
+			Description:     "负责所有精确文字、字幕、标题、UI/信息卡片和可控特效，禁止把可读文字交给 AIGC 生成。",
+			Prompt:          hyperframesPrompt,
+			Renderer:        "hyperframes",
+			ArtifactKinds:   []string{"HYPERFRAMES_SHOT", "SHOT_SUBTITLE"},
+			SafeArea:        "遵守字幕、标题和主体安全区；不得遮挡眼睛、嘴部与关键动作。",
+			ZIndex:          20,
+			StartSec:        0,
+			DurationSec:     durationSec,
+		},
+		AIGC: model.ShotVisualLayerDesign{
+			LayerKey:        "aigc_enrichment",
+			Designed:        true,
+			Enabled:         aigcPolicy == model.LayerExecutionGenerate,
+			Required:        signals.AIGCScore > 0,
+			ExecutionPolicy: aigcPolicy,
+			Role:            "background_broll_or_partial_insert",
+			Description:     "生成无文字背景、B-roll 或局部动态素材，补充信息密度、情绪和视觉变化，不替代 IP 口播与精确文字层。",
+			Prompt:          aigcPrompt(shot, visual, true),
+			Renderer:        "aigc_provider",
+			ArtifactKinds:   []string{"SHOT_VIDEO_CLIP", "SHOT_IMAGE"},
+			SafeArea:        "必须为 IP 主体和 HyperFrames 文字留出干净区域；禁止生成文字、字幕、Logo 或水印。",
+			ZIndex:          0,
+			StartSec:        0,
+			DurationSec:     durationSec,
+		},
+		Composition: model.ShotCompositionDesign{
+			Description:        "按 Shot 时间窗将 AIGC 背景/插入素材、IP A-roll 主体和 HyperFrames 文字特效合成为一个可独立审核的完整镜头。",
+			Assembler:          "ffmpeg_hyperframes_compositor",
+			LayerOrder:         []string{"aigc_enrichment", "ip_aroll", "hyperframes_text"},
+			TimingPolicy:       "所有层对齐同一 Shot 起止时间；允许 AIGC 仅覆盖局部时间窗，IP 与字幕保持连续。",
+			SafeAreaPolicy:     "AIGC 不生成文字，IP 不遮挡文字，HyperFrames 不遮挡眼睛、嘴部和关键动作。",
+			OutputArtifactKind: outputKind,
+		},
 	}
 }
 

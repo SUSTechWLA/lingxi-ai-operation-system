@@ -118,18 +118,130 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 	if plan == nil {
 		return nil
 	}
+	visualLayerContext := requestedShotVisualLayerContext(plan)
 	c.injectKnowledgeContext(plan)
 	if !c.completeVideoPlanByProfile(plan) {
 		c.completeVideoBetaPlan(plan)
 	}
+	c.propagateShotVisualLayerContext(plan, visualLayerContext)
 	removeDisabledAIGCSteps(plan)
 	c.injectKnowledgeContext(plan)
 	c.injectMCPGenerationRunner(plan)
 	c.injectIPArollGenerationRunner(plan)
+	c.wireIPArollDirectorToScript(plan)
+	deduplicateCanonicalProfileSteps(plan)
 	repairInvalidOutputReferences(plan.Steps, c.manifestsByPlan(plan))
 	normalizePreparedPlanDependencies(plan)
 	c.expandPreparedPlanBudget(plan)
 	return plan
+}
+
+func (c *PlanCompiler) wireIPArollDirectorToScript(plan *AgentPlan) {
+	if plan == nil {
+		return
+	}
+	director := planStepByTool(plan, "ip_aroll_director")
+	if director == nil {
+		return
+	}
+	scriptAnchor, scriptField := c.lastProducerStepForFields(plan, []string{"script"}, []string{
+		"video_script_generator",
+		"script_generator",
+	})
+	if scriptAnchor == "" || scriptAnchor == director.ID {
+		return
+	}
+	if scriptField == "" {
+		scriptField = "script"
+	}
+	directorID := director.ID
+	movePlanStepAfter(plan, directorID, scriptAnchor)
+	director = planStepByID(plan, directorID)
+	if director == nil {
+		return
+	}
+	if director.Arguments == nil {
+		director.Arguments = map[string]interface{}{}
+	}
+	if narration, ok := director.Arguments["narration"].(string); !ok || strings.TrimSpace(narration) == "" {
+		director.Arguments["narration"] = stepOutputRef(scriptAnchor, scriptField)
+	}
+	director.DependsOn = dependencyListUnique(append(director.DependsOn, scriptAnchor)...)
+}
+
+func requestedShotVisualLayerContext(plan *AgentPlan) map[string]interface{} {
+	context := map[string]interface{}{}
+	for _, key := range []string{
+		"aigcProvider", "aigcEnabled", "aigcPolicy", "productionRoute",
+		"visualLayerContract", "designedLayers", "layerExecutionPolicy", "requiredLayers",
+	} {
+		if value := requestedPlanValue(plan, key); value != nil {
+			context[key] = value
+		}
+	}
+	return context
+}
+
+func (c *PlanCompiler) propagateShotVisualLayerContext(plan *AgentPlan, context map[string]interface{}) {
+	if plan == nil || len(context) == 0 {
+		return
+	}
+	for index := range plan.Steps {
+		step := &plan.Steps[index]
+		if step.Tool != "visual_alignment_planner" && step.Tool != "shot_generation_planner" && step.Tool != "video_prompt_generator" {
+			continue
+		}
+		if step.Arguments == nil {
+			step.Arguments = map[string]interface{}{}
+		}
+		manifest := c.manifestFor(step.Tool)
+		for key, value := range context {
+			if manifestAcceptsParam(manifest, key) {
+				step.Arguments[key] = value
+			}
+		}
+	}
+}
+
+func deduplicateCanonicalProfileSteps(plan *AgentPlan) {
+	if plan == nil {
+		return
+	}
+	for _, canonicalID := range []string{"time_window", "visual_alignment"} {
+		canonical := planStepByID(plan, canonicalID)
+		if canonical == nil || canonical.Tool == "" {
+			continue
+		}
+		duplicateIDs := map[string]bool{}
+		for _, step := range plan.Steps {
+			if step.ID != canonicalID && step.Tool == canonical.Tool {
+				duplicateIDs[step.ID] = true
+			}
+		}
+		if len(duplicateIDs) == 0 {
+			continue
+		}
+		for duplicateID := range duplicateIDs {
+			for i := range plan.Steps {
+				for depIndex, dep := range plan.Steps[i].DependsOn {
+					if dep == duplicateID {
+						plan.Steps[i].DependsOn[depIndex] = canonicalID
+					}
+				}
+				for key, value := range plan.Steps[i].Arguments {
+					plan.Steps[i].Arguments[key] = rewriteOutputRefStepID(value, duplicateID, canonicalID)
+				}
+			}
+		}
+		kept := plan.Steps[:0]
+		for _, step := range plan.Steps {
+			if duplicateIDs[step.ID] {
+				continue
+			}
+			kept = append(kept, step)
+		}
+		plan.Steps = kept
+	}
 }
 
 func (c *PlanCompiler) expandPreparedPlanBudget(plan *AgentPlan) {
@@ -996,6 +1108,11 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 	renderManifest := c.manifestFor("hyperframes_renderer")
 	projectParam := preferredParamName(renderManifest, "projectDir", "hyperframesPath")
 	renderTimeoutSec := requestedRenderTimeoutSec(plan)
+	renderMode := requestedPlanString(plan, "ipRenderMode", "ip_render_mode")
+	if renderMode == "" {
+		renderMode = "production"
+	}
+	renderWidth, renderHeight, renderFPS := requestedVideoRenderCanvas(plan, renderMode)
 	if renderAnchor == "" {
 		renderArgs := map[string]interface{}{
 			"stage":           "render",
@@ -1004,6 +1121,9 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 			"previewApproved": true,
 			"outputName":      "final.mp4",
 			"timeoutSec":      renderTimeoutSec,
+			"width":           renderWidth,
+			"height":          renderHeight,
+			"fps":             renderFPS,
 		}
 		if projectID != "" {
 			renderArgs["projectId"] = projectID
@@ -1036,6 +1156,9 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 				renderStep.Arguments["outputName"] = "final.mp4"
 			}
 			renderStep.Arguments["timeoutSec"] = renderTimeoutSec
+			renderStep.Arguments["width"] = renderWidth
+			renderStep.Arguments["height"] = renderHeight
+			renderStep.Arguments["fps"] = renderFPS
 			applyProjectContextToStep(renderStep, projectID)
 			if firstManifestOutput(renderManifest, "entry") != "" {
 				renderStep.Arguments["entry"] = stepOutputRef(projectAnchor, "entry")
@@ -1368,19 +1491,28 @@ func (c *PlanCompiler) injectIPArollGenerationRunner(plan *AgentPlan) {
 		return
 	}
 
+	renderMode := requestedPlanString(plan, "ipRenderMode", "ip_render_mode")
+	if renderMode == "" {
+		renderMode = "production"
+	}
+	width, height, fps := requestedVideoRenderCanvas(plan, renderMode)
+	aspectRatio := requestedPlanString(plan, "aspectRatio", "aspect_ratio")
+	if aspectRatio == "" {
+		aspectRatio = "16:9"
+	}
 	renderArguments := map[string]interface{}{
 		"script":           stepOutputRef(scriptAnchor, scriptField),
 		"presentationMode": requestedPlanString(plan, "presentationMode", "ipPresentationMode", "ip_presentation_mode"),
-		"renderMode":       requestedPlanString(plan, "ipRenderMode", "ip_render_mode"),
-		"width":            1920,
-		"height":           1080,
-		"fps":              30,
+		"renderMode":       renderMode,
+		"width":            width,
+		"height":           height,
+		"fps":              fps,
 	}
 	if renderArguments["presentationMode"] == "" {
 		renderArguments["presentationMode"] = "auto"
 	}
-	if renderArguments["renderMode"] == "" {
-		renderArguments["renderMode"] = "production"
+	if duration := requestedPlanNumber(plan, "targetDurationSec", "durationSec", "target_duration_sec"); duration > 0 {
+		renderArguments["durationSec"] = duration
 	}
 	if cameraPreset := requestedPlanString(
 		plan,
@@ -1412,7 +1544,7 @@ func (c *PlanCompiler) injectIPArollGenerationRunner(plan *AgentPlan) {
 		"mcpTool":   "ip_avatar_3d.render_talking_video",
 		"arguments": renderArguments,
 		"target": map[string]interface{}{
-			"aspectRatio":     "16:9",
+			"aspectRatio":     aspectRatio,
 			"videoResolution": "1080p",
 		},
 	}}
@@ -1428,6 +1560,7 @@ func (c *PlanCompiler) injectIPArollGenerationRunner(plan *AgentPlan) {
 				"stage":                      "ip_aroll_generation",
 				"providerId":                 "ip_avatar_3d",
 				"mcpTool":                    "ip_avatar_3d.render_talking_video",
+				"failOnUnmetRequirements":    true,
 				"externalGenerationRequests": requests,
 				"maxReadyGenerations":        1,
 				"minReadyVideoGenerations":   1,
@@ -1447,6 +1580,7 @@ func (c *PlanCompiler) injectIPArollGenerationRunner(plan *AgentPlan) {
 			"stage":                      "ip_aroll_generation",
 			"providerId":                 "ip_avatar_3d",
 			"mcpTool":                    "ip_avatar_3d.render_talking_video",
+			"failOnUnmetRequirements":    true,
 			"externalGenerationRequests": requests,
 			"maxReadyGenerations":        1,
 			"minReadyVideoGenerations":   1,
@@ -1472,6 +1606,35 @@ func (c *PlanCompiler) injectIPArollGenerationRunner(plan *AgentPlan) {
 		preferredOutputField(runnerManifest, "aRollAssetPackages"),
 	)
 	appendDependencyIfMissing(projectStep, stepID)
+}
+
+func requestedVideoRenderCanvas(plan *AgentPlan, renderMode string) (width, height, fps int) {
+	preview := strings.EqualFold(strings.TrimSpace(renderMode), "preview")
+	if preview {
+		width, height, fps = 1280, 720, 15
+	} else {
+		width, height, fps = 1920, 1080, 30
+	}
+	aspectRatio := strings.ToLower(strings.ReplaceAll(requestedPlanString(plan, "aspectRatio", "aspect_ratio"), " ", ""))
+	switch aspectRatio {
+	case "9:16", "portrait", "vertical":
+		if preview {
+			return 720, 1280, fps
+		}
+		return 1080, 1920, fps
+	case "1:1", "square":
+		if preview {
+			return 720, 720, fps
+		}
+		return 1080, 1080, fps
+	case "4:5":
+		if preview {
+			return 864, 1080, fps
+		}
+		return 1080, 1350, fps
+	default:
+		return width, height, fps
+	}
 }
 
 func defaultMCPMaxReadyGenerations() int {
@@ -2153,6 +2316,30 @@ func requestedPlanValue(plan *AgentPlan, keys ...string) interface{} {
 		}
 	}
 	return nil
+}
+
+func requestedPlanNumber(plan *AgentPlan, keys ...string) float64 {
+	value := requestedPlanValue(plan, keys...)
+	switch number := value.(type) {
+	case float64:
+		return number
+	case float32:
+		return float64(number)
+	case int:
+		return float64(number)
+	case int32:
+		return float64(number)
+	case int64:
+		return float64(number)
+	case json.Number:
+		parsed, _ := number.Float64()
+		return parsed
+	case string:
+		parsed, _ := strconv.ParseFloat(strings.TrimSpace(number), 64)
+		return parsed
+	default:
+		return 0
+	}
 }
 
 func requestedAIGCProvider(plan *AgentPlan) string {

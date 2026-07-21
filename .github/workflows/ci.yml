@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           if command -v shellcheck >/dev/null 2>&1; then
-            shellcheck scripts/beta-smoke-check.sh scripts/beta-fallback-fixture.sh scripts/beta-readiness-check.sh scripts/release-version-check.sh
+            shellcheck scripts/beta-smoke-check.sh scripts/beta-fallback-fixture.sh scripts/beta-readiness-check.sh scripts/release-version-check.sh scripts/one-click-deploy.sh scripts/build-local-desktop.sh
           else
             echo "shellcheck not installed; skipping"
           fi
@@ -156,6 +156,10 @@ jobs:
         working-directory: frontend
         run: npm run test:director
 
+      - name: Run frontend creator smoke test
+        working-directory: frontend
+        run: npm run test:creator
+
       - name: Run Electron runtime tests
         working-directory: frontend
         run: |
@@ -196,6 +200,9 @@ jobs:
 
       - name: Test beta readiness evaluator
         run: python3 -m unittest scripts/test_beta_readiness.py
+
+      - name: Test one-click deployment contract
+        run: python3 -m unittest scripts/test_one_click_deploy.py
 
   beta-smoke:
     name: beta-smoke

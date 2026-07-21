@@ -33,6 +33,9 @@ function buildLocalAgentLaunchOptions({
   localAgentUrl,
   cloudApiBase,
   dataDir,
+  ipAvatarMcpScript,
+  ipAvatarProfile,
+  videoQAMcpScript,
   session,
   baseEnv = process.env,
 }) {
@@ -42,6 +45,9 @@ function buildLocalAgentLaunchOptions({
   }
   delete env.TANGYING_USER_TOKEN
   delete env.TANGYING_DEVICE_ID
+  if (ipAvatarMcpScript) env.TANGYING_IP_AVATAR_MCP_SCRIPT = ipAvatarMcpScript
+  if (ipAvatarProfile) env.TANGYING_IP_AVATAR_PROFILE = ipAvatarProfile
+  if (videoQAMcpScript) env.VIDEO_QA_MCP_STDIO_SCRIPT = videoQAMcpScript
 
   const runnerSession = normalizeRunnerSession(session)
   if (runnerSession) {

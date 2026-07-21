@@ -82,6 +82,21 @@ def test_wav_bytes(*, sample_rate: int = 48000, channels: int = 1) -> bytes:
 
 
 class IPAvatar3DMCPTests(unittest.TestCase):
+    def test_packaged_macos_runtime_checks_absolute_media_tool_paths(self) -> None:
+        server = load_server()
+        with mock.patch.object(server, "_tool_path", return_value="/opt/homebrew/bin/ffmpeg") as tool_path:
+            self.assertEqual(server.find_ffmpeg(), "/opt/homebrew/bin/ffmpeg")
+            tool_path.assert_called_once_with(
+                ["TANGYING_FFMPEG_BIN", "FFMPEG_BIN"],
+                ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"],
+            )
+        with mock.patch.object(server, "_tool_path", return_value="/usr/bin/say") as tool_path:
+            self.assertEqual(server.find_say(), "/usr/bin/say")
+            tool_path.assert_called_once_with(
+                ["TANGYING_SAY_BIN"],
+                ["/usr/bin/say", "say"],
+            )
+
     def test_refined_qa_honors_configured_ffmpeg_binary(self) -> None:
         qa = load_render_qa()
         with tempfile.TemporaryDirectory() as tmp:
@@ -1392,6 +1407,7 @@ class IPAvatar3DMCPTests(unittest.TestCase):
                     modelPath=str(model),
                     audioPath=str(uploaded),
                     outputDir=str(root / "out"),
+                    durationSec=7,
                     renderMode="preview",
                     dryRun=False,
                 )
@@ -1404,6 +1420,29 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(result["voice"]["requestedVoiceId"], "")
             self.assertFalse(result["voice"]["humanVoiceProvider"])
             self.assertFalse(result["voice"]["productionReady"])
+            self.assertEqual(result["durationSec"], 7)
+
+    def test_preview_audio_longer_than_requested_duration_is_time_fitted(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            source = root / "source.m4a"
+            source.write_bytes(b"audio")
+            calls = []
+
+            def fake_run(args, timeout=600):
+                calls.append(args)
+                pathlib.Path(args[-1]).write_bytes(b"fitted")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(server, "find_ffmpeg", return_value="/usr/bin/ffmpeg"), mock.patch.object(
+                server, "_run", side_effect=fake_run
+            ):
+                output = server._fit_preview_audio_duration(source, root, 27.0, 15.0)
+
+            self.assertEqual(output.name, "narration_preview_fitted.m4a")
+            self.assertTrue(output.is_file())
+            self.assertIn("atempo=1.800000", calls[0])
 
     def test_production_dry_run_surfaces_ready_policy_without_synthesis(self) -> None:
         server = load_server()
