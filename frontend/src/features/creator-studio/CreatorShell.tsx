@@ -6,6 +6,7 @@ import { cycleFocusIndex } from './focusCycle'
 import StartCreationPage from './StartCreationPage'
 import VideoLibraryPage from './VideoLibraryPage'
 import ProjectWorkspacePage from './ProjectWorkspacePage'
+import SettingsPage from '../../pages/SettingsPage'
 
 interface CreatorShellProps {
   user: AuthUser
@@ -149,6 +150,7 @@ export default function CreatorShell({ user, serviceStatus, route, onNavigate, o
                   <span>{user.email}</span>
                 </div>
                 <button ref={connectionTriggerRef} type="button" role="menuitem" onClick={() => setConnectionOpen(true)}>查看连接状态</button>
+                <button type="button" role="menuitem" onClick={() => { closeTransientUi(); onNavigate('#/settings') }}>设置</button>
                 <button type="button" role="menuitem" onClick={() => { closeTransientUi(); onLogout() }}>退出登录</button>
               </div>
             )}
@@ -175,6 +177,9 @@ export default function CreatorShell({ user, serviceStatus, route, onNavigate, o
 }
 
 function CreatorOutlet({ route, onNavigate }: { route: Extract<AppRoute, { kind: 'creator' }>; onNavigate: CreatorShellProps['onNavigate'] }) {
+  if (route.page === 'settings') {
+    return <SettingsPage variant="creator" onBack={() => onNavigate('#/create')} />
+  }
   if (route.page === 'videos') {
     return <VideoLibraryPage onContinueProject={(projectId, stepId) => onNavigate(`#/videos/${encodeURIComponent(projectId)}/steps/${stepId}`)} />
   }

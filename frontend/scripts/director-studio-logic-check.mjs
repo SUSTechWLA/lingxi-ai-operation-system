@@ -140,8 +140,12 @@ try {
   assert.match(creatorShellSource, /onPointerDown/)
   assert.match(creatorShellSource, /aria-modal="true"/)
   assert.match(creatorShellSource, /handleDialogKeyDown/)
+  assert.match(creatorShellSource, />设置</)
+  assert.match(creatorShellSource, /onNavigate\('#\/settings'\)/)
+  assert.doesNotMatch(creatorShellSource.match(/<nav[\s\S]*?<\/nav>/)?.[0] || '', />设置</)
 
   assert.deepEqual(parseAppRoute('', false), { kind: 'creator', page: 'create' })
+  assert.deepEqual(parseAppRoute('#/settings', false), { kind: 'creator', page: 'settings' })
   assert.deepEqual(parseAppRoute('#', false), { kind: 'creator', page: 'create', shouldReplace: true })
   assert.deepEqual(parseAppRoute('#/unknown', false), { kind: 'creator', page: 'create', shouldReplace: true })
   assert.deepEqual(parseAppRoute('#/videos/project%20one/steps/script', false), {
@@ -2305,7 +2309,7 @@ try {
     'project overview should not print raw preflight blocker messages with tool names',
   )
 
-  const desktopSource = await readFile(new URL('../src/pages/DesktopPage.tsx', import.meta.url), 'utf8')
+  const desktopSource = await readFile(new URL('../src/pages/SettingsPage.tsx', import.meta.url), 'utf8')
   const brandSource = await readFile(new URL('../src/utils/brand.ts', import.meta.url), 'utf8')
   const packageSource = await readFile(new URL('../package.json', import.meta.url), 'utf8')
   const indexSource = await readFile(new URL('../index.html', import.meta.url), 'utf8')
@@ -2350,7 +2354,8 @@ try {
   assert.ok(
     desktopSource.includes('message={jimengSetupMessage}') &&
       desktopSource.includes('message={loginMessage}') &&
-      desktopSource.includes("providerMessage.type === 'info'"),
+      desktopSource.includes('message={providerMessage}') &&
+      desktopSource.includes("message.type === 'info'"),
     'settings panels should render action feedback for provider, JiMeng setup, and login interactions',
   )
   assert.ok(

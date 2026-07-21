@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { FiCheck, FiCheckCircle, FiCopy, FiCpu, FiDownload, FiFilm, FiImage, FiKey, FiMessageSquare, FiRefreshCw, FiSave, FiUserCheck, FiX } from 'react-icons/fi'
+import { FiArrowLeft, FiCheck, FiCheckCircle, FiCopy, FiCpu, FiDownload, FiFilm, FiImage, FiKey, FiMessageSquare, FiMonitor, FiMoon, FiRefreshCw, FiSave, FiSun, FiUserCheck, FiX } from 'react-icons/fi'
 import {
   checkJiMengLogin,
   fetchLocalAgentHealth,
@@ -18,6 +18,8 @@ import {
   type ModelProviderConfig,
 } from '../services/localAgent'
 import { getElectronAPI } from '../utils/electron'
+import { useTheme } from '../theme/ThemeProvider'
+import type { ThemeMode } from '../theme/theme'
 
 const providerRows: Array<{
   id: ModelCapability
@@ -27,22 +29,44 @@ const providerRows: Array<{
 }> = [
   {
     id: 'text_to_text',
-    label: '文生文',
+    label: '文本生成',
     desc: '脚本、标题、分镜、Prompt 等文本生成',
     icon: FiMessageSquare,
   },
   {
     id: 'text_to_image',
-    label: '文生图片',
+    label: '图片生成',
     desc: '关键帧、封面、视觉参考图生成',
     icon: FiImage,
   },
   {
     id: 'text_to_video',
-    label: '文生视频',
+    label: '视频生成',
     desc: '成片、镜头片段、动态素材生成',
     icon: FiFilm,
   },
+]
+
+type SettingsTab = ModelCapability | 'appearance'
+
+const settingsTabs: Array<{
+  id: SettingsTab
+  label: string
+  icon: typeof FiMessageSquare
+}> = [
+  ...providerRows.map(({ id, label, icon }) => ({ id, label, icon })),
+  { id: 'appearance', label: '外观', icon: FiSun },
+]
+
+const appearanceModes: Array<{
+  id: ThemeMode
+  label: string
+  detail: string
+  icon: typeof FiSun
+}> = [
+  { id: 'system', label: '跟随系统', detail: '自动匹配 macOS 外观', icon: FiMonitor },
+  { id: 'light', label: '浅色', detail: '始终使用明亮界面', icon: FiSun },
+  { id: 'dark', label: '深色', detail: '始终使用夜间界面', icon: FiMoon },
 ]
 
 type SettingsActionMessage = {
@@ -52,7 +76,12 @@ type SettingsActionMessage = {
 
 type JiMengSetupAction = 'refresh' | 'install' | 'register' | null
 
-const DesktopPage: React.FC = () => {
+interface SettingsPageProps {
+  variant?: 'creator' | 'developer'
+  onBack?: () => void
+}
+
+const SettingsPage: React.FC<SettingsPageProps> = ({ variant = 'developer', onBack }) => {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking')
   const [serviceInfo, setServiceInfo] = useState({ host: getLocalAgentBaseUrl(), pid: '' })
   const [localDirectory, setLocalDirectory] = useState('未选择')
@@ -61,12 +90,13 @@ const DesktopPage: React.FC = () => {
   const [providerLoading, setProviderLoading] = useState(true)
   const [providerSaving, setProviderSaving] = useState(false)
   const [providerMessage, setProviderMessage] = useState<SettingsActionMessage | null>(null)
-  const [activeTab, setActiveTab] = useState<ModelCapability>('text_to_text')
+  const [activeTab, setActiveTab] = useState<SettingsTab>('text_to_text')
   const [jimengSetupStatus, setJimengSetupStatus] = useState<JiMengSetupStatusResponse | null>(null)
   const [jimengSetupLoading, setJimengSetupLoading] = useState(false)
   const [jimengSetupAction, setJimengSetupAction] = useState<JiMengSetupAction>(null)
   const [jimengSetupMessage, setJimengSetupMessage] = useState<SettingsActionMessage | null>(null)
   const api = getElectronAPI()
+  const { mode: themeMode, setMode: setThemeMode } = useTheme()
 
   useEffect(() => {
     const checkHealth = async () => {
@@ -210,11 +240,21 @@ const DesktopPage: React.FC = () => {
     }
   }
 
+  const activeProviderRow = activeTab === 'appearance'
+    ? undefined
+    : providerRows.find((row) => row.id === activeTab)
+  const activeProvider = activeTab === 'appearance' ? undefined : providerSettings[activeTab]
+
   return (
-    <div className="flex-1 p-8 overflow-y-auto">
+    <div className={`settings-page flex-1 overflow-y-auto ${variant === 'creator' ? 'py-2' : 'p-8'}`}>
       <div className="max-w-5xl mx-auto">
-        {/* Header */}
         <div className="mb-8">
+          {variant === 'creator' && onBack && (
+            <button type="button" className="settings-back-button" onClick={onBack}>
+              <FiArrowLeft aria-hidden="true" />
+              返回创作
+            </button>
+          )}
           <div className="flex items-center gap-3 mb-2">
             <div className="w-10 h-10 bg-primary-soft rounded-xl flex items-center justify-center">
               <svg className="w-5 h-5 text-primary-dark" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -222,8 +262,8 @@ const DesktopPage: React.FC = () => {
               </svg>
             </div>
             <div>
-              <h2 className="text-2xl font-bold text-ink">桌面工具</h2>
-              <p className="text-sm text-ink-soft">系统状态监控与本机模型设置</p>
+              <h1 className="text-2xl font-bold text-ink">设置</h1>
+              <p className="text-sm text-ink-soft">管理生成能力和界面外观，密钥仅保存在本机</p>
             </div>
           </div>
         </div>
@@ -283,7 +323,7 @@ const DesktopPage: React.FC = () => {
               <div className="space-y-2 text-xs text-ink-muted">
                 <div className="flex justify-between">
                   <span>版本</span>
-                  <span className="font-mono">0.0.1</span>
+                  <span className="font-mono">0.2.1</span>
                 </div>
                 <div className="flex justify-between">
                   <span>运行环境</span>
@@ -298,145 +338,117 @@ const DesktopPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Right: Model Configuration */}
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-background-card rounded-2xl border border-line p-5 shadow-card">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-4">
                 <div>
                   <h3 className="text-sm font-semibold text-ink flex items-center gap-2">
                     <FiCpu className="w-4 h-4 text-ink-soft" />
-                    基础模型 API
+                    生成与外观
                   </h3>
-                  <p className="mt-1 text-xs text-ink-soft">OpenAI-compatible 接口地址 / 模型名 / 密钥，按能力分别配置，仅保存到本机</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => loadModelProviderSettings(true)}
-                    disabled={providerLoading || providerSaving}
-                    className="h-8 w-8 rounded-lg border border-line text-ink-soft hover:bg-background disabled:opacity-50 flex items-center justify-center"
-                    title="重新读取"
-                  >
-                    <FiRefreshCw className={`w-4 h-4 ${providerLoading ? 'animate-spin' : ''}`} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveProviders}
-                    disabled={providerLoading || providerSaving}
-                    className="h-8 px-3 rounded-lg bg-primary-dark text-white text-xs font-medium hover:bg-[#1A0B02] disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    {providerSaving ? <FiRefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FiSave className="w-3.5 h-3.5" />}
-                    {providerSaving ? '保存中' : '保存'}
-                  </button>
+                  <p className="mt-1 text-xs text-ink-soft">三种生成能力分别配置，密钥仅保存在本机</p>
                 </div>
               </div>
 
-              {/* Tab bar */}
-              <div className="flex rounded-lg border border-line bg-background p-1 mb-4">
-                {providerRows.map((row) => (
+              <div className="settings-tab-list" role="tablist" aria-label="设置分类">
+                {settingsTabs.map((row) => (
                   <button
                     key={row.id}
                     type="button"
+                    role="tab"
+                    aria-selected={activeTab === row.id}
                     onClick={() => setActiveTab(row.id)}
-                    className={`flex-1 h-9 rounded-md text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
-                      activeTab === row.id
-                        ? 'bg-white text-ink shadow-sm'
-                        : 'text-ink-soft hover:text-ink-muted'
-                    }`}
+                    className={activeTab === row.id ? 'settings-tab is-active' : 'settings-tab'}
                   >
-                    <row.icon className="w-4 h-4" />
+                    <row.icon aria-hidden="true" />
                     {row.label}
                   </button>
                 ))}
               </div>
 
-              {/* Active tab content */}
-              {(() => {
-                const row = providerRows.find((r) => r.id === activeTab)!
-                const provider = providerSettings[activeTab]
-                const tokenPlaceholder = provider.hasApiKey
-                  ? `已保存 ${provider.apiKeyPreview || 'token'}，留空保留原密钥`
-                  : 'sk-... 输入 API Key'
-
-                return (
-                  <div className="rounded-lg border border-line bg-background/70 p-5 space-y-4">
-                    <div className="flex items-center gap-3 pb-3 border-b border-line">
-                      <div className="w-9 h-9 rounded-xl bg-white border border-line flex items-center justify-center text-primary-dark">
-                        <row.icon className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold text-ink">{row.label} · API 配置</div>
-                        <div className="text-xs text-ink-soft">{row.desc}</div>
-                      </div>
-                    </div>
-
-                    {/* API URL — full width */}
-                    <label className="block">
-                      <span className="text-xs font-semibold text-ink-muted">接口地址 (Base URL)</span>
-                      <input
-                        value={provider.baseUrl}
-                        onChange={(event) => updateProvider(activeTab, 'baseUrl', event.target.value)}
-                        className="mt-1.5 w-full h-10 rounded-lg border border-line bg-white px-3 text-sm font-mono text-ink-muted outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
-                        placeholder="https://api.openai.com/v1"
-                      />
-                      <span className="mt-1 text-[11px] text-ink-soft">OpenAI-compatible 端点，例如 https://ark.cn-beijing.volces.com/api/coding/v3</span>
-                    </label>
-
-                    {/* Model + Token side by side */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <label className="block">
-                        <span className="text-xs font-semibold text-ink-muted">模型名称 (Model)</span>
+              {activeTab === 'appearance' ? (
+                <section className="settings-appearance" role="tabpanel" aria-label="外观">
+                  <div>
+                    <h3>选择界面外观</h3>
+                    <p>跟随环境切换，也可以固定使用浅色或夜间皮肤。</p>
+                  </div>
+                  <div className="settings-theme-options" role="radiogroup" aria-label="界面外观">
+                    {appearanceModes.map((appearance) => (
+                      <label key={appearance.id} className={themeMode === appearance.id ? 'settings-theme-option is-selected' : 'settings-theme-option'}>
                         <input
-                          value={provider.model}
-                          onChange={(event) => updateProvider(activeTab, 'model', event.target.value)}
-                          className="mt-1.5 w-full h-10 rounded-lg border border-line bg-white px-3 text-sm font-mono text-ink-muted outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
-                          placeholder="model-name"
+                          type="radio"
+                          name="theme-mode"
+                          value={appearance.id}
+                          checked={themeMode === appearance.id}
+                          onChange={() => setThemeMode(appearance.id)}
                         />
-                        <span className="mt-1 text-[11px] text-ink-soft">例如 gpt-4.1 / doubao-seed-2.0-pro</span>
-                      </label>
-                      <label className="block">
-                        <span className="text-xs font-semibold text-ink-muted flex items-center gap-1">
-                          <FiKey className="w-3 h-3" />
-                          API 密钥 (Token)
+                        <appearance.icon aria-hidden="true" />
+                        <span>
+                          <strong>{appearance.label}</strong>
+                          <small>{appearance.detail}</small>
                         </span>
-                        <input
-                          value={provider.apiKey || ''}
-                          onChange={(event) => updateProvider(activeTab, 'apiKey', event.target.value)}
-                          className="mt-1.5 w-full h-10 rounded-lg border border-line bg-white px-3 text-sm font-mono text-ink-muted outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
-                          placeholder={tokenPlaceholder}
-                          type="password"
-                          autoComplete="off"
-                        />
-                        <span className="mt-1 text-[11px] text-ink-soft">密钥仅保存在本机，不上传云端</span>
                       </label>
+                    ))}
+                  </div>
+                </section>
+              ) : activeProviderRow && activeProvider ? (
+                <section className="settings-provider-panel" role="tabpanel" aria-label={activeProviderRow.label}>
+                  <div className="settings-panel-heading">
+                    <div>
+                      <h3>{activeProviderRow.label}</h3>
+                      <p>{activeProviderRow.desc}</p>
+                    </div>
+                    <div className="settings-panel-actions">
+                      <button type="button" onClick={() => loadModelProviderSettings(true)} disabled={providerLoading || providerSaving} title="重新读取">
+                        <FiRefreshCw className={providerLoading ? 'animate-spin' : ''} aria-hidden="true" />
+                        <span className="creator-visually-hidden">重新读取</span>
+                      </button>
+                      <button type="button" className="is-primary" onClick={handleSaveProviders} disabled={providerLoading || providerSaving}>
+                        {providerSaving ? <FiRefreshCw className="animate-spin" aria-hidden="true" /> : <FiSave aria-hidden="true" />}
+                        {providerSaving ? '保存中' : '保存设置'}
+                      </button>
                     </div>
                   </div>
-                )
-              })()}
 
-              {providerMessage && (
-                <div className={`mt-4 flex items-center gap-2 rounded-lg px-3 py-2 text-xs ${
-                  providerMessage.type === 'success'
-                    ? 'bg-green-50 text-green-700'
-                    : providerMessage.type === 'info'
-                      ? 'bg-primary-soft text-primary-dark'
-                    : 'bg-red-50 text-red-700'
-                }`}>
-                  {providerMessage.type === 'success' ? <FiCheckCircle className="w-4 h-4" /> : providerMessage.type === 'info' ? <FiRefreshCw className="w-4 h-4 animate-spin" /> : <FiKey className="w-4 h-4" />}
-                  <span>{providerMessage.text}</span>
-                </div>
-              )}
+                  <label className="settings-field">
+                    <span>接口地址</span>
+                    <input value={activeProvider.baseUrl} onChange={(event) => updateProvider(activeProviderRow.id, 'baseUrl', event.target.value)} placeholder="https://api.openai.com/v1" />
+                    <small>填写 OpenAI-compatible Base URL</small>
+                  </label>
+                  <div className="settings-field-grid">
+                    <label className="settings-field">
+                      <span>模型名称</span>
+                      <input value={activeProvider.model} onChange={(event) => updateProvider(activeProviderRow.id, 'model', event.target.value)} placeholder="model-name" />
+                    </label>
+                    <label className="settings-field">
+                      <span><FiKey aria-hidden="true" /> API 密钥</span>
+                      <input
+                        value={activeProvider.apiKey || ''}
+                        onChange={(event) => updateProvider(activeProviderRow.id, 'apiKey', event.target.value)}
+                        placeholder={activeProvider.hasApiKey ? `已保存 ${activeProvider.apiKeyPreview || 'token'}，留空保留` : '输入 API Key'}
+                        type="password"
+                        autoComplete="off"
+                      />
+                      <small>密钥仅保存在本机，不上传云端</small>
+                    </label>
+                  </div>
+
+                  <SettingsActionNotice message={providerMessage} className="mt-4" />
+                </section>
+              ) : null}
             </div>
 
-            <JiMengSettingsPanel
-              status={jimengSetupStatus}
-              loading={jimengSetupLoading}
-              action={jimengSetupAction}
-              message={jimengSetupMessage}
-              onRefresh={() => loadJiMengSetupStatus(true)}
-              onInstallCLI={handleInstallJiMengCLI}
-              onRegisterMCP={handleRegisterJiMengMCP}
-            />
+            {activeTab === 'text_to_video' && (
+              <JiMengSettingsPanel
+                status={jimengSetupStatus}
+                loading={jimengSetupLoading}
+                action={jimengSetupAction}
+                message={jimengSetupMessage}
+                onRefresh={() => loadJiMengSetupStatus(true)}
+                onInstallCLI={handleInstallJiMengCLI}
+                onRegisterMCP={handleRegisterJiMengMCP}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -738,4 +750,4 @@ function settingsErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback
 }
 
-export default DesktopPage
+export default SettingsPage

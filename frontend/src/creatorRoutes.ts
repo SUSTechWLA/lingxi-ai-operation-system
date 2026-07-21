@@ -5,6 +5,7 @@ export const CREATOR_STEP_IDS = ['requirements', 'direction', 'script', 'shots',
 type CreatorPageRoute =
   | { kind: 'creator'; page: 'create'; shouldReplace?: true }
   | { kind: 'creator'; page: 'videos'; shouldReplace?: true }
+  | { kind: 'creator'; page: 'settings'; shouldReplace?: true }
   | { kind: 'creator'; page: 'step'; projectId: string; stepId: typeof CREATOR_STEP_IDS[number]; shouldReplace?: true }
 
 export type AppRoute = CreatorPageRoute | { kind: 'developer'; view: DirectorNavKey }
@@ -22,6 +23,7 @@ export function parseAppRoute(hash: string, developerConsoleEnabled: boolean): A
 
   if (decoded.length === 1 && decoded[0] === 'create') return { kind: 'creator', page: 'create' }
   if (decoded.length === 1 && decoded[0] === 'videos') return { kind: 'creator', page: 'videos' }
+  if (decoded.length === 1 && decoded[0] === 'settings') return { kind: 'creator', page: 'settings' }
   if (decoded.length === 4 && decoded[0] === 'videos' && decoded[2] === 'steps') {
     const projectId = decoded[1]
     const stepId = decoded[3]

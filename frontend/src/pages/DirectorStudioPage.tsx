@@ -34,7 +34,7 @@ import {
   FiX,
   FiZap,
 } from 'react-icons/fi'
-import DesktopPage from './DesktopPage'
+import SettingsPage from './SettingsPage'
 import { TalkingHeadLayerInspector } from '../features/director-studio/talking-head/components/TalkingHeadLayerInspector'
 import {
   approveAgentReview,
@@ -552,7 +552,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus, init
           {activeNav === 'assets' && <AssetsPage artifacts={artifacts} projectId={project?.id} selectedProfile={selectedProfile} onArtifactsChanged={refreshArtifacts} />}
           {activeNav === 'roles' && <RolesPage stages={displayStages} />}
           {activeNav === 'export' && <ExportPage artifacts={artifacts} durationSec={durationSec} projectId={project?.id} />}
-          {activeNav === 'system' && <DesktopPage />}
+          {activeNav === 'system' && <SettingsPage />}
         </div>
       </main>
     </div>

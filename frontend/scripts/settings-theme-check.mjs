@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -7,6 +7,7 @@ import { build } from 'esbuild'
 
 const temp = await mkdtemp(join(tmpdir(), 'settings-theme-'))
 const bundle = join(temp, 'theme.mjs')
+const settingsSource = await readFile(new URL('../src/pages/SettingsPage.tsx', import.meta.url), 'utf8')
 
 try {
   await build({
@@ -48,6 +49,15 @@ try {
   assert.equal(root.dataset.theme, 'light')
   dispose()
   assert.equal(listener, undefined)
+
+  for (const label of ['文本生成', '图片生成', '视频生成', '外观']) {
+    assert.match(settingsSource, new RegExp(label))
+  }
+  assert.match(settingsSource, /fetchModelProviderSettings/)
+  assert.match(settingsSource, /saveModelProviderSettings/)
+  assert.match(settingsSource, /useTheme/)
+  assert.match(settingsSource, /跟随系统/)
+  assert.match(settingsSource, /仅保存在本机/)
 } finally {
   await rm(temp, { recursive: true, force: true })
 }
