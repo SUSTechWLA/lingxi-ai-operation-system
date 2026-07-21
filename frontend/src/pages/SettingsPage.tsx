@@ -18,7 +18,7 @@ import {
   type ModelProviderConfig,
 } from '../services/localAgent'
 import { getElectronAPI } from '../utils/electron'
-import { useTheme } from '../theme/ThemeProvider'
+import { useTheme } from '../theme/ThemeContext'
 import type { ThemeMode } from '../theme/theme'
 
 const providerRows: Array<{
@@ -537,10 +537,10 @@ function JiMengSettingsPanel(props: {
         </div>
         <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-bold ring-1 ${
           ready
-            ? 'bg-green-50 text-green-700 ring-green-200'
+            ? 'bg-success/10 text-success ring-success/25'
             : mcpRegistered || status?.dreaminaAvailable
-              ? 'bg-amber-50 text-primary-dark ring-amber-200'
-              : 'bg-stone-50 text-stone-600 ring-stone-200'
+              ? 'bg-primary-soft text-primary-dark ring-line'
+              : 'bg-background text-ink-muted ring-line'
         }`}>
           {ready ? '可用于生成' : '需配置'}
         </span>
@@ -555,8 +555,8 @@ function JiMengSettingsPanel(props: {
             </p>
           </div>
           <div className="flex flex-wrap gap-1.5">
-            <span className="rounded bg-white px-2 py-1 text-[10px] font-bold text-primary-dark ring-1 ring-line">文生图片</span>
-            <span className="rounded bg-white px-2 py-1 text-[10px] font-bold text-primary-dark ring-1 ring-line">文生视频</span>
+            <span className="rounded bg-background-card px-2 py-1 text-[10px] font-bold text-primary-dark ring-1 ring-line">文生图片</span>
+            <span className="rounded bg-background-card px-2 py-1 text-[10px] font-bold text-primary-dark ring-1 ring-line">文生视频</span>
           </div>
         </div>
 
@@ -581,7 +581,7 @@ function JiMengSettingsPanel(props: {
             type="button"
             onClick={onRegisterMCP}
             disabled={loading}
-            className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg bg-background-card px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
           >
             {action === 'register' ? <FiRefreshCw className="animate-spin" /> : <FiCheck />} {action === 'register' ? '正在注册' : '注册 MCP'}
           </button>
@@ -589,7 +589,7 @@ function JiMengSettingsPanel(props: {
             type="button"
             onClick={onRefresh}
             disabled={loading}
-            className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-black text-ink-muted ring-1 ring-line hover:bg-background-card disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg bg-background-card px-3 py-2 text-xs font-black text-ink-muted ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
           >
             <FiRefreshCw className={action === 'refresh' ? 'animate-spin' : ''} /> {action === 'refresh' ? '正在刷新' : '刷新状态'}
           </button>
@@ -597,7 +597,7 @@ function JiMengSettingsPanel(props: {
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        <div className="rounded-lg bg-white p-4 ring-1 ring-line">
+        <div className="rounded-lg bg-background-card p-4 ring-1 ring-line">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-black text-primary-dark">MCP 启动命令</span>
             <SettingsCopyButton value={startCommand} label="复制命令" />
@@ -605,7 +605,7 @@ function JiMengSettingsPanel(props: {
           <code className="mt-2 block break-all rounded bg-ink px-3 py-2 font-mono text-[11px] leading-5 text-white">{startCommand}</code>
         </div>
 
-        <div className="rounded-lg bg-white p-4 ring-1 ring-line">
+        <div className="rounded-lg bg-background-card p-4 ring-1 ring-line">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-black text-primary-dark">首次登录授权</span>
             <div className="flex flex-wrap gap-2">
@@ -613,7 +613,7 @@ function JiMengSettingsPanel(props: {
                 type="button"
                 onClick={handleLoginHeadless}
                 disabled={!mcpReachable || loginLoading}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-background-card px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FiUserCheck /> 获取登录码
               </button>
@@ -621,7 +621,7 @@ function JiMengSettingsPanel(props: {
                 type="button"
                 onClick={handleCheckLogin}
                 disabled={!deviceCode || loginLoading}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-ink-muted ring-1 ring-line hover:bg-background-card disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-background-card px-2.5 py-1.5 text-xs font-black text-ink-muted ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FiRefreshCw className={loginLoading ? 'animate-spin' : ''} /> 检查登录
               </button>
@@ -657,10 +657,10 @@ function LoginCopyRow({ label, value }: { label: string; value: string }) {
 function SettingsActionNotice({ message, compact = false, className = '' }: { message: SettingsActionMessage | null; compact?: boolean; className?: string }) {
   if (!message) return null
   const toneClass = message.type === 'success'
-    ? 'border-green-200 bg-green-50 text-green-700'
+    ? 'border-success/25 bg-success/10 text-success'
     : message.type === 'info'
       ? 'border-primary/15 bg-primary-soft text-primary-dark'
-      : 'border-red-200 bg-red-50 text-red-700'
+      : 'border-danger/25 bg-danger/10 text-danger'
   return (
     <div className={`${className} flex items-center gap-2 rounded-lg border px-3 ${compact ? 'py-1.5' : 'py-2'} text-xs font-semibold ${toneClass}`}>
       {message.type === 'success' ? (
@@ -677,10 +677,10 @@ function SettingsActionNotice({ message, compact = false, className = '' }: { me
 
 function JiMengStep({ label, detail, done }: { label: string; detail: string; done: boolean }) {
   return (
-    <div className={`rounded-lg border p-3 ${done ? 'border-green-100 bg-green-50/70' : 'border-line bg-white'}`}>
+    <div className={`rounded-lg border p-3 ${done ? 'border-success/25 bg-success/10' : 'border-line bg-background-card'}`}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-black text-ink">{label}</span>
-        <span className={`grid h-5 w-5 place-items-center rounded-full text-[11px] ${done ? 'bg-green-600 text-white' : 'bg-stone-100 text-ink-soft'}`}>
+        <span className={`grid h-5 w-5 place-items-center rounded-full text-[11px] ${done ? 'bg-success text-background-card' : 'bg-background-mist text-ink-soft'}`}>
           {done ? <FiCheck /> : <FiX />}
         </span>
       </div>

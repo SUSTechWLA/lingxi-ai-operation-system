@@ -1,12 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from 'react'
+import { useCallback, useEffect, useMemo, useState, type PropsWithChildren } from 'react'
 import { applyTheme, persistThemeMode, readThemeMode, type ThemeMode } from './theme'
-
-interface ThemeContextValue {
-  mode: ThemeMode
-  setMode: (mode: ThemeMode) => void
-}
-
-const ThemeContext = createContext<ThemeContextValue | null>(null)
+import { ThemeContext } from './ThemeContext'
 
 export function ThemeProvider({ children }: PropsWithChildren) {
   const [mode, setModeState] = useState<ThemeMode>(() => readThemeMode())
@@ -21,10 +15,4 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   const value = useMemo(() => ({ mode, setMode }), [mode, setMode])
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
-}
-
-export function useTheme(): ThemeContextValue {
-  const context = useContext(ThemeContext)
-  if (!context) throw new Error('useTheme must be used within ThemeProvider')
-  return context
 }

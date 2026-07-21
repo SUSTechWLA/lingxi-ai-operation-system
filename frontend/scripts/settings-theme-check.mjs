@@ -9,6 +9,8 @@ const temp = await mkdtemp(join(tmpdir(), 'settings-theme-'))
 const bundle = join(temp, 'theme.mjs')
 const settingsSource = await readFile(new URL('../src/pages/SettingsPage.tsx', import.meta.url), 'utf8')
 const startSource = await readFile(new URL('../src/features/creator-studio/StartCreationPage.tsx', import.meta.url), 'utf8')
+const cssSource = await readFile(new URL('../src/index.css', import.meta.url), 'utf8')
+const tailwindSource = await readFile(new URL('../tailwind.config.js', import.meta.url), 'utf8')
 
 try {
   await build({
@@ -64,6 +66,11 @@ try {
   for (const internalTerm of ['每个 Shot 都按三层设计', 'A-roll', 'HyperFrames', 'AIGC 丰富层']) {
     assert.doesNotMatch(startSource, new RegExp(internalTerm))
   }
+  assert.match(cssSource, /:root\s*\{[\s\S]*--color-background:/)
+  assert.match(cssSource, /\[data-theme=['"]dark['"]\]\s*\{[\s\S]*--color-background:/)
+  assert.doesNotMatch(cssSource, /#FFF6D6|#2B1606/)
+  assert.match(tailwindSource, /rgb\(var\(--color-background\) \/ <alpha-value>\)/)
+  assert.match(tailwindSource, /rgb\(var\(--color-ink\) \/ <alpha-value>\)/)
 } finally {
   await rm(temp, { recursive: true, force: true })
 }
