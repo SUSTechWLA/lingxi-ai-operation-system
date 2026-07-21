@@ -87,7 +87,14 @@ try {
   assert.doesNotMatch(settingsSource, /不上传云端/)
   assert.match(settingsSource, /clearApiKey:\s*true/)
   assert.match(settingsSource, /清除已保存密钥/)
-  assert.match(settingsSource, /aria-controls=\{settingsPanelId\(row\.id\)\}/)
+  const clearKeyHandlerStart = settingsSource.indexOf('const handleClearProviderKey')
+  const clearKeyHandlerEnd = settingsSource.indexOf('const handleSettingsTabKeyDown', clearKeyHandlerStart)
+  assert.notEqual(clearKeyHandlerStart, -1, 'missing clear-provider-key handler')
+  assert.notEqual(clearKeyHandlerEnd, -1, 'missing clear-provider-key handler boundary')
+  const clearKeyHandlerSource = settingsSource.slice(clearKeyHandlerStart, clearKeyHandlerEnd)
+  assert.doesNotMatch(clearKeyHandlerSource, /\.\.\.providerSettings\s*,/, 'clearing one key must not persist unsaved settings from other capabilities')
+  assert.match(clearKeyHandlerSource, /saveModelProviderSettings\(\{\s*\[capability\]:/, 'clearing one key must send a capability-scoped partial update')
+  assert.match(settingsSource, /aria-controls=\{activeTab === row\.id \? settingsPanelId\(row\.id\) : undefined\}/)
   assert.match(settingsSource, /aria-labelledby=\{settingsTabId\(activeTab\)\}/)
   assert.match(settingsSource, /tabIndex=\{activeTab === row\.id \? 0 : -1\}/)
   assert.match(settingsSource, /onKeyDown=\{\(event\) => handleSettingsTabKeyDown\(event, index\)\}/)
@@ -112,12 +119,21 @@ try {
       const ratio = contrastRatio(readRgbToken(cssBlock, foregroundToken), readRgbToken(cssBlock, backgroundToken))
       if (ratio < 4.5) contrastFailures.push(`${themeName} ${foregroundToken} on ${backgroundToken} is ${ratio.toFixed(2)}:1; expected at least 4.5:1`)
     }
+    const hoverRatio = contrastRatio(readRgbToken(cssBlock, 'background-card'), readRgbToken(cssBlock, 'ink'))
+    if (hoverRatio < 4.5) contrastFailures.push(`${themeName} background-card on ink hover is ${hoverRatio.toFixed(2)}:1; expected at least 4.5:1`)
   }
 
   assert.match(tailwindSource, /on-primary[^\n]*--color-on-primary/)
   assert.match(tailwindSource, /on-primary-dark[^\n]*--color-on-primary-dark/)
   const accentControlSource = `${authSource}\n${directorSource}\n${settingsSource}`
   assert.doesNotMatch(accentControlSource, /bg-primary(?:-dark)?[^'"\n]*text-white|text-white[^'"\n]*bg-primary(?:-dark)?/)
+  assert.doesNotMatch(accentControlSource, /(?:from|to)-primary(?:-dark)?[^'"\n]*text-white|text-white[^'"\n]*(?:from|to)-primary(?:-dark)?/, 'theme-aware primary gradients must not use a hard-coded white foreground')
+  assert.doesNotMatch(directorSource, /\bbg-violet\b[^'"\n]*\btext-white\b|\btext-white\b[^'"\n]*\bbg-violet\b/, 'violet is a primary-dark alias and must use its semantic foreground')
+  assert.doesNotMatch(directorSource, /\bbg-white(?:\/(?:65|70|75|80))?(?=[\s'"`])/, 'themed Director surfaces must use the semantic background-card token')
+
+  const primaryHoverMatch = cssSource.match(/\.creator-primary-button:hover:not\(:disabled\)\s*\{([\s\S]*?)\}/)
+  assert.ok(primaryHoverMatch, 'missing creator primary-button hover style')
+  assert.match(primaryHoverMatch[1], /color:\s*rgb\(var\(--color-background-card\)\)/, 'creator primary-button hover must switch to a contrasting semantic foreground')
 
   const copyButtonStart = settingsSource.indexOf('function SettingsCopyButton')
   const copyButtonEnd = settingsSource.indexOf('async function copyToClipboard', copyButtonStart)

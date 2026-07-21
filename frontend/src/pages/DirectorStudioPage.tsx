@@ -646,16 +646,16 @@ function DirectorSidebar({ active, setActive, user, serviceStatus, preflight, on
           )
         })}
       </nav>
-      <div className="mt-4 rounded-lg bg-white/70 p-4 ring-1 ring-line lg:mt-auto">
+      <div className="mt-4 rounded-lg bg-background-card/70 p-4 ring-1 ring-line lg:mt-auto">
         <div className="flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-primary-dark to-primary font-black text-white">
+          <div className="grid h-11 w-11 place-items-center rounded-full bg-primary-dark font-black text-on-primary-dark">
             {(user.nickname || user.email || '用').slice(0, 1).toUpperCase()}
           </div>
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-bold text-ink">{user.nickname || '项目负责人'}</div>
             <div className="truncate text-xs text-ink-soft">{user.email}</div>
           </div>
-          <button className="rounded-lg p-2 text-ink-soft hover:bg-white hover:text-primary-dark" title="退出登录" onClick={onLogout}>
+          <button className="rounded-lg p-2 text-ink-soft hover:bg-background-card hover:text-primary-dark" title="退出登录" onClick={onLogout}>
             <FiLogOut />
           </button>
         </div>
@@ -681,12 +681,12 @@ function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightRespons
         <h1 className="mt-2 text-3xl font-black text-gradient md:text-4xl">躺营导演台 v0.1.0</h1>
       </div>
       <div className="flex flex-wrap items-center gap-3">
-        <div className="hidden items-center gap-2 rounded-lg bg-white/75 px-4 py-3 text-sm text-ink-muted ring-1 ring-line xl:flex">
+        <div className="hidden items-center gap-2 rounded-lg bg-background-card/75 px-4 py-3 text-sm text-ink-muted ring-1 ring-line xl:flex">
           <FiSearch /> 搜索项目、产物、过程事件
         </div>
         <StatusPill ok={executionReady} label={localUnavailable ? '服务未连接' : !preflight ? '环境体检中' : preflight.status === 'blocked' ? '环境待处理' : '执行环境就绪'} />
-        {run && <div className="rounded-lg bg-white/80 px-4 py-3 text-xs font-bold text-ink-muted ring-1 ring-line">Run {run.id.slice(0, 8)}</div>}
-        <button className="rounded-lg bg-white/80 p-3 text-ink-muted ring-1 ring-line hover:text-primary-dark" title="通知"><FiBell /></button>
+        {run && <div className="rounded-lg bg-background-card/80 px-4 py-3 text-xs font-bold text-ink-muted ring-1 ring-line">Run {run.id.slice(0, 8)}</div>}
+        <button className="rounded-lg bg-background-card/80 p-3 text-ink-muted ring-1 ring-line hover:text-primary-dark" title="通知"><FiBell /></button>
       </div>
     </header>
   )
@@ -706,7 +706,7 @@ function ModelProviderNotice({ status, onOpenSettings }: { status: ModelProvider
     <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white text-amber-700 ring-1 ring-amber-200">
+          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-background-card text-amber-700 ring-1 ring-amber-200">
             <FiKey />
           </span>
           <div className="min-w-0">
@@ -784,7 +784,7 @@ function OverviewPage(props: {
                   onClick={() => onProfileChange(profile.id)}
                   className={clsx(
                     'min-w-0 rounded-lg border p-4 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/30',
-                    active ? 'border-primary bg-primary-soft shadow-sm' : 'border-line bg-white hover:border-primary/35 hover:bg-background-card',
+                    active ? 'border-primary bg-primary-soft shadow-sm' : 'border-line bg-background-card hover:border-primary/35 hover:bg-background-card',
                   )}
                 >
                   <div className="flex items-center justify-between gap-3">
@@ -795,10 +795,10 @@ function OverviewPage(props: {
                     <StatusBadge status={active ? 'valid' : 'pending'} label={active ? '当前入口' : '可选择'} />
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-primary-dark ring-1 ring-line">
+                    <span className="rounded-full bg-background-card px-2.5 py-1 text-[11px] font-bold text-primary-dark ring-1 ring-line">
                       {profile.projectMode === 'aigc_shot' ? '逐 shot 生成' : '脚本到成片'}
                     </span>
-                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-ink-muted ring-1 ring-line">
+                    <span className="rounded-full bg-background-card px-2.5 py-1 text-[11px] font-bold text-ink-muted ring-1 ring-line">
                       {profile.generationMode === 'manual_import' ? '可手动上传结果' : '自动走本地渲染'}
                     </span>
                   </div>
@@ -810,13 +810,13 @@ function OverviewPage(props: {
             启动后 LLM 会先判断这是口播/知识类视频还是影视化/AIGC shot 视频，并写入创作主线；进入产物页后，shot 工作台会按该判定自动切换到对应流程。
           </div>
           <textarea
-            className="mt-5 h-36 w-full resize-none rounded-xl border-2 border-line bg-white p-5 text-base leading-7 text-ink outline-none transition placeholder:text-ink-soft/60 focus:border-primary focus:shadow-glow"
+            className="mt-5 h-36 w-full resize-none rounded-xl border-2 border-line bg-background-card p-5 text-base leading-7 text-ink outline-none transition placeholder:text-ink-soft/60 focus:border-primary focus:shadow-glow"
             value={topic}
             onChange={(event) => onTopicChange(event.target.value)}
             placeholder="输入你想制作的视频主题..."
           />
           <div className="mt-4 flex flex-wrap items-center gap-3">
-            <select className="rounded-lg border border-line bg-white px-4 py-2.5 text-sm text-ink" value={durationSec} onChange={(event) => onDurationChange(Number(event.target.value))}>
+            <select className="rounded-lg border border-line bg-background-card px-4 py-2.5 text-sm text-ink" value={durationSec} onChange={(event) => onDurationChange(Number(event.target.value))}>
               {[30, 45, 60, 90, 120].map((duration) => <option key={duration} value={duration}>{duration} 秒</option>)}
             </select>
             <button
@@ -872,7 +872,7 @@ function OverviewPage(props: {
         <div className="card border-red-200 bg-red-50/80 p-5">
           <h3 className="text-base font-black text-red-800">下游产物已过期，需要重新生成</h3>
           <div className="mt-3 flex flex-wrap gap-2">
-            {staleNames.map((name) => <span key={name} className="rounded-full bg-white px-3 py-1 text-xs font-bold text-red-700 ring-1 ring-red-200">{name}</span>)}
+            {staleNames.map((name) => <span key={name} className="rounded-full bg-background-card px-3 py-1 text-xs font-bold text-red-700 ring-1 ring-red-200">{name}</span>)}
           </div>
         </div>
       )}
@@ -921,7 +921,7 @@ function EnvironmentChecklistPanel({ items, onOpenSettings }: { items: Environme
               <button
                 type="button"
                 onClick={item.actionLabel === '打开设置' ? onOpenSettings : undefined}
-                className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+                className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-background-card px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
               >
                 <FiSettings /> {item.actionLabel}
               </button>
@@ -982,7 +982,7 @@ function StageFlow({ stages }: { stages: DirectorStage[] }) {
             </div>
               <div className="mt-3 text-sm font-black text-ink">{stageActionLabel(agent.stage)}</div>
               <div className="mt-1 truncate text-xs text-ink-soft">{agent.status === 'review' ? `当前负责：${agent.displayName}` : agent.stage}</div>
-            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/80">
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-background-card/80">
               <div className="h-full rounded-full bg-primary" style={{ width: `${agent.progress}%` }} />
             </div>
           </div>
@@ -1199,7 +1199,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
       <section className="card col-span-12 overflow-visible p-0">
         {selectedReview ? (
           <>
-            <div className="rounded-t-lg border-b border-line bg-white/70 px-6 py-5">
+            <div className="rounded-t-lg border-b border-line bg-background-card/70 px-6 py-5">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <p className="text-xs font-black text-primary-dark">审阅区</p>
@@ -1218,7 +1218,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
             </div>
             <div className="grid grid-cols-12 gap-5 p-6">
               <div className="col-span-12 min-w-0 xl:col-span-8">
-                <div className="rounded-lg border border-line bg-white p-5 shadow-sm">
+                <div className="rounded-lg border border-line bg-background-card p-5 shadow-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <span className="text-sm font-black text-ink">{reviewOutputPanelTitle(selectedReview)}</span>
@@ -1249,7 +1249,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
                             onClick={() => setSelectedReviewId(item.id)}
                             className={clsx(
                               'min-w-[156px] max-w-[224px] rounded-lg border px-3 py-2 text-left text-xs shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary/30',
-                              active ? 'border-primary/55 bg-primary-soft text-primary-dark' : 'border-line bg-background-card text-ink-muted hover:border-primary/30 hover:bg-white',
+                              active ? 'border-primary/55 bg-primary-soft text-primary-dark' : 'border-line bg-background-card text-ink-muted hover:border-primary/30 hover:bg-background-card',
                             )}
                           >
                             <div className="flex items-center justify-between gap-2">
@@ -1270,7 +1270,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
               </div>
               <div className="col-span-12 space-y-3 self-start xl:sticky xl:top-5 xl:col-span-4">
                 {isPending && (
-                  <section className="rounded-lg border border-primary/35 bg-white p-4 shadow-sm">
+                  <section className="rounded-lg border border-primary/35 bg-background-card p-4 shadow-sm">
                     <div className="flex items-center gap-2">
                       <FiShield className="text-primary" />
                       <h3 className="text-base font-black text-ink">决策操作</h3>
@@ -1338,7 +1338,7 @@ function TracePage({ traceNodes, run }: { traceNodes: DirectorTraceNode[]; run: 
             <button key={node.id} onClick={() => setSelectedId(node.id)}
               className={clsx(
                 'rounded-lg border p-4 text-left transition hover:-translate-y-0.5 min-w-0 overflow-hidden',
-                selected?.id === node.id ? 'border-primary bg-primary-soft shadow-card' : 'border-line bg-white/70',
+                selected?.id === node.id ? 'border-primary bg-primary-soft shadow-card' : 'border-line bg-background-card/70',
                 traceNodeHasError(node) && 'border-red-300 bg-red-50/60',
               )}>
               <div className="flex items-center justify-between gap-2 min-w-0">
@@ -1393,7 +1393,7 @@ function TracePage({ traceNodes, run }: { traceNodes: DirectorTraceNode[]; run: 
             {traceNodes.length ? traceNodes.map((node) => (
               <div key={node.id}
                 onClick={() => setSelectedId(node.id)}
-                className={clsx('cursor-pointer rounded-lg p-3 ring-1 transition min-w-0 overflow-hidden', traceNodeHasError(node) ? 'bg-red-50 ring-red-200' : 'bg-white ring-line', selected?.id === node.id && 'ring-primary bg-primary-soft')}>
+                className={clsx('cursor-pointer rounded-lg p-3 ring-1 transition min-w-0 overflow-hidden', traceNodeHasError(node) ? 'bg-red-50 ring-red-200' : 'bg-background-card ring-line', selected?.id === node.id && 'ring-primary bg-primary-soft')}>
                 <div className="flex items-center justify-between gap-2 min-w-0">
                   <span className={clsx('truncate font-bold', traceNodeHasError(node) ? 'text-red-700' : 'text-ink')} title={node.tool}>{node.tool}</span>
                   <StatusBadge status={node.status} />
@@ -1521,7 +1521,7 @@ function AssetsPage({ artifacts, projectId, selectedProfile, onArtifactsChanged 
     <div className="space-y-5">
       {staleCount > 0 && <div className="rounded-lg bg-amber-50 p-4 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">⚠ 有 {staleCount} 个下游产物已过期。上游产物被修改、驳回或重新生成后，下游产物需要重新生成才能使用。</div>}
       {materialDependencyCount > 0 && (
-        <div className="rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
+        <div className="rounded-lg border border-primary/25 bg-background-card p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-black text-primary-dark">待回填素材</p>
@@ -1680,7 +1680,7 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
                 <span className="font-semibold opacity-80">{usingAutoMode ? modeDetection.detail : `LLM 建议：${shotWorkspaceModeLabel(modeDetection.mode)} · ${modeDetection.detail}`}</span>
               </div>
             </div>
-            <div className="flex rounded-lg bg-white p-1 ring-1 ring-line">
+            <div className="flex rounded-lg bg-background-card p-1 ring-1 ring-line">
               {([
                 ['voice_visual', '口播视频', FiLayers],
                 ['aigc_shot', '影视创作', FiVideo],
@@ -1700,7 +1700,7 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
             </div>
           </div>
           <div className="mt-5 grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="rounded-lg bg-white p-4 ring-1 ring-primary/20">
+            <div className="rounded-lg bg-background-card p-4 ring-1 ring-primary/20">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 text-sm font-black text-primary-dark"><FiUserCheck /> 全局参考包同步</div>
@@ -1725,7 +1725,7 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
           </div>
         </div>
 
-        <div className="border-b border-line bg-white/80 px-5 py-3">
+        <div className="border-b border-line bg-background-card/80 px-5 py-3">
           <div className="flex gap-2 overflow-x-auto pb-1">
             {groups.map((group) => (
               <button
@@ -1734,7 +1734,7 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
                 onClick={() => setOpenShotId(group.shotId)}
                 className={clsx(
                   'min-w-[184px] rounded-lg p-3 text-left ring-1 transition',
-                  openGroup?.shotId === group.shotId ? 'bg-primary-soft ring-primary' : 'bg-white ring-line hover:bg-background-card',
+                  openGroup?.shotId === group.shotId ? 'bg-primary-soft ring-primary' : 'bg-background-card ring-line hover:bg-background-card',
                 )}
               >
                 <div className="flex items-center justify-between gap-3">
@@ -1758,15 +1758,15 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
               <div className="font-mono text-xs font-black text-primary-dark">{openGroup.shotId}</div>
               <h4 className="mt-1 text-2xl font-black text-ink [overflow-wrap:anywhere]">{openGroup.title}</h4>
               <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-bold text-ink-muted">
-                {openGroup.durationSec ? <span className="rounded bg-white px-2 py-1 ring-1 ring-line">{openGroup.durationSec}s</span> : null}
-                {qaStatusLabel ? <span className="rounded bg-white px-2 py-1 ring-1 ring-line">{qaStatusLabel}</span> : null}
-                {openGroup.production.attemptCount > 0 ? <span className="rounded bg-white px-2 py-1 ring-1 ring-line">尝试 {openGroup.production.attemptCount}</span> : null}
-                {openGroup.production.acceptedCandidateId ? <span className="rounded bg-white px-2 py-1 ring-1 ring-line">已采纳版本</span> : null}
-                {sourceTypeLabel ? <span className={clsx('rounded px-2 py-1 ring-1', openGroup.production.isFallback ? 'bg-amber-50 text-amber-800 ring-amber-100' : 'bg-white ring-line')}>{sourceTypeLabel}</span> : null}
+                {openGroup.durationSec ? <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">{openGroup.durationSec}s</span> : null}
+                {qaStatusLabel ? <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">{qaStatusLabel}</span> : null}
+                {openGroup.production.attemptCount > 0 ? <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">尝试 {openGroup.production.attemptCount}</span> : null}
+                {openGroup.production.acceptedCandidateId ? <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">已采纳版本</span> : null}
+                {sourceTypeLabel ? <span className={clsx('rounded px-2 py-1 ring-1', openGroup.production.isFallback ? 'bg-amber-50 text-amber-800 ring-amber-100' : 'bg-background-card ring-line')}>{sourceTypeLabel}</span> : null}
                 <span className={clsx('rounded px-2 py-1 ring-1', openGroup.production.canEnterAssembly ? 'bg-green-50 text-green-700 ring-green-100' : 'bg-background-card ring-line')}>{activeStatusLabel}</span>
-                <span className="rounded bg-white px-2 py-1 ring-1 ring-line">产物 {openGroup.artifactCounts.total}</span>
-                <span className="rounded bg-white px-2 py-1 ring-1 ring-line">参考 {openGroup.artifactCounts.references}</span>
-                <span className="rounded bg-white px-2 py-1 ring-1 ring-line">媒体 {openGroup.artifactCounts.media}</span>
+                <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">产物 {openGroup.artifactCounts.total}</span>
+                <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">参考 {openGroup.artifactCounts.references}</span>
+                <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">媒体 {openGroup.artifactCounts.media}</span>
               </div>
               {openGroup.production.lockedDimensions.length ? (
                 <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] font-bold text-ink-muted">
@@ -1791,7 +1791,7 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
                 type="button"
                 disabled={!previousGroup}
                 onClick={() => previousGroup && setOpenShotId(previousGroup.shotId)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-background-card px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"
               >
                 上一 shot
               </button>
@@ -1799,13 +1799,13 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
                 type="button"
                 disabled={!nextGroup}
                 onClick={() => nextGroup && setOpenShotId(nextGroup.shotId)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-background-card px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"
               >
                 下一 shot
               </button>
-              <button type="button" className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"><FiCheck /> 保存</button>
+              <button type="button" className="inline-flex items-center gap-1.5 rounded-lg bg-background-card px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"><FiCheck /> 保存</button>
               <button type="button" className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-black text-on-primary shadow-sm"><FiRefreshCw /> 重新生成</button>
-              <button type="button" className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"><FiDownload /> 导出</button>
+              <button type="button" className="inline-flex items-center gap-1.5 rounded-lg bg-background-card px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"><FiDownload /> 导出</button>
             </div>
           </div>
           <ShotProductionGuideCard
@@ -1979,7 +1979,7 @@ function CinematicShotGuide({
 
   return (
     <div className="mt-4 space-y-4">
-      <div className="rounded-lg border border-primary/20 bg-white p-4 ring-1 ring-primary/10">
+      <div className="rounded-lg border border-primary/20 bg-background-card p-4 ring-1 ring-primary/10">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xs font-black text-primary-dark">影视创作产物视图</div>
@@ -2121,7 +2121,7 @@ function VoiceShotGuide({
 
   return (
     <div className="mt-4 space-y-4">
-      <div className="rounded-lg border border-primary/20 bg-white p-4 ring-1 ring-primary/10">
+      <div className="rounded-lg border border-primary/20 bg-background-card p-4 ring-1 ring-primary/10">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xs font-black text-primary-dark">口播视频产物视图</div>
@@ -2234,7 +2234,7 @@ function ShotPrototypePanel({
   const [completed, setCompleted] = useState(false)
   const [open, setOpen] = useState(index === '1')
   return (
-    <details data-shot-step={index} open={open} onToggle={(event) => setOpen(event.currentTarget.open)} className={clsx('group rounded-lg border border-line bg-white shadow-sm', className)}>
+    <details data-shot-step={index} open={open} onToggle={(event) => setOpen(event.currentTarget.open)} className={clsx('group rounded-lg border border-line bg-background-card shadow-sm', className)}>
       <summary className="cursor-pointer list-none p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -2264,7 +2264,7 @@ function ShotPrototypePanel({
             onClick={() => setCompleted((current) => !current)}
             className={clsx(
               'inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-black ring-1',
-              completed ? 'bg-green-50 text-green-700 ring-green-100 hover:bg-white' : 'bg-primary text-on-primary ring-primary shadow-sm',
+              completed ? 'bg-green-50 text-green-700 ring-green-100 hover:bg-background-card' : 'bg-primary text-on-primary ring-primary shadow-sm',
             )}
           >
             <FiCheck /> {completed ? '取消完成' : '完成本步骤'}
@@ -2316,7 +2316,7 @@ function StepSlotUploadPanel({
           <div className="text-xs font-black text-primary-dark">本步骤上传 / 回填</div>
           <p className="mt-1 text-[11px] leading-5 text-ink-muted">只处理当前步骤需要的素材，生成完成后直接在这里上传回填。</p>
         </div>
-        <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-black text-primary-dark ring-1 ring-line">{slots.length} 个入口</span>
+        <span className="rounded-full bg-background-card px-2.5 py-1 text-[11px] font-black text-primary-dark ring-1 ring-line">{slots.length} 个入口</span>
       </div>
       <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
         {slots.map((slot) => (
@@ -2425,12 +2425,12 @@ function VoiceHyperFramesTimeline({
         <span>{Math.round(duration * 0.66)}s</span>
         <span>{duration}s</span>
       </div>
-      <div className="mt-2 h-2 overflow-hidden rounded-full bg-white ring-1 ring-line">
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-background-card ring-1 ring-line">
         <div className="h-full w-full bg-[linear-gradient(90deg,#F59E0B,#16A34A_52%,#8B5CF6)]" />
       </div>
       <div className="mt-3 grid gap-2 md:grid-cols-2">
         {segments.map((segment) => (
-          <div key={`${segment.time}-${segment.title}`} className="rounded-lg bg-white p-3 ring-1 ring-line">
+          <div key={`${segment.time}-${segment.title}`} className="rounded-lg bg-background-card p-3 ring-1 ring-line">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-black text-ink">{segment.title}</span>
               <span className="font-mono text-[11px] font-black text-primary-dark">{segment.time}</span>
@@ -2484,7 +2484,7 @@ function VoiceAigcInsertTimeline({
           {slot.beats.length ? (
             <div className="mt-3 grid gap-2 md:grid-cols-3">
               {slot.beats.map((beat) => (
-                <div key={`${slot.time}-${beat.time}`} className="rounded-lg bg-white p-3 ring-1 ring-line">
+                <div key={`${slot.time}-${beat.time}`} className="rounded-lg bg-background-card p-3 ring-1 ring-line">
                   <div className="font-mono text-[11px] font-black text-primary-dark">{beat.time}</div>
                   <div className="mt-1 text-xs leading-5 text-ink-muted">{beat.text}</div>
                 </div>
@@ -2494,7 +2494,7 @@ function VoiceAigcInsertTimeline({
           {slot.notes.length ? (
             <div className="mt-3 flex flex-wrap gap-1.5">
               {slot.notes.map((note) => (
-                <span key={`${slot.time}-${note}`} className="rounded bg-white px-2 py-1 text-[11px] font-black text-primary-dark ring-1 ring-line">{note}</span>
+                <span key={`${slot.time}-${note}`} className="rounded bg-background-card px-2 py-1 text-[11px] font-black text-primary-dark ring-1 ring-line">{note}</span>
               ))}
             </div>
           ) : null}
@@ -2688,9 +2688,9 @@ function HyperFramesOutputPreview({
           <p className="mt-1 text-[11px] leading-5 text-ink-muted">视频层可直接播放，字幕文件会解析成时间轴；不再只显示“已生成”。</p>
         </div>
         <div className="flex flex-wrap gap-1.5 text-[11px] font-black text-primary-dark">
-          <span className="rounded bg-white px-2 py-1 ring-1 ring-line">视频 {videoArtifacts.length}</span>
-          <span className="rounded bg-white px-2 py-1 ring-1 ring-line">字幕 {subtitleArtifacts.length}</span>
-          {durationSec ? <span className="rounded bg-white px-2 py-1 ring-1 ring-line">{durationSec}s</span> : null}
+          <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">视频 {videoArtifacts.length}</span>
+          <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">字幕 {subtitleArtifacts.length}</span>
+          {durationSec ? <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">{durationSec}s</span> : null}
         </div>
       </div>
       {videoArtifacts.length ? (
@@ -2948,7 +2948,7 @@ function ShotLayerTimeline({
         label: '剧本',
         time: 'source',
         detail: narrationText || group.title || '确认剧本片段和情绪目标',
-        tone: 'bg-white',
+        tone: 'bg-background-card',
       },
       {
         label: 'AIGC 主画面',
@@ -2974,7 +2974,7 @@ function ShotLayerTimeline({
         label: '口播稿',
         time: 'source',
         detail: narrationText || '口播稿待确认',
-        tone: 'bg-white',
+        tone: 'bg-background-card',
       },
       {
         label: 'HyperFrames 可控层',
@@ -3005,7 +3005,7 @@ function ShotLayerTimeline({
             {mode === 'aigc_shot' ? '重点是 AIGC 画面、参考图和跨 shot 物理一致性。' : '重点是口播内容、HyperFrames 组件变化和 AIGC 插入位置。'}
           </p>
         </div>
-        <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-black text-primary-dark ring-1 ring-line">{group.durationSec ? `${group.durationSec}s` : 'shot'}</span>
+        <span className="rounded-full bg-background-card px-2.5 py-1 text-[11px] font-black text-primary-dark ring-1 ring-line">{group.durationSec ? `${group.durationSec}s` : 'shot'}</span>
       </div>
       <div className="mt-3 space-y-2">
         {rows.map((row) => (
@@ -3054,7 +3054,7 @@ function ShotReferenceStrategyPanel({
         <div key={row.label} className="rounded-lg bg-background-card p-3 ring-1 ring-line">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-black text-ink">{row.label}</span>
-            <span className="max-w-[128px] truncate rounded bg-white px-2 py-1 text-[11px] font-black text-primary-dark ring-1 ring-line" title={row.value}>{row.value}</span>
+            <span className="max-w-[128px] truncate rounded bg-background-card px-2 py-1 text-[11px] font-black text-primary-dark ring-1 ring-line" title={row.value}>{row.value}</span>
           </div>
           <p className="mt-2 text-[11px] leading-5 text-ink-muted">{row.hint}</p>
         </div>
@@ -3243,7 +3243,7 @@ function ShotTextBlock({ title, value, mode }: { title: string; value: string; m
   }
 
   return (
-    <div className="relative rounded-lg bg-white p-4 ring-1 ring-line">
+    <div className="relative rounded-lg bg-background-card p-4 ring-1 ring-line">
       <div className="flex items-center justify-between gap-3">
         <span className="text-xs font-black text-primary-dark">{title}</span>
         <CopyButton value={draft} label="复制" />
@@ -3374,7 +3374,7 @@ function SelectionFloatingAssistant({
 
   return (
     <div
-      className="fixed z-50 w-[min(360px,calc(100vw-32px))] rounded-lg border border-primary/30 bg-white p-3 shadow-card ring-1 ring-primary/10"
+      className="fixed z-50 w-[min(360px,calc(100vw-32px))] rounded-lg border border-primary/30 bg-background-card p-3 shadow-card ring-1 ring-primary/10"
       style={{ left: selection.anchor.left, top: selection.anchor.top }}
     >
       <div className="flex items-start justify-between gap-3">
@@ -3506,7 +3506,7 @@ function ShotRequestSummaryCard({
   }
 
   return (
-    <details className="rounded-lg border border-line bg-white p-3 shadow-sm">
+    <details className="rounded-lg border border-line bg-background-card p-3 shadow-sm">
       <summary className="cursor-pointer list-none">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -3540,14 +3540,14 @@ function ShotRequestSummaryCard({
               disabled={approved}
               className={clsx(
                 'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-                approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+                approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
               )}
             >
               <FiCheck /> {approved ? '已通过，内容已锁定' : '通过并锁定'}
             </button>
           </div>
         </div>
-        <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
+        <div className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
           <div className="text-xs font-black text-ink-soft">优化要求</div>
           <textarea
             value={promptInstruction}
@@ -3563,7 +3563,7 @@ function ShotRequestSummaryCard({
             onClick={() => setPromptDraft(regeneratePromptDraft(request, referenceDrafts, promptInstruction, promptDraft, mode))}
             className={clsx(
               'mt-2 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-              approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+              approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
             )}
           >
             <FiRefreshCw /> 按要求重新生成提示词
@@ -3578,7 +3578,7 @@ function ShotRequestSummaryCard({
             onChange={(event) => setPromptDraft(safePromptText(event.target.value))}
             onSelect={(event) => setPromptSelection(textareaSelectionDraft(event.currentTarget, promptSourceLabel))}
             onMouseUp={(event) => setPromptSelection(textareaSelectionDraft(event.currentTarget, promptSourceLabel))}
-            className="mt-3 min-h-36 w-full resize-y rounded-lg border border-line bg-white p-3 text-xs leading-5 text-ink outline-none selection:bg-primary-soft focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+            className="mt-3 min-h-36 w-full resize-y rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink outline-none selection:bg-primary-soft focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
             aria-label={`${request.requestId} 可编辑提示词`}
           />
           {promptSelection ? (
@@ -3594,7 +3594,7 @@ function ShotRequestSummaryCard({
           ) : null}
         </div>
         {request.negativePrompt ? (
-          <details className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
+          <details className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
             <summary className="cursor-pointer text-xs font-black text-ink-soft">可选负面提示词</summary>
             <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-ink-muted">{safePromptText(request.negativePrompt)}</p>
           </details>
@@ -3613,7 +3613,7 @@ function ShotRequestSummaryCard({
             onClick={() => setReferenceDrafts((current) => [...current, newReferenceDraft(current.length + 1)])}
             className={clsx(
               'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-              approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+              approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
             )}
           >
             <FiUpload /> 新增参考图
@@ -3622,7 +3622,7 @@ function ShotRequestSummaryCard({
         {referenceDrafts.length ? (
           <div className="mt-3 space-y-3">
             {referenceDrafts.map((ref, index) => (
-              <div key={ref.id || `${request.requestId}-ref-${index}`} className="rounded-lg bg-white p-3 ring-1 ring-line">
+              <div key={ref.id || `${request.requestId}-ref-${index}`} className="rounded-lg bg-background-card p-3 ring-1 ring-line">
                 <div className="grid gap-2 md:grid-cols-[1fr_0.8fr_1.4fr_auto]">
                   <input
                     value={ref.label || ''}
@@ -3660,7 +3660,7 @@ function ShotRequestSummaryCard({
                     onClick={() => setReferenceDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index))}
                     className={clsx(
                       'rounded-lg px-3 py-2 text-xs font-black ring-1',
-                      approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+                      approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
                     )}
                   >
                     移除
@@ -3675,12 +3675,12 @@ function ShotRequestSummaryCard({
             ))}
           </div>
         ) : (
-          <p className="mt-3 rounded-lg bg-white p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">本素材没有图片依赖，可以直接使用上方提示词生成，也可以新增参考图。</p>
+          <p className="mt-3 rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">本素材没有图片依赖，可以直接使用上方提示词生成，也可以新增参考图。</p>
         )}
         {referenceRows.length ? (
           <div className="mt-3 space-y-2">
             {referenceRows.map((row) => (
-              <div key={row} className="rounded-lg bg-white px-3 py-2 text-xs leading-5 text-ink-muted ring-1 ring-line">{row}</div>
+              <div key={row} className="rounded-lg bg-background-card px-3 py-2 text-xs leading-5 text-ink-muted ring-1 ring-line">{row}</div>
             ))}
           </div>
         ) : null}
@@ -3750,7 +3750,7 @@ function ShotLayerPlanPanel({ request, mode }: { request: ExternalGenerationRequ
         </div>
         <span className="rounded-full bg-primary-soft px-2.5 py-1 text-[11px] font-black text-primary-dark">{mode === 'aigc_shot' ? 'Shot 连续性优先' : 'IP 口播优先'}</span>
       </div>
-      <div className="mt-3 rounded-lg bg-white p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">
+      <div className="mt-3 rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">
         {textSafeLayout}
       </div>
       <div className="mt-3 space-y-2">
@@ -3800,7 +3800,7 @@ function CompactLayerPlanRow({
   detail: string
 }) {
   return (
-    <details className="rounded-lg bg-white px-3 py-2 ring-1 ring-line">
+    <details className="rounded-lg bg-background-card px-3 py-2 ring-1 ring-line">
       <summary className="cursor-pointer list-none">
         <div className="flex items-center gap-2">
           <span className="mt-0.5 text-primary">{icon}</span>
@@ -3980,7 +3980,7 @@ function ShotAssetSlotCard({
   const slotStatusLabel = slot.kind === 'prompt' ? '可复制' : slot.status === 'review' && canUpload ? '可回填' : undefined
 
   return (
-    <div className="rounded-lg border border-line bg-white p-4 shadow-sm">
+    <div className="rounded-lg border border-line bg-background-card p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -4109,7 +4109,7 @@ function ExternalReferenceCard({ reference, index, mode, projectId }: { referenc
   const referenceCopy = referenceCopyTextForUser(reference, index)
   const title = reference.label || reference.id || `参考图 ${index}`
   return (
-    <div className="min-w-0 rounded-lg bg-white p-3 ring-1 ring-line">
+    <div className="min-w-0 rounded-lg bg-background-card p-3 ring-1 ring-line">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="truncate text-xs font-black text-ink">{title}</div>
@@ -4122,7 +4122,7 @@ function ExternalReferenceCard({ reference, index, mode, projectId }: { referenc
           <button
             type="button"
             onClick={() => setDialogOpen(true)}
-            className="group relative block w-full cursor-zoom-in bg-white text-left focus:outline-none focus:ring-2 focus:ring-primary"
+            className="group relative block w-full cursor-zoom-in bg-background-card text-left focus:outline-none focus:ring-2 focus:ring-primary"
             aria-label={`放大预览 ${title}`}
           >
             <img
@@ -4220,17 +4220,17 @@ function ImagePreviewDialog({
               <h3 className="mt-1 truncate text-lg font-black text-ink" title={title}>{title}</h3>
               <p className="mt-1 text-xs leading-5 text-ink-muted">{sourceLabel}</p>
             </div>
-            <button type="button" onClick={onClose} className="rounded-lg p-2 text-ink-soft hover:bg-white hover:text-primary-dark" aria-label="关闭图片预览">
+            <button type="button" onClick={onClose} className="rounded-lg p-2 text-ink-soft hover:bg-background-card hover:text-primary-dark" aria-label="关闭图片预览">
               <FiX />
             </button>
           </div>
           {locks.length ? (
-            <div className="rounded-lg bg-white p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">
+            <div className="rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">
               <div className="font-black text-ink">保持不变</div>
               <div className="mt-1">{locks.slice(0, 6).join('、')}</div>
             </div>
           ) : null}
-          <div className="rounded-lg bg-white p-3 ring-1 ring-line">
+          <div className="rounded-lg bg-background-card p-3 ring-1 ring-line">
             <label className="text-xs font-black text-ink" htmlFor={instructionFieldId}>你想怎么改</label>
             <textarea
               id={instructionFieldId}
@@ -4254,7 +4254,7 @@ function ImagePreviewDialog({
               <FiRefreshCw /> 按要求生成返工提示词
             </button>
           </div>
-          <div className="rounded-lg bg-white p-3 ring-1 ring-line">
+          <div className="rounded-lg bg-background-card p-3 ring-1 ring-line">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-xs font-black text-ink">返工提示词</div>
@@ -4328,7 +4328,7 @@ function VideoPreviewDialog({
             <div className="text-[11px] font-black text-primary-dark">放大播放</div>
             <h3 className="truncate text-sm font-black text-ink" title={title}>{title}</h3>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-2 text-ink-soft hover:bg-white hover:text-primary-dark" aria-label="关闭视频播放">
+          <button type="button" onClick={onClose} className="rounded-lg p-2 text-ink-soft hover:bg-background-card hover:text-primary-dark" aria-label="关闭视频播放">
             <FiX />
           </button>
         </div>
@@ -4455,12 +4455,12 @@ function ShotArtifactPreview({
         {artifact.status === 'valid' ? null : <StatusBadge status={artifact.status} />}
       </div>
       {mediaKind ? (
-        <div className="mt-3 overflow-hidden rounded-lg bg-white ring-1 ring-line">
+        <div className="mt-3 overflow-hidden rounded-lg bg-background-card ring-1 ring-line">
           {previewUrl && mediaKind === 'image' ? (
             <button
               type="button"
               onClick={() => setDialogOpen(true)}
-              className="group relative block w-full cursor-zoom-in bg-white text-left focus:outline-none focus:ring-2 focus:ring-primary"
+              className="group relative block w-full cursor-zoom-in bg-background-card text-left focus:outline-none focus:ring-2 focus:ring-primary"
               aria-label={`放大预览 ${artifact.name}`}
             >
               <img src={previewUrl} alt={artifact.name} className="h-40 w-full object-contain" />
@@ -4514,7 +4514,7 @@ function ShotArtifactPreview({
         />
       ) : null}
       {assetSummary ? (
-        <div className="mt-2 rounded-lg bg-white px-3 py-2 text-[11px] font-semibold text-ink-muted ring-1 ring-line">
+        <div className="mt-2 rounded-lg bg-background-card px-3 py-2 text-[11px] font-semibold text-ink-muted ring-1 ring-line">
           {assetSummary}
         </div>
       ) : null}
@@ -4643,7 +4643,7 @@ function SubtitleCuePanel({
   const displayedCues = cues.length ? cues : (error && fallbackCues?.length ? fallbackCues : [])
   const copyText = displayedCues.length ? displayedCues.map((cue) => `${cue.start} - ${cue.end}\n${cue.text}`).join('\n\n') : rawText
   return (
-    <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
+    <div className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-xs font-black text-primary-dark">字幕时间轴</div>
@@ -4688,7 +4688,7 @@ function ReadableArtifactTextPanel({
   error: string | null
 }) {
   return (
-    <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
+    <div className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-xs font-black text-primary-dark">文本内容</div>
@@ -5125,10 +5125,10 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
           {!videoReady && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">最终视频尚未生成</div>}
           {videoPreviewError && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">{videoPreviewError}</div>}
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"><button disabled={!videoPreviewUrl} onClick={() => { void previewVideoRef.current?.play().catch(() => undefined) }} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-on-primary shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} onClick={() => { void openFinalVideoFolder() }} className="flex items-center justify-center gap-2 rounded-lg bg-background-card px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
-          <button disabled={!videoReady} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> {packageReady ? '下载交付包' : '导出交付包'}</button>
+          <button disabled={!videoReady} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-on-primary-dark disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> {packageReady ? '下载交付包' : '导出交付包'}</button>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFileText /> Markdown</button>
-            <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.json', json, 'application/json')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> JSON</button>
+            <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-background-card px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFileText /> Markdown</button>
+            <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.json', json, 'application/json')} className="flex items-center justify-center gap-2 rounded-lg bg-background-card px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> JSON</button>
           </div>
         </section>
         <section className="card p-6">
@@ -5137,8 +5137,8 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
           {diagnosticsError ? <div className="mt-3 rounded-lg bg-red-50 p-3 text-xs font-semibold text-red-700 ring-1 ring-red-200">{diagnosticsError}</div> : null}
           {diagnosticsPath ? <div className="mt-3 truncate rounded-lg bg-background-card p-3 font-mono text-[11px] text-ink-soft ring-1 ring-line" title={diagnosticsPath}>{diagnosticsPath}</div> : null}
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <button disabled={diagnosticsLoading} onClick={() => { void exportDiagnostics() }} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiArchive /> {diagnosticsLoading ? '导出中...' : '导出诊断包'}</button>
-            <button disabled={!diagnosticsPath} onClick={() => { void openDiagnostics() }} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开诊断包</button>
+            <button disabled={diagnosticsLoading} onClick={() => { void exportDiagnostics() }} className="flex items-center justify-center gap-2 rounded-lg bg-background-card px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiArchive /> {diagnosticsLoading ? '导出中...' : '导出诊断包'}</button>
+            <button disabled={!diagnosticsPath} onClick={() => { void openDiagnostics() }} className="flex items-center justify-center gap-2 rounded-lg bg-background-card px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开诊断包</button>
           </div>
         </section>
         <section className="card p-6">
@@ -5159,7 +5159,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
         </div>
         <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
           {publishLoading ? (
-            <div className="rounded-lg bg-white p-5 text-sm font-semibold text-ink-muted ring-1 ring-line">正在读取发布文案产物...</div>
+            <div className="rounded-lg bg-background-card p-5 text-sm font-semibold text-ink-muted ring-1 ring-line">正在读取发布文案产物...</div>
           ) : publishError ? (
             <div className="rounded-lg bg-red-50 p-5 text-sm font-semibold text-red-700 ring-1 ring-red-200">{publishError}</div>
           ) : !publishReady ? (
@@ -5167,7 +5167,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
               {publishLocalOnlyPointer ? '发布文案产物已生成，但正文只返回了本地索引，当前客户端无法读取完整文案。' : '等待 publish_copy_generator 根据口播稿生成标题、简介和关键词。'}
             </div>
           ) : publishCopies.map((copy) => (
-            <div key={copy.platform} className="rounded-lg bg-white p-5 ring-1 ring-line">
+            <div key={copy.platform} className="rounded-lg bg-background-card p-5 ring-1 ring-line">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-black text-ink">{copy.platformName}</h3>
                 <CopyButton value={JSON.stringify(copy, null, 2)} label="复制 JSON" />
@@ -5192,7 +5192,7 @@ function ExportDeliveryRow({ item }: { item: ExportDeliveryItem }) {
         <div className="min-w-0">
           <div className="text-sm font-black text-ink">{item.label}</div>
           <div className="mt-1 text-xs leading-5 text-ink-muted">{item.description}</div>
-          {item.storageRef ? <div className="mt-1 rounded bg-white px-2 py-1 text-[11px] font-semibold text-ink-muted ring-1 ring-line">{userFacingStorageStatus(item.storageRef, '本地产物')}</div> : null}
+          {item.storageRef ? <div className="mt-1 rounded bg-background-card px-2 py-1 text-[11px] font-semibold text-ink-muted ring-1 ring-line">{userFacingStorageStatus(item.storageRef, '本地产物')}</div> : null}
         </div>
         <StatusBadge status={item.status} />
       </div>
@@ -5422,7 +5422,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, mode = 'voice_vi
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-line bg-white/70">
+        <tbody className="divide-y divide-line bg-background-card/70">
           {artifacts.map((artifact) => {
             const active = selectedId === artifact.id
             const provenance = artifactProvenanceSummary(artifact)
@@ -5446,7 +5446,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, mode = 'voice_vi
                     <div className="flex flex-wrap gap-2">
                       <button
                         onClick={() => loadArtifact(artifact)}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-background-card px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
                       >
                         <FiFileText /> {active ? '收起' : '查看'}
                       </button>
@@ -5458,7 +5458,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, mode = 'voice_vi
                   <tr>
                     <td colSpan={headers.length} className="bg-background-card px-4 py-4">
                       <div className={clsx('grid gap-4', compact ? 'grid-cols-1' : 'grid-cols-12')}>
-                        <div className={clsx('min-w-0 rounded-lg border border-line bg-white p-4 shadow-sm', compact ? '' : 'col-span-12 xl:col-span-8')}>
+                        <div className={clsx('min-w-0 rounded-lg border border-line bg-background-card p-4 shadow-sm', compact ? '' : 'col-span-12 xl:col-span-8')}>
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
                               <div className="truncate text-sm font-black text-ink">{artifact.name}</div>
@@ -5513,7 +5513,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, mode = 'voice_vi
                           ) : null}
                         </div>
                         <div className={clsx('space-y-3', compact ? '' : 'col-span-12 xl:col-span-4')}>
-                          <div className="rounded-lg border border-line bg-white p-4 shadow-sm">
+                          <div className="rounded-lg border border-line bg-background-card p-4 shadow-sm">
                             <div className="flex items-center gap-2 text-sm font-black text-ink"><FiLayers /> 版本历史</div>
                             <div className="mt-3 space-y-2">
                               {history.length ? history.map((item) => (
@@ -5527,7 +5527,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, mode = 'voice_vi
                               )) : <p className="text-xs text-ink-muted">暂无历史版本。</p>}
                             </div>
                           </div>
-                          <div className="rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
+                          <div className="rounded-lg border border-primary/25 bg-background-card p-4 shadow-sm">
                             <div className="flex items-center gap-2 text-sm font-black text-ink"><FiEdit3 /> 返工意见</div>
                             <textarea
                               value={revisionMessage}
@@ -5711,7 +5711,7 @@ function ExternalGenerationRequestPanel({
   }
 
   return (
-    <div className="mt-4 rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
+    <div className="mt-4 rounded-lg border border-primary/25 bg-background-card p-4 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="text-sm font-black text-ink">素材依赖点</div>
@@ -5756,14 +5756,14 @@ function ExternalGenerationRequestPanel({
               disabled={approved}
               className={clsx(
                 'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-                approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+                approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
               )}
             >
               <FiCheck /> {approved ? '已通过，内容已锁定' : '通过并锁定'}
             </button>
           </div>
         </div>
-        <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
+        <div className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
           <div className="text-xs font-black text-ink-soft">优化要求</div>
           <textarea
             value={promptInstruction}
@@ -5779,7 +5779,7 @@ function ExternalGenerationRequestPanel({
             onClick={() => setPromptDraft(regeneratePromptDraft(request, referenceDrafts, promptInstruction, promptDraft, mode))}
             className={clsx(
               'mt-2 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-              disabled || approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+              disabled || approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
             )}
           >
             <FiRefreshCw /> 按要求重新生成提示词
@@ -5794,7 +5794,7 @@ function ExternalGenerationRequestPanel({
             onChange={(event) => setPromptDraft(safePromptText(event.target.value))}
             onSelect={(event) => setPromptSelection(textareaSelectionDraft(event.currentTarget, promptSourceLabel))}
             onMouseUp={(event) => setPromptSelection(textareaSelectionDraft(event.currentTarget, promptSourceLabel))}
-            className="mt-3 min-h-36 w-full resize-y rounded-lg border border-line bg-white p-3 text-xs leading-5 text-ink outline-none selection:bg-primary-soft focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+            className="mt-3 min-h-36 w-full resize-y rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink outline-none selection:bg-primary-soft focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
             aria-label={`${request.requestId} 可编辑提示词`}
           />
           {promptSelection ? (
@@ -5828,7 +5828,7 @@ function ExternalGenerationRequestPanel({
             onClick={() => setReferenceDrafts((current) => [...current, newReferenceDraft(current.length + 1)])}
             className={clsx(
               'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-              disabled || approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+              disabled || approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
             )}
           >
             <FiUpload /> 新增参考图
@@ -5837,7 +5837,7 @@ function ExternalGenerationRequestPanel({
         {referenceDrafts.length ? (
           <div className="mt-3 space-y-3">
             {referenceDrafts.map((ref, index) => (
-              <div key={ref.id || `${request.requestId}-panel-ref-${index}`} className="rounded-lg bg-white p-3 ring-1 ring-line">
+              <div key={ref.id || `${request.requestId}-panel-ref-${index}`} className="rounded-lg bg-background-card p-3 ring-1 ring-line">
                 <div className="grid gap-2 md:grid-cols-[1fr_0.8fr_1.4fr_auto]">
                   <input
                     value={ref.label || ''}
@@ -5875,7 +5875,7 @@ function ExternalGenerationRequestPanel({
                     onClick={() => setReferenceDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index))}
                     className={clsx(
                       'rounded-lg px-3 py-2 text-xs font-black ring-1',
-                      disabled || approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+                      disabled || approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
                     )}
                   >
                     移除
@@ -5890,12 +5890,12 @@ function ExternalGenerationRequestPanel({
             ))}
           </div>
         ) : (
-          <p className="mt-3 rounded-lg bg-white p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">本素材没有图片依赖，可以直接使用提示词生成，也可以新增参考图。</p>
+          <p className="mt-3 rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">本素材没有图片依赖，可以直接使用提示词生成，也可以新增参考图。</p>
         )}
         {referenceRows.length ? (
           <div className="mt-3 space-y-2">
             {referenceRows.map((row) => (
-              <div key={row} className="rounded-lg bg-white px-3 py-2 text-xs leading-5 text-ink-muted ring-1 ring-line">{row}</div>
+              <div key={row} className="rounded-lg bg-background-card px-3 py-2 text-xs leading-5 text-ink-muted ring-1 ring-line">{row}</div>
             ))}
           </div>
         ) : null}
@@ -6168,7 +6168,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1200)
   }
-  return <button onClick={handleCopy} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"><FiCopy /> {copied ? '已复制' : label}</button>
+  return <button onClick={handleCopy} className="inline-flex items-center gap-1.5 rounded-lg bg-background-card px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"><FiCopy /> {copied ? '已复制' : label}</button>
 }
 
 async function copyText(value: string) {
@@ -6327,7 +6327,7 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 }
 
 function EmptyState({ text }: { text: string }) {
-  return <div className="col-span-full rounded-lg bg-white/70 p-6 text-sm text-ink-muted ring-1 ring-line">{text}</div>
+  return <div className="col-span-full rounded-lg bg-background-card/70 p-6 text-sm text-ink-muted ring-1 ring-line">{text}</div>
 }
 
 // ReviewContent renders review text with auto-detection of JSON and Markdown.
@@ -6337,7 +6337,7 @@ function ReviewContent({ text }: { text: string }) {
   if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
     try {
       const parsed = JSON.parse(trimmed)
-      return <pre className="whitespace-pre-wrap rounded-lg border border-line bg-white p-4 font-mono text-xs leading-6 text-ink-muted [overflow-wrap:anywhere]">{JSON.stringify(parsed, null, 2)}</pre>
+      return <pre className="whitespace-pre-wrap rounded-lg border border-line bg-background-card p-4 font-mono text-xs leading-6 text-ink-muted [overflow-wrap:anywhere]">{JSON.stringify(parsed, null, 2)}</pre>
     } catch { /* not valid JSON, fall through */ }
   }
 
@@ -6362,7 +6362,7 @@ function stageTone(status: DirectorStageStatus) {
   if (status === 'running' || status === 'active') return 'border-line bg-primary-soft'
   if (status === 'done') return 'border-green-200 bg-green-50'
   if (status === 'blocked' || status === 'failed') return 'border-red-100 bg-red-50/60'
-  return 'border-line bg-white/65'
+  return 'border-line bg-background-card/65'
 }
 
 function stageIconTone(status: DirectorStageStatus) {

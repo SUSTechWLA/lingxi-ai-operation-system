@@ -174,10 +174,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ variant = 'developer', onBa
     setProviderMessage({ type: 'info', text: '正在清除已保存密钥...' })
     try {
       const response = await saveModelProviderSettings({
-        ...providerSettings,
         [capability]: {
-          ...providerSettings[capability],
-          apiKey: '',
           clearApiKey: true,
         },
       })
@@ -396,7 +393,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ variant = 'developer', onBa
                     type="button"
                     role="tab"
                     aria-selected={activeTab === row.id}
-                    aria-controls={settingsPanelId(row.id)}
+                    aria-controls={activeTab === row.id ? settingsPanelId(row.id) : undefined}
                     tabIndex={activeTab === row.id ? 0 : -1}
                     onClick={() => setActiveTab(row.id)}
                     onKeyDown={(event) => handleSettingsTabKeyDown(event, index)}

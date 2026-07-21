@@ -325,6 +325,7 @@ body {
 }
 
 .creator-primary-button:hover:not(:disabled) {
+  color: rgb(var(--color-background-card));
   background: rgb(var(--color-ink));
 }
 
