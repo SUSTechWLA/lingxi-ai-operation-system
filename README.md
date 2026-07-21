@@ -42,7 +42,7 @@
 - 制作路线与 AIGC 执行策略已解耦：口播默认按 Shot 自动使用 AIGC 丰富层，也可选择纯本地执行；`aigcEnabled=false` 只禁止本次 AIGC 调用，不会删除该层的提示词、安全区和未来重启执行所需设计。
 - 已安装 App 内置正式 IP 资产与 MCP provider，并显式发现 macOS `say`、Homebrew FFmpeg/FFprobe；本地预览严格遵守用户时长。
 - 动态审核 UI 可随真实 Agent review gate 推进；MCP 必需素材失败时会 fail closed，不再把失败渲染伪装成成功。
-
+- 头像菜单内置统一设置页：分开管理文本、图片和视频生成接口，密钥仅保存在本机，并支持跟随系统、浅色和深色外观。
 - Closed beta runbook、beta smoke、fallback fixture、diagnostics、artifact provenance 和 readiness gate 已就绪。
 - 视频流水线已对齐 shot 级生产闭环：语义/画面变化切分、3-15 秒时长校验、candidate 级 QA、保守 repair loop、accepted shot gate、FFmpeg final assembly 和 final QA。
 - Shot 素材包已拆成可读的三层画面设计与一份合成计划：`ipArollPlan`、`hyperframesPlan`、`aigcPlan` 和 `ffmpegFusionPlan`，并统一收敛到 `visualLayers` 契约。
@@ -183,6 +183,8 @@ bash scripts/one-click-deploy.sh down
 ```
 
 命令会保留数据库和项目数据卷，输出 `.app` 与 `.dmg` 的绝对路径。打开客户端后选择“三层口播（IP + 文字特效 + AIGC）”可让系统按 Shot 自动丰富画面；若暂时不配置 AIGC provider，在“AIGC 丰富层”选择“纯本地（保留 AIGC 层设计但不执行）”即可使用默认树懒 IP、演播室和本地文字层完成视频。
+
+首次启动后，从右上角用户头像进入“设置”，分别配置文本生成、图片生成和视频生成 provider，并选择外观模式。“开始创作”页只展示创作者需要的选项；Shot 的 IP A-roll、HyperFrames 文字特效和 AIGC 丰富层仍由后端自动设计与编排。
 
 Closed beta 安装、诊断和 smoke 验证见 [Closed Beta Runbook](docs/BETA_RUNBOOK.md)。快速自检可运行：
 
