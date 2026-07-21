@@ -160,6 +160,10 @@ jobs:
         working-directory: frontend
         run: npm run test:creator
 
+      - name: Run frontend settings and theme regression test
+        working-directory: frontend
+        run: npm run test:settings
+
       - name: Run Electron runtime tests
         working-directory: frontend
         run: |

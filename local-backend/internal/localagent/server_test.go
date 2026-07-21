@@ -295,6 +295,60 @@ func TestModelProviderSettingsSaveListAndPreserveSecrets(t *testing.T) {
 	}
 }
 
+func TestModelProviderSettingsClearAPIKey(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	body := bytes.NewBufferString(`{
+		"providers":{
+			"text_to_text":{"apiKey":"sk-text-secret"},
+			"text_to_image":{"apiKey":"sk-image-secret"}
+		}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/local/model-providers", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{
+		"providers":{
+			"text_to_text":{"apiKey":"","clearApiKey":true}
+		}
+	}`)
+	req = httptest.NewRequest(http.MethodPut, "/api/local/model-providers", body)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("clearApiKey")) {
+		t.Fatalf("response must not include clearApiKey control field: %s", rec.Body.String())
+	}
+	var updated ModelProviderSettingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("invalid clear response: %v", err)
+	}
+	if updated.Providers[CapabilityTextToText].HasAPIKey {
+		t.Fatalf("cleared provider should report no api key: %+v", updated.Providers[CapabilityTextToText])
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "config", "model-providers.json"))
+	if err != nil {
+		t.Fatalf("read updated config: %v", err)
+	}
+	if bytes.Contains(raw, []byte("sk-text-secret")) {
+		t.Fatalf("cleared api key should not remain in local config: %s", string(raw))
+	}
+	if !bytes.Contains(raw, []byte("sk-image-secret")) {
+		t.Fatalf("clearing one capability should preserve other api keys: %s", string(raw))
+	}
+	if bytes.Contains(raw, []byte("clearApiKey")) {
+		t.Fatalf("local config must not persist clearApiKey control field: %s", string(raw))
+	}
+}
+
 func TestModelProviderSettingsIncludeKeyRequiresNonBrowserLocalRequest(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DataDir: root})

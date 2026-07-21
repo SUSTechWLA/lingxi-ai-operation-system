@@ -14,6 +14,7 @@
     "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build",
     "test:director": "node scripts/director-studio-logic-check.mjs",
     "test:creator": "node scripts/creator-studio-logic-check.mjs",
+    "test:settings": "node scripts/settings-theme-check.mjs",
     "test:developer-build": "node scripts/developer-console-build-check.mjs",
     "lint": "eslint .",
     "preview": "vite preview",

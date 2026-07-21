@@ -4,6 +4,18 @@ All notable release changes are tracked here. README only carries the current ve
 
 ## Unreleased
 
+### Added
+
+- Added a production Creator settings route, accessible from the user-avatar menu, for separate local text, image, and video generation providers.
+- Added persisted system, light, and dark appearance modes backed by a shared semantic color system.
+
+### Changed
+
+- Removed internal three-layer Shot terminology from the start-creation page while preserving the canonical backend layer contract and orchestration.
+- Reused the same settings implementation in the production Creator shell and the gated developer console.
+- Clarified that provider keys are persisted only by the local agent, transmitted only for the authenticated generation request that needs them, and never written into project configuration or cloud persistence.
+- Added explicit removal for locally saved provider keys and accessible keyboard navigation for settings tabs.
+
 ## v0.2.1 - 2026-07-21
 
 ### Added

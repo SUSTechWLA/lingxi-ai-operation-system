@@ -6,6 +6,7 @@ export interface ModelProviderConfig {
   baseUrl: string
   model: string
   apiKey?: string
+  clearApiKey?: boolean
   hasApiKey?: boolean
   apiKeyPreview?: string
 }
@@ -199,7 +200,7 @@ export async function buildClientModelProvidersForRun(): Promise<Partial<Record<
 }
 
 export async function saveModelProviderSettings(
-  providers: Record<ModelCapability, ModelProviderConfig>
+  providers: Partial<Record<ModelCapability, Partial<ModelProviderConfig>>>
 ): Promise<ModelProviderSettingsResponse> {
   const response = await fetch(localAgentUrl('/api/local/model-providers'), {
     method: 'PUT',

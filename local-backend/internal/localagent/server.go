@@ -76,6 +76,17 @@ type ModelProviderSettingsResponse struct {
 	Providers map[ModelCapability]ModelProviderConfig `json:"providers"`
 }
 
+type modelProviderSettingsRequest struct {
+	Providers map[ModelCapability]modelProviderConfigUpdate `json:"providers"`
+}
+
+type modelProviderConfigUpdate struct {
+	BaseURL     string `json:"baseUrl"`
+	Model       string `json:"model"`
+	APIKey      string `json:"apiKey,omitempty"`
+	ClearAPIKey bool   `json:"clearApiKey,omitempty"`
+}
+
 type ModelProviderConfig struct {
 	BaseURL       string `json:"baseUrl"`
 	Model         string `json:"model"`
@@ -242,12 +253,12 @@ func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, maskModelProviderSettings(settings, includeKey))
 	case http.MethodPut:
-		var req ModelProviderSettingsResponse
+		var req modelProviderSettingsRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid model provider payload")
 			return
 		}
-		if err := validateProviderCapabilities(req.Providers); err != nil {
+		if err := validateProviderUpdateCapabilities(req.Providers); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -256,7 +267,7 @@ func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		merged := mergeModelProviderSettings(current, req.Providers)
+		merged := mergeModelProviderUpdates(current, req.Providers)
 		if err := s.writeModelProviderSettings(merged); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -1209,6 +1220,15 @@ func validateProviderCapabilities(providers map[ModelCapability]ModelProviderCon
 	return nil
 }
 
+func validateProviderUpdateCapabilities(providers map[ModelCapability]modelProviderConfigUpdate) error {
+	for capability := range providers {
+		if !isSupportedModelCapability(capability) {
+			return fmt.Errorf("unsupported model capability: %s", capability)
+		}
+	}
+	return nil
+}
+
 func isSupportedModelCapability(capability ModelCapability) bool {
 	switch capability {
 	case CapabilityTextToText, CapabilityTextToImage, CapabilityTextToVideo:
@@ -1232,6 +1252,31 @@ func mergeModelProviderSettings(current, updates map[ModelCapability]ModelProvid
 			cfg.Model = strings.TrimSpace(update.Model)
 		}
 		if update.APIKey != "" {
+			cfg.APIKey = update.APIKey
+		}
+		cfg.HasAPIKey = false
+		cfg.APIKeyPreview = ""
+		merged[capability] = cfg
+	}
+	return merged
+}
+
+func mergeModelProviderUpdates(current map[ModelCapability]ModelProviderConfig, updates map[ModelCapability]modelProviderConfigUpdate) map[ModelCapability]ModelProviderConfig {
+	merged := map[ModelCapability]ModelProviderConfig{}
+	for capability, cfg := range current {
+		merged[capability] = cfg
+	}
+	for capability, update := range updates {
+		cfg := merged[capability]
+		if strings.TrimSpace(update.BaseURL) != "" {
+			cfg.BaseURL = strings.TrimSpace(update.BaseURL)
+		}
+		if strings.TrimSpace(update.Model) != "" {
+			cfg.Model = strings.TrimSpace(update.Model)
+		}
+		if update.ClearAPIKey {
+			cfg.APIKey = ""
+		} else if update.APIKey != "" {
 			cfg.APIKey = update.APIKey
 		}
 		cfg.HasAPIKey = false
