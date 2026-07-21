@@ -8,6 +8,7 @@ import { build } from 'esbuild'
 const temp = await mkdtemp(join(tmpdir(), 'settings-theme-'))
 const bundle = join(temp, 'theme.mjs')
 const settingsSource = await readFile(new URL('../src/pages/SettingsPage.tsx', import.meta.url), 'utf8')
+const startSource = await readFile(new URL('../src/features/creator-studio/StartCreationPage.tsx', import.meta.url), 'utf8')
 
 try {
   await build({
@@ -58,6 +59,11 @@ try {
   assert.match(settingsSource, /useTheme/)
   assert.match(settingsSource, /跟随系统/)
   assert.match(settingsSource, /仅保存在本机/)
+  assert.match(startSource, /IP 口播视频/)
+  assert.match(startSource, /智能补充素材/)
+  for (const internalTerm of ['每个 Shot 都按三层设计', 'A-roll', 'HyperFrames', 'AIGC 丰富层']) {
+    assert.doesNotMatch(startSource, new RegExp(internalTerm))
+  }
 } finally {
   await rm(temp, { recursive: true, force: true })
 }

@@ -29,12 +29,12 @@ const durationOptions = [
 const aspectOptions = ['9:16', '16:9', '1:1']
 const platformOptions = ['', '抖音', '小红书', '视频号', 'B站']
 const productionRouteOptions: { value: CreatorProductionRoute; label: string }[] = [
-  { value: 'talking_head', label: '三层口播（IP + 文字特效 + AIGC）' },
-  { value: 'cinematic_story', label: '影视化 Shot（三层画面设计）' },
+  { value: 'talking_head', label: 'IP 口播视频' },
+  { value: 'cinematic_story', label: '影视短片' },
 ]
 const aigcPolicyOptions: { value: CreatorAIGCPolicy; label: string }[] = [
-  { value: 'auto', label: '自动丰富（按 Shot 需要生成）' },
-  { value: 'disabled', label: '纯本地（保留 AIGC 层设计但不执行）' },
+  { value: 'auto', label: '智能补充素材' },
+  { value: 'disabled', label: '仅使用本地素材' },
 ]
 
 export default function StartCreationPage({ onOpenProject }: StartCreationPageProps) {
@@ -203,10 +203,6 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
       <p className="creator-eyebrow">开始创作</p>
       <h1 id="creator-page-title">先说一句，你想拍什么？</h1>
       <p className="creator-intro">写下主题、人物或画面感，接下来的创作会从这里开始。</p>
-      <div className="creator-layer-contract" aria-label="每个 Shot 的三层画面设计">
-        <strong>每个 Shot 都按三层设计</strong>
-        <span>IP A-roll 承载角色口播 · HyperFrames 保证文字与特效 · AIGC 丰富背景和素材</span>
-      </div>
       <label className="creator-prompt-label" htmlFor="creator-prompt">创作想法</label>
       <textarea
         id="creator-prompt"
@@ -273,7 +269,7 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
               {productionRouteOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
-          <label>AIGC 丰富层
+          <label>补充素材
             <select value={aigcPolicy} onChange={(event) => setAigcPolicy(event.target.value as CreatorAIGCPolicy)} disabled={starting}>
               {aigcPolicyOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
