@@ -350,7 +350,7 @@ func (s *Server) mcpProviderStatus(ctx context.Context) ([]LocalMCPProviderStatu
 		status := LocalMCPProviderStatus{ProviderConfig: sanitizeMCPProvider(provider)}
 		if provider.Enabled {
 			checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			client := localmcp.NewClient(provider, &http.Client{Timeout: 3 * time.Second})
+			client := localmcp.NewClient(provider, nil)
 			tools, err := client.ListTools(checkCtx)
 			closeErr := client.Close()
 			cancel()

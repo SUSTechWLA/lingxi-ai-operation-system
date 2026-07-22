@@ -266,14 +266,106 @@ func TestClientHonorsShorterCallerDeadline(t *testing.T) {
 	}
 }
 
-func TestNewClientCapsHTTPTimeoutAtProviderTimeout(t *testing.T) {
-	client := NewClient(ProviderConfig{ID: "timeout", Endpoint: "https://example.invalid/mcp", TimeoutSec: 2, Enabled: true}, &http.Client{Timeout: 30 * time.Second})
-	if got := client.httpClient.Timeout; got != 2*time.Second {
-		t.Fatalf("HTTP timeout = %v, want provider timeout 2s", got)
+func TestNewClientDoesNotPromoteProviderTimeoutToHTTPClientLifetime(t *testing.T) {
+	client := NewClient(ProviderConfig{ID: "timeout", Endpoint: "https://example.invalid/mcp", TimeoutSec: 1, Enabled: true}, &http.Client{})
+	if got := client.httpClient.Timeout; got != 0 {
+		t.Fatalf("HTTP client lifetime timeout = %v, want unbounded transport lifetime", got)
 	}
-	shortClient := NewClient(ProviderConfig{ID: "shorter", Endpoint: "https://example.invalid/mcp", TimeoutSec: 2, Enabled: true}, &http.Client{Timeout: 500 * time.Millisecond})
-	if got := shortClient.httpClient.Timeout; got != 500*time.Millisecond {
-		t.Fatalf("shorter supplied HTTP timeout = %v, want 500ms", got)
+	supplied := NewClient(ProviderConfig{ID: "supplied", Endpoint: "https://example.invalid/mcp", TimeoutSec: 1, Enabled: true}, &http.Client{Timeout: 30 * time.Second})
+	if got := supplied.httpClient.Timeout; got != 30*time.Second {
+		t.Fatalf("explicit supplied HTTP timeout = %v, want preserved 30s", got)
+	}
+}
+
+func TestHTTPProviderSessionSurvivesBeyondPerOperationTimeout(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "session-lifetime", Version: "1.0.0"}, nil)
+	server.AddTool(&mcp.Tool{Name: "ping", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pong"}}}, nil
+	})
+	httpServer := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil))
+	defer httpServer.Close()
+	client := NewClient(ProviderConfig{ID: "session-lifetime", Endpoint: httpServer.URL, TimeoutSec: 1, Enabled: true}, httpServer.Client())
+	defer client.Close()
+
+	if _, err := client.ListTools(context.Background()); err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	result, err := client.CallTool(context.Background(), "ping", nil)
+	if err != nil {
+		t.Fatalf("second operation after provider timeout interval: %v", err)
+	}
+	if len(result.Content) != 1 || result.Content[0].Text != "pong" {
+		t.Fatalf("second operation result = %#v", result)
+	}
+}
+
+func TestHTTPTransportDoesNotOpenUnusedStandaloneSSE(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "no-push", Version: "1.0.0"}, nil)
+	server.AddTool(&mcp.Tool{Name: "ping", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{}, nil
+	})
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	standaloneGET := make(chan struct{}, 1)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			select {
+			case standaloneGET <- struct{}{}:
+			default:
+			}
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+	client := NewClient(ProviderConfig{ID: "no-push", Endpoint: httpServer.URL, Enabled: true}, httpServer.Client())
+	defer client.Close()
+	transport, err := client.newTransport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured, ok := transport.(*captureTransport)
+	if !ok {
+		t.Fatalf("transport = %T, want capture transport", transport)
+	}
+	streamable, ok := captured.base.(*mcp.StreamableClientTransport)
+	if !ok || !streamable.DisableStandaloneSSE {
+		t.Fatalf("streamable transport = %#v, want standalone SSE disabled", captured.base)
+	}
+	if _, err := client.ListTools(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-standaloneGET:
+		t.Fatal("HTTP transport opened an unused standalone SSE stream")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestHTTPClientCloseBoundsHangingDelete(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "bounded-delete", Version: "1.0.0"}, nil)
+	server.AddTool(&mcp.Tool{Name: "ping", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{}, nil
+	})
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			<-r.Context().Done()
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+	client := NewClient(ProviderConfig{ID: "bounded-delete", Endpoint: httpServer.URL, TimeoutSec: 5, Enabled: true}, httpServer.Client())
+	if _, err := client.ListTools(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	err := client.Close()
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Close hung on HTTP DELETE for %v", elapsed)
+	}
+	if err == nil || (!errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), context.DeadlineExceeded.Error())) {
+		t.Fatalf("Close error = %v, want bounded deadline", err)
 	}
 }
 

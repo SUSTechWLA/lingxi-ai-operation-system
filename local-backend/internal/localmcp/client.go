@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -18,6 +19,8 @@ import (
 const (
 	clientImplementationName    = "tangying-local-agent"
 	clientImplementationVersion = "0.1.0"
+	commandTerminateDuration    = 100 * time.Millisecond
+	defaultDeleteTimeout        = 500 * time.Millisecond
 )
 
 type Client struct {
@@ -37,11 +40,10 @@ func NewClient(cfg ProviderConfig, httpClient *http.Client) *Client {
 	}
 	capture := newWireCapture()
 	clonedHTTPClient := cloneHTTPClientWithHeaders(httpClient, cfg.Headers)
-	if cfg.TimeoutSec > 0 {
-		providerTimeout := time.Duration(cfg.TimeoutSec) * time.Second
-		if clonedHTTPClient.Timeout <= 0 || clonedHTTPClient.Timeout > providerTimeout {
-			clonedHTTPClient.Timeout = providerTimeout
-		}
+	clonedHTTPClient.Transport = methodTimeoutRoundTripper{
+		base:    clonedHTTPClient.Transport,
+		method:  http.MethodDelete,
+		timeout: deleteTimeout(cfg),
 	}
 	return &Client{
 		cfg:        cfg,
@@ -163,7 +165,7 @@ func (c *Client) newTransport() (mcp.Transport, error) {
 		if len(c.cfg.Env) > 0 {
 			cmd.Env = mergedEnvironment(os.Environ(), c.cfg.Env)
 		}
-		return &captureTransport{base: &mcp.CommandTransport{Command: cmd}, capture: c.capture}, nil
+		return &captureTransport{base: &mcp.CommandTransport{Command: cmd, TerminateDuration: commandTerminateDuration}, capture: c.capture}, nil
 	case "http":
 		endpoint := strings.TrimSpace(c.cfg.Endpoint)
 		if endpoint == "" {
@@ -172,7 +174,12 @@ func (c *Client) newTransport() (mcp.Transport, error) {
 		// Tool calls may be side-effecting. Do not replay POST requests after an
 		// ambiguous transport timeout; higher layers can make an explicit,
 		// policy-aware retry decision.
-		return &captureTransport{base: &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: c.httpClient, MaxRetries: -1}, capture: c.capture}, nil
+		return &captureTransport{base: &mcp.StreamableClientTransport{
+			Endpoint:             endpoint,
+			HTTPClient:           c.httpClient,
+			MaxRetries:           -1,
+			DisableStandaloneSSE: true,
+		}, capture: c.capture}, nil
 	default:
 		return nil, fmt.Errorf("mcp provider %q has unsupported transport %q", c.cfg.ID, c.cfg.Transport)
 	}
@@ -190,7 +197,24 @@ func (c *Client) Close() error {
 	err := c.session.Close()
 	c.session = nil
 	c.capture.clear()
-	return err
+	return normalizeCommandCloseError(err)
+}
+
+func normalizeCommandCloseError(err error) error {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return err
+	}
+	waitStatus, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !waitStatus.Signaled() {
+		return err
+	}
+	switch waitStatus.Signal() {
+	case syscall.SIGTERM, syscall.SIGKILL:
+		return nil
+	default:
+		return err
+	}
 }
 
 func (c *Client) mergeAndFilterTools(sdkTools, rawTools []Tool) []Tool {
@@ -300,6 +324,21 @@ type headerRoundTripper struct {
 	headers map[string]string
 }
 
+type methodTimeoutRoundTripper struct {
+	base    http.RoundTripper
+	method  string
+	timeout time.Duration
+}
+
+func (t methodTimeoutRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.Method != t.method || t.timeout <= 0 {
+		return t.base.RoundTrip(request)
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), t.timeout)
+	defer cancel()
+	return t.base.RoundTrip(request.Clone(ctx))
+}
+
 func (t headerRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
 	cloned := request.Clone(request.Context())
 	cloned.Header = request.Header.Clone()
@@ -325,6 +364,17 @@ func cloneHTTPClientWithHeaders(input *http.Client, headers map[string]string) *
 	}
 	cloned.Transport = headerRoundTripper{base: base, headers: copyHeaders}
 	return &cloned
+}
+
+func deleteTimeout(cfg ProviderConfig) time.Duration {
+	timeout := defaultDeleteTimeout
+	if cfg.TimeoutSec > 0 {
+		providerTimeout := time.Duration(cfg.TimeoutSec) * time.Second
+		if providerTimeout < timeout {
+			timeout = providerTimeout
+		}
+	}
+	return timeout
 }
 
 func mergedEnvironment(base []string, overrides map[string]string) []string {

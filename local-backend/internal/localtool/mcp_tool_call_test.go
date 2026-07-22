@@ -2,10 +2,11 @@ package localtool
 
 import (
 	"context"
-	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -127,8 +128,10 @@ func TestMCPToolCallExecutorHangingStdioHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HANGING_MCP_HELPER") != "1" {
 		return
 	}
-	_, _ = io.Copy(io.Discard, os.Stdin)
-	os.Exit(0)
+	signal.Ignore(syscall.SIGTERM)
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 
 func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {

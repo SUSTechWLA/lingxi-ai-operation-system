@@ -544,7 +544,7 @@ func TestMCPProviderStatusBoundsHangingSessionClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if elapsed := time.Since(started); elapsed > 4*time.Second {
+	if elapsed := time.Since(started); elapsed > 1500*time.Millisecond {
 		t.Fatalf("provider status hung during session close: %v", elapsed)
 	}
 	var slowCloseStatus *LocalMCPProviderStatus

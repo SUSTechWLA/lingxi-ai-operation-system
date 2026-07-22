@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -72,11 +71,10 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 	}
 	operationCtx, cancelOperation := context.WithDeadline(ctx, deadline)
 	defer cancelOperation()
-	httpTimeout := time.Until(deadline)
-	if httpTimeout <= 0 {
-		return nil, context.DeadlineExceeded
+	if err := operationCtx.Err(); err != nil {
+		return nil, err
 	}
-	client := localmcp.NewClient(provider, &http.Client{Timeout: httpTimeout})
+	client := localmcp.NewClient(provider, nil)
 	defer client.Close()
 	if requests := slicePayload(job.Payload, "externalGenerationRequests"); len(requests) > 0 {
 		return e.executeExternalGenerationBatch(operationCtx, client, provider.ID, toolName, job, requests)
