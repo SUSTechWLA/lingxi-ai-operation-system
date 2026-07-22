@@ -201,6 +201,14 @@ func TestServiceScopesJobsAndMCPCatalogsByUserTargetAndRevisionPostgres(t *testi
 		_, _ = pool.Exec(context.Background(), `DELETE FROM ai_task WHERE id=$1`, taskID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM local_runners WHERE id=ANY($1)`, []string{runnerA1.RunnerID, runnerA2.RunnerID, runnerB.RunnerID})
 	})
+	userCatalogs, err := service.ListOnlineRunnerMCPToolCatalogs(ctx, userA, "", "")
+	if err != nil || len(userCatalogs) != 2 {
+		t.Fatalf("list request-scoped user catalogs: catalogs=%#v err=%v", userCatalogs, err)
+	}
+	deviceCatalogs, err := service.ListOnlineRunnerMCPToolCatalogs(ctx, userA, prefix+"-device-a1", "")
+	if err != nil || len(deviceCatalogs) != 1 || deviceCatalogs[0].RunnerID != runnerA1.RunnerID {
+		t.Fatalf("list request-scoped device catalog: catalogs=%#v err=%v", deviceCatalogs, err)
+	}
 
 	nonMCP, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
 		UserID: userA, ProjectID: prefix + "-user-scope", TaskID: taskID, Command: CommandHyperFramesLint,

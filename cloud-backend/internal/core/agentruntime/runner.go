@@ -40,6 +40,9 @@ type StartRunRequest struct {
 	MaxCostLevel           string                 `json:"maxCostLevel,omitempty"`
 	MaxRiskLevel           string                 `json:"maxRiskLevel,omitempty"`
 	IdempotencyFingerprint string                 `json:"-"`
+	DeviceID               string                 `json:"-"`
+	TargetRunnerID         string                 `json:"-"`
+	requestToolSnapshot    *RequestToolSnapshot
 }
 
 type Run struct {
@@ -76,6 +79,12 @@ type Planner interface {
 // is responsible for obtaining the tool manifests it needs internally.
 type PlanRepairer interface {
 	RepairPlan(ctx context.Context, plan *AgentPlan, guardError string) (*AgentPlan, error)
+}
+
+// RequestScopedPlanRepairer guarantees that a repair turn sees the exact same
+// immutable tool snapshot as the original planning/guard/compile sequence.
+type RequestScopedPlanRepairer interface {
+	RepairPlanForRequest(ctx context.Context, req StartRunRequest, plan *AgentPlan, guardError string) (*AgentPlan, error)
 }
 
 type Orchestrator interface {
@@ -130,6 +139,7 @@ type Runner struct {
 	compiler     *PlanCompiler
 	planJudge    PlanJudge
 	terminal     RunTerminalCallback
+	toolResolver RequestToolSnapshotResolver
 }
 
 const asyncRunStartTimeout = 10 * time.Minute
@@ -151,6 +161,11 @@ func (r *Runner) WithPlanJudge(judge PlanJudge) *Runner {
 
 func (r *Runner) WithTerminalCallback(callback RunTerminalCallback) *Runner {
 	r.terminal = callback
+	return r
+}
+
+func (r *Runner) WithRequestToolResolver(resolver RequestToolSnapshotResolver) *Runner {
+	r.toolResolver = resolver
 	return r
 }
 
@@ -280,6 +295,19 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 	if err := r.abortIfCancelled(ctx, run); err != nil {
 		return nil, err
 	}
+	if r.toolResolver != nil {
+		snapshot, resolveErr := r.toolResolver.Resolve(ctx, req.UserID, req.DeviceID, req.TargetRunnerID)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve request tool snapshot: %w", resolveErr)
+		}
+		req.requestToolSnapshot = snapshot
+	}
+	guard := r.guard
+	compiler := r.compiler
+	if req.requestToolSnapshot != nil {
+		guard = r.guard.withToolCatalog(req.requestToolSnapshot)
+		compiler = r.compiler.withToolCatalog(req.requestToolSnapshot)
+	}
 	plan, err := r.planner.GeneratePlan(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("generate agent plan: %w", err)
@@ -288,20 +316,33 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 		return nil, err
 	}
 	applyRequestPlanDefaults(plan, req)
-	plan = r.compiler.PreparePlan(plan)
+	plan = compiler.PreparePlan(plan)
 	applyShotRegenerationPlanScope(plan, req.Context)
-	if err := r.guard.ValidatePlan(ctx, req.UserID, plan); err != nil {
-		// Attempt plan repair if the planner supports it.
-		if repairer, ok := r.planner.(PlanRepairer); ok {
+	if err := guard.ValidatePlan(ctx, req.UserID, plan); err != nil {
+		// Attempt plan repair with the same request-scoped tool snapshot. An old
+		// unscoped repairer is never used for a dynamic snapshot run because it
+		// could silently drop or replace runner-local tools.
+		var repaired *AgentPlan
+		var repairErr error
+		canRepair := false
+		if repairer, ok := r.planner.(RequestScopedPlanRepairer); ok {
+			canRepair = true
+			repaired, repairErr = repairer.RepairPlanForRequest(ctx, req, plan, err.Error())
+		} else if req.requestToolSnapshot == nil {
+			if repairer, ok := r.planner.(PlanRepairer); ok {
+				canRepair = true
+				repaired, repairErr = repairer.RepairPlan(ctx, plan, err.Error())
+			}
+		}
+		if canRepair {
 			zap.L().Warn("agent plan guard validation failed, attempting repair",
 				zap.Error(err),
 			)
-			repaired, repairErr := repairer.RepairPlan(ctx, plan, err.Error())
 			if repairErr == nil && repaired != nil {
 				applyRequestPlanDefaults(repaired, req)
-				repaired = r.compiler.PreparePlan(repaired)
+				repaired = compiler.PreparePlan(repaired)
 				applyShotRegenerationPlanScope(repaired, req.Context)
-				revalidateErr := r.guard.ValidatePlan(ctx, req.UserID, repaired)
+				revalidateErr := guard.ValidatePlan(ctx, req.UserID, repaired)
 				if revalidateErr == nil {
 					plan = repaired
 					zap.L().Info("agent plan repaired successfully")
@@ -311,6 +352,8 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 			} else if repairErr != nil {
 				zap.L().Warn("agent plan repair failed", zap.Error(repairErr))
 			}
+		} else if req.requestToolSnapshot != nil {
+			zap.L().Warn("agent plan repair skipped because planner has no request-scoped repair contract", zap.Error(err))
 		}
 		return nil, fmt.Errorf("guard agent plan: %w", err)
 	}
@@ -325,7 +368,7 @@ planOK:
 		return nil, fmt.Errorf("agent plan failed video beta validation: %s", summarizePlanJudgeWarnings(judgeReport.Warnings))
 	}
 
-	dag, err := r.compiler.Compile(plan)
+	dag, err := compiler.Compile(plan)
 	if err != nil {
 		return nil, fmt.Errorf("compile agent plan: %w", err)
 	}
@@ -355,6 +398,9 @@ planOK:
 	run.UpdatedAt = now
 	run.Metadata = map[string]interface{}{
 		"mode": plan.Mode, "agentToolTrace": agentToolTrace, "requestContext": sanitizedRunContext(req.Context),
+	}
+	if req.requestToolSnapshot != nil && len(req.requestToolSnapshot.runners) > 0 {
+		run.Metadata["mcpCatalogSnapshot"] = req.requestToolSnapshot.RunnerRevisions()
 	}
 	if len(judgeReport.Warnings) > 0 {
 		run.Metadata["planJudgeWarnings"] = judgeReport.Warnings

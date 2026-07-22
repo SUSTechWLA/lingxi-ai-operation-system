@@ -33,6 +33,13 @@ func (g *PlanGuard) WithDirectors(directors DirectorRegistry) *PlanGuard {
 	return g
 }
 
+func (g *PlanGuard) withToolCatalog(tools ToolCatalog) *PlanGuard {
+	if g == nil {
+		return nil
+	}
+	return &PlanGuard{tools: tools, localValidator: g.localValidator, directors: g.directors}
+}
+
 func (g *PlanGuard) Validate(plan *AgentPlan) error {
 	return g.ValidatePlan(context.Background(), "", plan)
 }

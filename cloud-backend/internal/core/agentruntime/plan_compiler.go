@@ -56,6 +56,13 @@ func (c *PlanCompiler) WithDirectors(directors DirectorRegistry) *PlanCompiler {
 	return c
 }
 
+func (c *PlanCompiler) withToolCatalog(tools ToolCatalog) *PlanCompiler {
+	if c == nil {
+		return nil
+	}
+	return &PlanCompiler{tools: tools, directors: c.directors}
+}
+
 func (c *PlanCompiler) Compile(plan *AgentPlan) (*model.DAGRequest, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("agent plan is required")
@@ -3173,7 +3180,10 @@ func buildToolNode(nodeID string, step AgentStep, manifest *tool.ToolManifest) m
 
 	nodeName := step.Tool
 	inputTool := step.Tool
-	if requiresExternalBridge(manifest) {
+	if isRequestScopedMCPProviderTool(manifest) {
+		nodeName = LocalMCPGatewayToolName
+		inputTool = LocalMCPGatewayToolName
+	} else if requiresExternalBridge(manifest) {
 		nodeName = "external"
 		inputTool = "external"
 	}
@@ -3212,6 +3222,12 @@ func requiresExternalBridge(manifest *tool.ToolManifest) bool {
 	return toolType == "external" || strings.Contains(toolType, "prompt_tool") || toolType == "http" || toolType == "grpc"
 }
 
+func isRequestScopedMCPProviderTool(manifest *tool.ToolManifest) bool {
+	return isMCPProviderTool(manifest) && manifest.ProviderBinding != nil &&
+		strings.TrimSpace(manifest.ProviderBinding.TargetRunnerID) != "" &&
+		strings.TrimSpace(manifest.ProviderBinding.CatalogRevision) != ""
+}
+
 func applyMCPProviderToolPayload(params, args map[string]interface{}, step AgentStep, manifest *tool.ToolManifest) {
 	if params == nil || manifest == nil {
 		return
@@ -3238,9 +3254,21 @@ func applyMCPProviderToolPayload(params, args map[string]interface{}, step Agent
 	params["localCommand"] = "LOCAL_MCP_TOOL_CALL"
 	params["providerId"] = providerID
 	params["toolName"] = remoteToolName
+	params["remoteToolName"] = remoteToolName
 	params["logicalToolName"] = logicalToolName
 	params["input"] = copyMap(args)
 	params["arguments"] = copyMap(args)
+	if manifest.ProviderBinding != nil {
+		if manifest.ProviderBinding.TargetRunnerID != "" {
+			params["targetRunnerId"] = manifest.ProviderBinding.TargetRunnerID
+		}
+		if manifest.ProviderBinding.CatalogRevision != "" {
+			params["catalogRevision"] = manifest.ProviderBinding.CatalogRevision
+		}
+		if manifest.ProviderBinding.DeviceID != "" {
+			params["deviceId"] = manifest.ProviderBinding.DeviceID
+		}
+	}
 	if manifest.Timeout > 0 {
 		params["timeout"] = manifest.Timeout
 		params["timeoutSec"] = manifest.Timeout

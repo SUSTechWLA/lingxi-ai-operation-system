@@ -79,3 +79,38 @@ func TestCatalogAdvertisesBoundProviderAndRemoteTool(t *testing.T) {
 		t.Fatal("unadvertised remote tool must not match")
 	}
 }
+
+func TestBindMCPContractSnapshotCapturesNonSecretCanonicalSchemas(t *testing.T) {
+	tools := []MCPToolAdvertisement{{
+		ProviderID: "studio", LogicalToolName: "studio.render", RemoteToolName: "render",
+		InputSchema: map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{"prompt": map[string]interface{}{"type": "string"}},
+			"required": []interface{}{"prompt"}, "additionalProperties": false,
+		},
+		OutputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"assetId": map[string]interface{}{"type": "string"}}},
+	}}
+	revision := MCPToolCatalogRevision(tools)
+	req := &DispatchLocalJobRequest{
+		MCPProviderID: "studio", MCPLogicalToolName: "studio.render", MCPRemoteToolName: "render",
+		CatalogRevision: revision, Payload: map[string]interface{}{"arguments": map[string]interface{}{"prompt": "hello"}},
+	}
+	catalog := &RunnerMCPToolCatalog{RunnerID: "runner-a", UserID: "user-a", Revision: revision, Tools: tools}
+	if err := bindMCPContractSnapshot(req, catalog); err != nil {
+		t.Fatalf("bindMCPContractSnapshot returned error: %v", err)
+	}
+	snapshot, _ := req.Payload[mcpContractSnapshotKey].(map[string]interface{})
+	if snapshot["catalogRevision"] != revision || snapshot["providerId"] != "studio" || snapshot["remoteToolName"] != "render" {
+		t.Fatalf("immutable contract binding missing: %#v", snapshot)
+	}
+	if _, ok := snapshot["outputSchema"].(map[string]interface{}); !ok {
+		t.Fatalf("canonical output schema missing: %#v", snapshot)
+	}
+	if _, exists := snapshot["command"]; exists {
+		t.Fatalf("provider transport leaked into contract snapshot: %#v", snapshot)
+	}
+	invalid := *req
+	invalid.Payload = map[string]interface{}{"arguments": map[string]interface{}{}}
+	if err := bindMCPContractSnapshot(&invalid, catalog); err == nil || !strings.Contains(err.Error(), "INPUT_SCHEMA_INVALID") {
+		t.Fatalf("invalid dynamic arguments must fail before queueing, got %v", err)
+	}
+}

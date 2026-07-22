@@ -355,12 +355,16 @@ func BuildCloudSpec() *Spec {
 		ResponseJSON("404", "Tool not found", "ErrorResponse")
 	b.Route("POST", "/api/tools/register", "Register an external tool").
 		Tags("Tools").
+		HeaderParam("X-Internal-Tool-Token", "Internal control-plane authorization token", StringSchema(), true).
 		BodyInlineJSON(ObjectSchema(), "Tool manifest", true).
-		ResponseJSON("200", "Registered", "ToolRegisterResponse")
+		ResponseJSON("200", "Registered", "ToolRegisterResponse").
+		ResponseJSON("403", "Internal control-plane authorization required", "ErrorResponse")
 	b.Route("DELETE", "/api/tools/:name", "Deregister an external tool").
 		Tags("Tools").
+		HeaderParam("X-Internal-Tool-Token", "Internal control-plane authorization token", StringSchema(), true).
 		PathParam("name", "Tool name", StringSchema()).
 		ResponseJSON("200", "Deregistered", "GenericOKResponse").
+		ResponseJSON("403", "Internal control-plane authorization required", "ErrorResponse").
 		ResponseJSON("404", "Not found", "ErrorResponse")
 
 	// ── Skills ──

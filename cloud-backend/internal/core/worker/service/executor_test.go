@@ -138,6 +138,46 @@ func TestExecuteNodeExternalBridgeDispatchesDelegatedLocalTool(t *testing.T) {
 	}
 }
 
+func TestExecuteNodeRequestScopedMCPGatewayDispatchesImmutableBinding(t *testing.T) {
+	ctx := context.Background()
+	registry := tool.NewToolRegistry()
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID: "node_dynamic_mcp", TaskID: "task_001", Type: model.NodeTypeTool, Status: model.NodeReady,
+		Input: map[string]interface{}{"tool": localMCPGatewayToolName},
+	})
+	dispatcher := &fakeLocalJobDispatcher{job: &localrunner.LocalJob{ID: "local_job_dynamic_mcp"}}
+	nodeExecutor := NewNodeExecutor(registry, nil, config.WorkerConfig{}, nil, nil, nodeRepo)
+	nodeExecutor.SetLocalJobDispatcher(dispatcher)
+	revision := strings.Repeat("a", 64)
+	nodeExecutor.ExecuteNode(ctx, eventbus.Event{
+		TaskID: "task_001", NodeID: "node_dynamic_mcp", Type: string(model.NodeTypeTool),
+		Payload: map[string]interface{}{
+			"tool": localMCPGatewayToolName,
+			"parameters": map[string]interface{}{
+				"localCommand": "LOCAL_MCP_TOOL_CALL", "targetRunnerId": "runner-a", "catalogRevision": revision,
+				"providerId": "studio", "logicalToolName": "studio.render", "remoteToolName": "render",
+				"arguments": map[string]interface{}{"prompt": "hello"}, "timeoutSec": float64(90),
+			},
+		},
+	})
+
+	req := dispatcher.req
+	if req.TargetRunnerID != "runner-a" || req.CatalogRevision != revision || req.MCPProviderID != "studio" ||
+		req.MCPLogicalToolName != "studio.render" || req.MCPRemoteToolName != "render" {
+		t.Fatalf("immutable MCP binding was not dispatched: %#v", req)
+	}
+	arguments, _ := req.Payload["arguments"].(map[string]interface{})
+	if len(req.Payload) != 1 || arguments["prompt"] != "hello" {
+		t.Fatalf("gateway must dispatch only logical arguments, got %#v", req.Payload)
+	}
+	if req.ToolName != "studio.render" || req.Command != "LOCAL_MCP_TOOL_CALL" || req.TimeoutSec != 90 {
+		t.Fatalf("unexpected gateway dispatch: %#v", req)
+	}
+	if nodeRepo.updatedStatus != model.NodeWaitingLocal {
+		t.Fatalf("node status=%s, want WAITING_LOCAL", nodeRepo.updatedStatus)
+	}
+}
+
 func TestExecuteNodeExternalBridgeResolvesProjectIDFromTask(t *testing.T) {
 	ctx := context.Background()
 	registry := tool.NewToolRegistry()

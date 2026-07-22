@@ -476,47 +476,6 @@ func RegisterVideoCreationExternalTools(registry *tool.ToolRegistry) {
 
 		registry.RegisterExternal(manifest)
 	}
-	registerBundledIPAvatarMCPManifest(registry)
-}
-
-func registerBundledIPAvatarMCPManifest(registry *tool.ToolRegistry) {
-	if registry == nil {
-		return
-	}
-	provider := tool.MCPProviderConfig{
-		ID:           "ip_avatar_3d",
-		Label:        "Tangying 3D IP Avatar",
-		Transport:    "stdio",
-		ToolPrefix:   "ip_avatar_3d.",
-		Enabled:      true,
-		Timeout:      3600,
-		ApprovalMode: "before_execute",
-	}
-	inputSchema := map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"script": map[string]interface{}{
-				"type":        "string",
-				"description": "Narration used for voice, visemes, and body motion.",
-			},
-			"characterProfilePath": map[string]interface{}{"type": "string"},
-			"presentationMode":     map[string]interface{}{"type": "string"},
-			"cameraPreset":         map[string]interface{}{"type": "string"},
-			"actionSequence":       map[string]interface{}{"type": "array"},
-			"width":                map[string]interface{}{"type": "number"},
-			"height":               map[string]interface{}{"type": "number"},
-			"fps":                  map[string]interface{}{"type": "number"},
-			"renderMode":           map[string]interface{}{"type": "string"},
-		},
-		"required": []interface{}{"script"},
-	}
-	for _, manifest := range tool.ManifestsFromMCPTools(provider, []tool.MCPTool{{
-		Name:        "render_talking_video",
-		Description: "Render a continuous controllable 3D IP talking-head A-roll video on the user's local device.",
-		InputSchema: inputSchema,
-	}}) {
-		registry.RegisterExternal(manifest)
-	}
 }
 
 func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifest) {

@@ -46,11 +46,12 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 		domain = inferDomain(req.Message)
 	}
 
+	requestTools := toolProviderForRequest(req, p.tools)
 	// Use HybridToolRetriever for multi-signal scoring instead of brute-force
 	// heuristic selection. This selects tools by capability, keyword, tag, cost,
 	// and risk relevance rather than a single-domain filter.
 	knowledgePolicy := DefaultKnowledgePolicy(req.Message, domain)
-	retriever := NewHybridToolRetriever(p.tools.ListManifests())
+	retriever := NewHybridToolRetriever(requestTools.ListManifests())
 	candidates, err := retriever.Retrieve(ctx, RetrieveRequest{
 		UserInput:       req.Message,
 		Domain:          domain,
@@ -102,7 +103,7 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 	if err := jsonx.ExtractJSON(raw, &plan); err != nil {
 		return nil, fmt.Errorf("parse llm agent plan: %w", err)
 	}
-	allManifests := p.tools.ListManifests()
+	allManifests := requestTools.ListManifests()
 	normalizeLLMPlan(&plan, req, domain, p.maxTools, allManifests)
 	if plan.ToolTrace == nil {
 		plan.ToolTrace = &ToolTrace{}
@@ -175,6 +176,13 @@ func (p *LLMPlanner) RepairPlan(ctx context.Context, originalPlan *AgentPlan, gu
 	}
 	manifests := p.tools.ListManifests()
 	return p.repairPlanWithManifests(ctx, originalPlan, guardError, manifests)
+}
+
+func (p *LLMPlanner) RepairPlanForRequest(ctx context.Context, req StartRunRequest, originalPlan *AgentPlan, guardError string) (*AgentPlan, error) {
+	if p == nil || p.tools == nil {
+		return nil, fmt.Errorf("llm planner not configured for request-scoped repair")
+	}
+	return p.repairPlanWithManifests(ctx, originalPlan, guardError, toolProviderForRequest(req, p.tools).ListManifests())
 }
 
 // repairPlanWithManifests is the core repair logic with explicit manifests.
@@ -262,6 +270,19 @@ func (p *HybridPlanner) RepairPlan(ctx context.Context, plan *AgentPlan, guardEr
 		return repairer.RepairPlan(ctx, plan, guardError)
 	}
 	return nil, fmt.Errorf("no planner in hybrid chain supports plan repair")
+}
+
+func (p *HybridPlanner) RepairPlanForRequest(ctx context.Context, req StartRunRequest, plan *AgentPlan, guardError string) (*AgentPlan, error) {
+	if p == nil {
+		return nil, fmt.Errorf("hybrid planner is not configured")
+	}
+	if repairer, ok := p.primary.(RequestScopedPlanRepairer); ok {
+		return repairer.RepairPlanForRequest(ctx, req, plan, guardError)
+	}
+	if repairer, ok := p.fallback.(RequestScopedPlanRepairer); ok {
+		return repairer.RepairPlanForRequest(ctx, req, plan, guardError)
+	}
+	return nil, fmt.Errorf("no planner in hybrid chain supports request-scoped plan repair")
 }
 
 type OpenAIPlannerClient struct {

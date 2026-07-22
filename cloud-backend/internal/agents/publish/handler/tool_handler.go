@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"context"
+	"crypto/subtle"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -10,12 +13,23 @@ import (
 )
 
 type ToolHandler struct {
-	registry    *tool.ToolRegistry
-	manifestSvc *tool.ToolManifestService
+	registry                  *tool.ToolRegistry
+	manifestSvc               toolManifestWriter
+	registrationInternalToken string
 }
 
-func NewToolHandler(registry *tool.ToolRegistry, manifestSvc *tool.ToolManifestService) *ToolHandler {
+type toolManifestWriter interface {
+	RegisterExternal(ctx context.Context, manifest *tool.ToolManifest) error
+	DeregisterExternal(ctx context.Context, name string) error
+}
+
+func NewToolHandler(registry *tool.ToolRegistry, manifestSvc toolManifestWriter) *ToolHandler {
 	return &ToolHandler{registry: registry, manifestSvc: manifestSvc}
+}
+
+func (h *ToolHandler) WithRegistrationInternalToken(token string) *ToolHandler {
+	h.registrationInternalToken = token
+	return h
 }
 
 func (h *ToolHandler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
@@ -59,6 +73,9 @@ func (h *ToolHandler) GetTool(c *gin.Context) {
 
 // RegisterTool registers an external tool manifest and persists it to the database.
 func (h *ToolHandler) RegisterTool(c *gin.Context) {
+	if !h.authorizeGlobalMutation(c) {
+		return
+	}
 	var manifest tool.ToolManifest
 	if err := c.ShouldBindJSON(&manifest); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -117,6 +134,9 @@ func (h *ToolHandler) RegisterTool(c *gin.Context) {
 
 // DeregisterTool removes an external tool registration from DB and registry.
 func (h *ToolHandler) DeregisterTool(c *gin.Context) {
+	if !h.authorizeGlobalMutation(c) {
+		return
+	}
 	name := c.Param("name")
 	if err := h.manifestSvc.DeregisterExternal(c.Request.Context(), name); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -131,4 +151,18 @@ func (h *ToolHandler) DeregisterTool(c *gin.Context) {
 		"message": "tool deregistered successfully",
 		"data":    nil,
 	})
+}
+
+func (h *ToolHandler) authorizeGlobalMutation(c *gin.Context) bool {
+	expected := h.registrationInternalToken
+	provided := c.GetHeader("X-Internal-Tool-Token")
+	if strings.TrimSpace(expected) == "" || len(provided) != len(expected) || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    http.StatusForbidden,
+			"message": "global tool registration is restricted to the internal control plane",
+			"data":    nil,
+		})
+		return false
+	}
+	return true
 }

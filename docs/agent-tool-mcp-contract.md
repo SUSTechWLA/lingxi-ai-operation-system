@@ -149,6 +149,32 @@ provider-specific planner, compiler branch, JSON-RPC client, or runner command.
 The production client uses the official MCP SDK instead of handwritten protocol
 messages.
 
+Discovery does not mutate the cloud-global tool catalog. The runner advertises
+only the safe `tools/list` projection (provider ID, normalized logical and
+remote names, schemas, standard annotation hints, timeout, approval mode, and a
+SHA-256 catalog revision). At the start of one Agent run, the cloud resolves
+online catalogs using the authenticated user and device plus an optional
+runner selection. It combines those virtual manifests with the static catalog
+in an immutable request snapshot used by the Planner, Guard, and Compiler.
+Nothing from that snapshot is written to the global registry, database, or
+Redis.
+
+Two devices advertising the same logical tool name are ambiguous unless the
+request selects one authenticated device/runner. A catalog returned for another
+user or device fails closed. The compiled hidden local gateway carries
+`targetRunnerId`, `catalogRevision`, `providerId`, `remoteToolName`,
+`logicalToolName`, and logical `arguments`. Dispatch rechecks ownership,
+online state, revision, and exact advertised binding. A changed revision fails
+with `MCP_CATALOG_STALE`; the run must replan instead of silently calling a
+different tool version. Bundled providers such as the IP Avatar enter planning
+through this real runner advertisement, not a hardcoded cloud-global manifest.
+After that check, the cloud-owned local job stores the selected non-secret
+input/output schemas and binding revision as an immutable contract snapshot.
+Completion validates MCP `structuredContent` against that snapshot, so a later
+heartbeat cannot change the result contract and no global registry lookup is
+needed. MCP `isError=true`, a mismatched snapshot, or invalid structured output
+fails the job instead of publishing node success.
+
 Provider responses preserve all standard text, image, audio, resource, and
 embedded-resource content. Structured content and unknown raw extension fields
 are retained so a newer conforming server does not lose information when
@@ -168,6 +194,12 @@ Provider registration fails closed. When `approvalMode` is omitted or blank,
 the Local Agent normalizes it to `before_execute`. A provider may bypass that
 review gate only by explicitly setting `approvalMode` to `none`; invalid values
 are rejected and cannot overwrite the last valid configuration.
+
+Cloud-global tool mutation is a separate internal control-plane operation.
+`POST /api/tools/register` and `DELETE /api/tools/:name` require the
+`X-Internal-Tool-Token` header to match
+`TOOL_REGISTRATION_INTERNAL_TOKEN`; an ordinary authenticated user cannot add a
+manifest to the shared catalog. An empty server token disables these mutations.
 
 ## Registration example
 

@@ -26,6 +26,8 @@ import (
 // nodeRefPattern matches {{node_id.output.field}} references in node inputs.
 var nodeRefPattern = regexp.MustCompile(`\{\{([^.]+)\.output\.([^}]+)\}\}`)
 
+const localMCPGatewayToolName = "__local_mcp_gateway__"
+
 type NodeExecutor struct {
 	toolRegistry    *tool.ToolRegistry
 	producer        eventbus.EventPublisher
@@ -535,6 +537,20 @@ func (ne *NodeExecutor) localExecutionManifest(toolName string, parameters map[s
 	if manifest != nil && manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
 		return manifest
 	}
+	if toolName == localMCPGatewayToolName {
+		if localrunner.NormalizeCommand(firstString(parameters, nil, "localCommand")) != localrunner.CommandLocalMCPToolCall {
+			return nil
+		}
+		logicalToolName := firstString(parameters, nil, "logicalToolName")
+		if logicalToolName == "" || firstString(parameters, nil, "targetRunnerId") == "" || firstString(parameters, nil, "catalogRevision") == "" {
+			return nil
+		}
+		return &tool.ToolManifest{
+			Name: logicalToolName, Type: "mcp", Boundary: tool.BoundaryMCPProvider,
+			ExecutionPlane: tool.ExecutionPlaneLocal, LocalCommand: localrunner.CommandLocalMCPToolCall,
+			RequiresUserDevice: true, Timeout: timeoutSecFromParameters(parameters),
+		}
+	}
 	if toolName != "external" || ne.toolRegistry == nil {
 		return nil
 	}
@@ -606,17 +622,31 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		jobTimeoutSec = timeoutSec + 45
 	}
 
-	job, err := ne.localDispatcher.DispatchLocalJob(ctx, localrunner.DispatchLocalJobRequest{
+	dispatchPayload := parameters
+	dispatchRequest := localrunner.DispatchLocalJobRequest{
 		ProjectID:      projectID,
 		TaskID:         event.TaskID,
 		NodeID:         event.NodeID,
 		ToolName:       manifest.Name,
 		Command:        command,
-		Payload:        parameters,
+		Payload:        dispatchPayload,
 		TimeoutSec:     jobTimeoutSec,
 		ArtifactPolicy: localArtifactPolicyForManifest(manifest),
 		IdempotencyKey: idempotencyKey,
-	})
+	}
+	if localrunner.NormalizeCommand(command) == localrunner.CommandLocalMCPToolCall && firstString(parameters, nil, "targetRunnerId") != "" {
+		dispatchRequest.TargetRunnerID = firstString(parameters, nil, "targetRunnerId")
+		dispatchRequest.CatalogRevision = firstString(parameters, nil, "catalogRevision")
+		dispatchRequest.MCPProviderID = firstString(parameters, nil, "providerId")
+		dispatchRequest.MCPLogicalToolName = firstString(parameters, nil, "logicalToolName")
+		dispatchRequest.MCPRemoteToolName = firstString(parameters, nil, "remoteToolName", "toolName")
+		if arguments, ok := parameters["arguments"].(map[string]interface{}); ok {
+			dispatchRequest.Payload = map[string]interface{}{"arguments": cloneExecutionMap(arguments)}
+		} else {
+			dispatchRequest.Payload = map[string]interface{}{"arguments": map[string]interface{}{}}
+		}
+	}
+	job, err := ne.localDispatcher.DispatchLocalJob(ctx, dispatchRequest)
 	if err != nil {
 		return err
 	}

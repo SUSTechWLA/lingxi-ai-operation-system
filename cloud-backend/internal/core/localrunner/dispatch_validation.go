@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
+
+const mcpContractSnapshotKey = "_mcpContract"
 
 func validateMCPDispatchBinding(req *DispatchLocalJobRequest) error {
 	if req == nil {
@@ -98,4 +102,49 @@ func catalogAdvertisesBinding(catalog MCPToolCatalog, providerID, logicalToolNam
 		}
 	}
 	return false
+}
+
+// bindMCPContractSnapshot persists the non-secret canonical schemas and exact
+// catalog identity inside the cloud-owned job payload after user arguments
+// have passed routing-override checks. This keeps result verification stable
+// even if the runner advertises a newer catalog after executing the job.
+func bindMCPContractSnapshot(req *DispatchLocalJobRequest, catalog *RunnerMCPToolCatalog) error {
+	if req == nil || catalog == nil {
+		return fmt.Errorf("MCP_CATALOG_REPLAN_REQUIRED: bound MCP catalog is unavailable")
+	}
+	for _, advertised := range catalog.Tools {
+		if advertised.ProviderID != req.MCPProviderID || advertised.LogicalToolName != req.MCPLogicalToolName || advertised.RemoteToolName != req.MCPRemoteToolName {
+			continue
+		}
+		arguments, _ := req.Payload["arguments"].(map[string]interface{})
+		if arguments == nil {
+			arguments = map[string]interface{}{}
+		}
+		if err := tool.ValidateManifestInput(&tool.ToolManifest{InputSchema: advertised.InputSchema}, arguments); err != nil {
+			return fmt.Errorf("INPUT_SCHEMA_INVALID: %w", err)
+		}
+		wire, err := json.Marshal(map[string]interface{}{
+			"catalogRevision": catalog.Revision,
+			"providerId":      advertised.ProviderID,
+			"logicalToolName": advertised.LogicalToolName,
+			"remoteToolName":  advertised.RemoteToolName,
+			"inputSchema":     advertised.InputSchema,
+			"outputSchema":    advertised.OutputSchema,
+			"approvalMode":    advertised.ApprovalMode,
+			"timeoutSec":      advertised.TimeoutSec,
+		})
+		if err != nil {
+			return fmt.Errorf("encode MCP contract snapshot: %w", err)
+		}
+		var snapshot map[string]interface{}
+		if err := json.Unmarshal(wire, &snapshot); err != nil {
+			return fmt.Errorf("decode MCP contract snapshot: %w", err)
+		}
+		if req.Payload == nil {
+			req.Payload = map[string]interface{}{}
+		}
+		req.Payload[mcpContractSnapshotKey] = snapshot
+		return nil
+	}
+	return fmt.Errorf("MCP_CATALOG_REPLAN_REQUIRED: exact MCP contract is not advertised")
 }

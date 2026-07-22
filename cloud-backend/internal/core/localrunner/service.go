@@ -242,7 +242,7 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 		if err := validateMCPDispatchBinding(&req); err != nil {
 			return nil, err
 		}
-		if err := s.validateMCPDispatchTarget(ctx, req); err != nil {
+		if err := s.validateMCPDispatchTarget(ctx, &req); err != nil {
 			return nil, err
 		}
 		payload = req.Payload
@@ -375,21 +375,24 @@ func validateResolvedDispatchOwner(resolvedUserID, requestedUserID string) error
 	return nil
 }
 
-func (s *Service) validateMCPDispatchTarget(ctx context.Context, req DispatchLocalJobRequest) error {
+func (s *Service) validateMCPDispatchTarget(ctx context.Context, req *DispatchLocalJobRequest) error {
+	if req == nil {
+		return fmt.Errorf("MCP dispatch request is required")
+	}
 	catalog, err := s.GetOnlineRunnerMCPToolCatalog(ctx, req.UserID, "", req.TargetRunnerID)
 	if err != nil {
 		return err
 	}
 	if catalog == nil {
-		return fmt.Errorf("target MCP runner is not online or does not belong to the task user")
+		return fmt.Errorf("MCP_CATALOG_REPLAN_REQUIRED: target MCP runner is not online or does not belong to the task user")
 	}
 	if catalog.Revision != req.CatalogRevision {
-		return fmt.Errorf("target MCP runner catalog revision is stale")
+		return fmt.Errorf("MCP_CATALOG_STALE: target MCP runner catalog changed; create a new plan")
 	}
 	if !catalogAdvertisesBinding(MCPToolCatalog{Revision: catalog.Revision, Tools: catalog.Tools}, req.MCPProviderID, req.MCPLogicalToolName, req.MCPRemoteToolName) {
-		return fmt.Errorf("target MCP runner does not advertise the bound provider/tool")
+		return fmt.Errorf("MCP_CATALOG_REPLAN_REQUIRED: target MCP runner no longer advertises the bound provider/tool")
 	}
-	return nil
+	return bindMCPContractSnapshot(req, catalog)
 }
 
 func (s *Service) validateCommandDispatchTarget(ctx context.Context, userID, runnerID, command string) error {
@@ -660,6 +663,63 @@ func (s *Service) GetOnlineRunnerMCPToolCatalog(ctx context.Context, userID, dev
 		RunnerID: id, DeviceID: dbDeviceID, UserID: dbUserID,
 		Revision: catalog.Revision, Tools: catalog.Tools, LastHeartbeat: lastHeartbeat,
 	}, nil
+}
+
+// ListOnlineRunnerMCPToolCatalogs returns every currently online catalog in
+// the authenticated request scope. Callers use the complete list to reject
+// same-name tools across devices instead of silently choosing the most recent
+// heartbeat.
+func (s *Service) ListOnlineRunnerMCPToolCatalogs(ctx context.Context, userID, deviceID, runnerID string) ([]RunnerMCPToolCatalog, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, COALESCE(user_id,''), COALESCE(device_id,''), capabilities, last_heartbeat
+		 FROM local_runners
+		 WHERE COALESCE(user_id,'')=$1
+		   AND ($2='' OR device_id=$2)
+		   AND ($3='' OR id=$3)
+		   AND status='ONLINE'
+		   AND last_heartbeat > NOW() - INTERVAL '90 seconds'
+		   AND EXISTS (
+		     SELECT 1 FROM jsonb_array_elements(COALESCE(capabilities,'[]'::jsonb)) cap
+		     WHERE cap->>'command'=$4
+		       AND COALESCE((cap->>'available')::boolean, false)=true
+		       AND COALESCE(cap->>'catalogRevision','')<>''
+		   )
+		 ORDER BY id`,
+		strings.TrimSpace(userID), strings.TrimSpace(deviceID), strings.TrimSpace(runnerID), CommandLocalMCPToolCall,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list online runner MCP catalogs: %w", err)
+	}
+	defer rows.Close()
+
+	catalogs := make([]RunnerMCPToolCatalog, 0)
+	for rows.Next() {
+		var id, dbUserID, dbDeviceID string
+		var capabilitiesJSON []byte
+		var lastHeartbeat time.Time
+		if err := rows.Scan(&id, &dbUserID, &dbDeviceID, &capabilitiesJSON, &lastHeartbeat); err != nil {
+			return nil, fmt.Errorf("scan online runner MCP catalog: %w", err)
+		}
+		var capabilities []RunnerCapability
+		if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
+			return nil, fmt.Errorf("decode online runner MCP catalog: %w", err)
+		}
+		if err := ValidateRunnerCapabilities(capabilities); err != nil {
+			return nil, fmt.Errorf("stored runner MCP catalog is invalid: %w", err)
+		}
+		catalog, ok := MCPToolCatalogFromCapabilities(capabilities)
+		if !ok {
+			continue
+		}
+		catalogs = append(catalogs, RunnerMCPToolCatalog{
+			RunnerID: id, DeviceID: dbDeviceID, UserID: dbUserID,
+			Revision: catalog.Revision, Tools: append([]MCPToolAdvertisement(nil), catalog.Tools...), LastHeartbeat: lastHeartbeat,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate online runner MCP catalogs: %w", err)
+	}
+	return catalogs, nil
 }
 
 // ValidateRunnerAccess verifies that a runner exists, belongs to the given user and device,

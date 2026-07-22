@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 )
@@ -208,6 +209,10 @@ func (h *Handler) StartRun(c *gin.Context) {
 		return
 	}
 	req.UserID = userID
+	if deviceID, ok := auth.DeviceIDFromContext(c.Request.Context()); ok {
+		req.DeviceID = strings.TrimSpace(deviceID)
+	}
+	req.TargetRunnerID = requestedLocalRunnerID(req.Context)
 	if key := strings.TrimSpace(c.GetHeader("Idempotency-Key")); key != "" {
 		req.RunID = idempotentRunID(req.UserID, key)
 		fingerprint, err := startRequestFingerprint(req)
@@ -235,6 +240,15 @@ func (h *Handler) StartRun(c *gin.Context) {
 	})
 }
 
+func requestedLocalRunnerID(requestContext map[string]interface{}) string {
+	for _, key := range []string{"targetRunnerId", "localRunnerId"} {
+		if value, ok := requestContext[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 func idempotentRunID(userID, key string) string {
 	sum := sha256.Sum256([]byte(userID + "\x00" + key))
 	// agent_runs.id is VARCHAR(64). A 192-bit digest remains collision resistant
@@ -251,9 +265,12 @@ func startRequestFingerprint(req StartRunRequest) (string, error) {
 		Context      map[string]interface{} `json:"context,omitempty"`
 		MaxCostLevel string                 `json:"maxCostLevel,omitempty"`
 		MaxRiskLevel string                 `json:"maxRiskLevel,omitempty"`
+		DeviceID     string                 `json:"deviceId,omitempty"`
+		RunnerID     string                 `json:"targetRunnerId,omitempty"`
 	}{
 		UserID: req.UserID, Message: req.Message, Domain: req.Domain, Mode: req.Mode, Context: req.Context,
 		MaxCostLevel: req.MaxCostLevel, MaxRiskLevel: req.MaxRiskLevel,
+		DeviceID: req.DeviceID, RunnerID: req.TargetRunnerID,
 	})
 	if err != nil {
 		return "", err

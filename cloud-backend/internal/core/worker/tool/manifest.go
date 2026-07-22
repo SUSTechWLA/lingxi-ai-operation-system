@@ -62,6 +62,9 @@ type ProviderBinding struct {
 	ProviderID      string            `json:"providerId,omitempty"`
 	RemoteToolName  string            `json:"remoteToolName,omitempty"`
 	LogicalToolName string            `json:"logicalToolName,omitempty"`
+	TargetRunnerID  string            `json:"targetRunnerId,omitempty"`
+	CatalogRevision string            `json:"catalogRevision,omitempty"`
+	DeviceID        string            `json:"deviceId,omitempty"`
 	ToolPrefix      string            `json:"toolPrefix,omitempty"`
 	ToolNameMap     map[string]string `json:"toolNameMap,omitempty"`
 }

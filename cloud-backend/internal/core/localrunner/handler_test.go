@@ -255,6 +255,39 @@ func TestHandlerValidatesMCPStructuredContentInsteadOfWrapper(t *testing.T) {
 	}
 }
 
+func TestHandlerValidatesDynamicMCPOutputFromBoundRunnerCatalog(t *testing.T) {
+	manifest := &tool.ToolManifest{
+		Name: "studio.render", Boundary: tool.BoundaryMCPProvider,
+		OutputSchema: map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{"assetId": map[string]interface{}{"type": "string"}},
+			"required": []interface{}{"assetId"}, "additionalProperties": false,
+		},
+	}
+	for name, output := range map[string]string{
+		"invalid_schema": `{"structuredContent":{"unexpected":true},"isError":false}`,
+		"mcp_is_error":   `{"structuredContent":{"assetId":"asset-1"},"isError":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := &fakeRunnerService{job: &LocalJob{
+				ID: "local_job_dynamic", NodeID: "node_dynamic", UserID: "user-a", ToolName: "studio.render",
+				Command: CommandLocalMCPToolCall, TargetRunnerID: "runner-a", CatalogRevision: strings.Repeat("a", 64),
+				MCPProviderID: "studio", MCPLogicalToolName: "studio.render", MCPRemoteToolName: "render", Status: JobRunning,
+			}, scopedManifest: manifest}
+			sink := &fakeNodeResultSink{}
+			router := gin.New()
+			NewHandler(service, sink).RegisterRoutes(router)
+			req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_dynamic/complete", bytes.NewBufferString(`{"success":true,"output":`+output+`}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Runner-ID", "runner-a")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnprocessableEntity || service.completeJobID != "" || service.failJobID != "local_job_dynamic" || sink.successNodeID != "" {
+				t.Fatalf("dynamic MCP failure was not fail-closed: status=%d body=%s service=%#v sink=%#v", rec.Code, rec.Body.String(), service, sink)
+			}
+		})
+	}
+}
+
 func TestHandlerTerminalCompletionReportDoesNotReenterOnSuccess(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := &fakeRunnerService{job: &LocalJob{
@@ -545,16 +578,22 @@ func TestHandlerRejectsAtomicMutationAuthorizationFailure(t *testing.T) {
 }
 
 type fakeRunnerService struct {
-	registerReq   RegisterRunnerRequest
-	claimRunnerID string
-	completeJobID string
-	completeReq   CompleteJobRequest
-	failJobID     string
-	failReq       FailJobRequest
-	job           *LocalJob
-	heartbeats    []HeartbeatRequest
-	mutationErr   error
-	markErr       error
+	registerReq       RegisterRunnerRequest
+	claimRunnerID     string
+	completeJobID     string
+	completeReq       CompleteJobRequest
+	failJobID         string
+	failReq           FailJobRequest
+	job               *LocalJob
+	heartbeats        []HeartbeatRequest
+	mutationErr       error
+	markErr           error
+	scopedManifest    *tool.ToolManifest
+	scopedManifestErr error
+}
+
+func (f *fakeRunnerService) ResolveMCPJobManifest(_ context.Context, _ *LocalJob) (*tool.ToolManifest, error) {
+	return f.scopedManifest, f.scopedManifestErr
 }
 
 func (f *fakeRunnerService) RegisterRunner(_ context.Context, req RegisterRunnerRequest) (*RegisterRunnerResponse, error) {

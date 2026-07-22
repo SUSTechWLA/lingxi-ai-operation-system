@@ -36,6 +36,10 @@ type ToolManifestResolver interface {
 	GetManifest(name string) *tool.ToolManifest
 }
 
+type ScopedLocalJobManifestResolver interface {
+	ResolveMCPJobManifest(ctx context.Context, job *LocalJob) (*tool.ToolManifest, error)
+}
+
 // ArtifactSyncCallback is invoked after a local job completes successfully,
 // allowing the caller to materialize artifact records from the job output.
 type ArtifactSyncCallback func(ctx context.Context, job *LocalJob, output map[string]interface{}) error
@@ -195,7 +199,16 @@ func (h *Handler) completeJob(c *gin.Context) {
 		return
 	}
 	req.Output = normalizeCompleteJobOutput(jobContext, req.Output)
-	if manifest := h.manifestForLocalJob(jobContext); manifest != nil {
+	if isMCPErrorCompletion(jobContext, req.Output) {
+		h.failInvalidCompletion(c, identity, jobContext, fmt.Errorf("MCP tool returned isError=true"))
+		return
+	}
+	manifest, manifestErr := h.manifestForLocalJob(c.Request.Context(), jobContext)
+	if manifestErr != nil {
+		h.failInvalidCompletion(c, identity, jobContext, manifestErr)
+		return
+	}
+	if manifest != nil {
 		if err := tool.ValidateLocalJobOutput(manifest, req.Output); err != nil {
 			h.failInvalidCompletion(c, identity, jobContext, err)
 			return
@@ -213,18 +226,37 @@ func (h *Handler) completeJob(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-func (h *Handler) manifestForLocalJob(job *LocalJob) *tool.ToolManifest {
-	if h == nil || h.manifestResolver == nil || job == nil {
-		return nil
+func (h *Handler) manifestForLocalJob(ctx context.Context, job *LocalJob) (*tool.ToolManifest, error) {
+	if h == nil || job == nil {
+		return nil, nil
+	}
+	if NormalizeCommand(job.Command) == CommandLocalMCPToolCall {
+		if resolver, ok := h.service.(ScopedLocalJobManifestResolver); ok {
+			manifest, err := resolver.ResolveMCPJobManifest(ctx, job)
+			if err != nil || manifest != nil {
+				return manifest, err
+			}
+		}
+	}
+	if h.manifestResolver == nil {
+		return nil, nil
 	}
 	for _, name := range []string{job.MCPLogicalToolName, job.ToolName} {
 		if name != "" {
 			if manifest := h.manifestResolver.GetManifest(name); manifest != nil {
-				return manifest
+				return manifest, nil
 			}
 		}
 	}
-	return nil
+	return nil, nil
+}
+
+func isMCPErrorCompletion(job *LocalJob, output map[string]interface{}) bool {
+	if job == nil || NormalizeCommand(job.Command) != CommandLocalMCPToolCall {
+		return false
+	}
+	isError, _ := output["isError"].(bool)
+	return isError
 }
 
 func (h *Handler) failInvalidCompletion(c *gin.Context, identity JobMutationIdentity, job *LocalJob, validationErr error) {

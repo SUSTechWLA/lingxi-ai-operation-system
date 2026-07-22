@@ -57,10 +57,18 @@ curl -X PUT http://127.0.0.1:18080/api/local/mcp-providers \
 | `localCommand` | 固定为 `LOCAL_MCP_TOOL_CALL`。 |
 | `provider` / `providerBinding.providerId` | provider `id`。 |
 | `providerBinding.remoteToolName` | MCP `tools/list[].name`。 |
+| `providerBinding.targetRunnerId` | 本次 Agent run 选中的在线 runner。 |
+| `providerBinding.catalogRevision` | 该 run 固化的 SHA-256 catalog revision。 |
 | `parameters` / `output` | 从 MCP `inputSchema` / `outputSchema` 的 JSON Schema properties 转成 `ParamDef`；原始 schema 保留在 `providerCapabilities`。 |
 | `capabilities` | 根据 provider id、工具名和描述做保守推断。不要在 provider 侧伪装业务决策能力。 |
 
 Planner 只能看到逻辑工具和能力；PlanCompiler 对 `mcp_provider` 工具统一编译为本地 `LOCAL_MCP_TOOL_CALL` payload。不要新增 `RUN_X_PROVIDER_CLI`、`LOCAL_JIMENG_*`、`LOCAL_VIDEOQA_*` 这类 provider-specific local runner command。
+
+这些 manifest 不是全局注册项。Runner 心跳只上报脱敏且有界的 catalog；云端根据当前已认证用户、设备和可选 runner 为单次 Agent run 建立不可变快照，Planner、Guard 与 Compiler 全程使用同一份快照。用户 A 的 catalog 不会出现在用户 B 的候选工具中；同一用户多个设备暴露同名逻辑工具时，未明确选择设备/runner 会返回 `MCP_TOOL_AMBIGUOUS`。DAG 只保存执行所需的 runner、revision 和 provider/tool 绑定，不保存 provider command、环境变量或 HTTP Header。
+
+派发 `LOCAL_MCP_TOOL_CALL` 前，云端会再次检查 task owner、runner 在线状态、catalog revision 和 provider/logical/remote 精确绑定。revision 已变化时返回 `MCP_CATALOG_STALE`，调用方必须重新规划；不会自动换用最近心跳或同名 sibling runner。IP Avatar 等内置 provider 也必须先由真实本地 runner 上报，不存在云端硬编码的用户工具 manifest。
+
+校验通过后，cloud-owned local job 会保存该绑定的非 secret `inputSchema` / `outputSchema` 与 revision 快照。完成回调使用这份不可变快照校验 MCP `structuredContent`，不从全局 registry 查找动态工具，也不会因后续 heartbeat 更新而更换结果契约。`isError=true` 或 output schema 不合格均按失败处理。
 
 ## 即梦 Python MCP
 

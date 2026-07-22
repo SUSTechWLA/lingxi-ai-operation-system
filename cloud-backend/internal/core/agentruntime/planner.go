@@ -39,10 +39,11 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 		domain = inferDomain(req.Message)
 	}
 
-	knowledgePolicy := defaultKnowledgePolicyForTools(req.Message, domain, p.tools.ListManifests())
-	selected := p.selectTools(domain, req.Message)
+	requestTools := toolProviderForRequest(req, p.tools)
+	knowledgePolicy := defaultKnowledgePolicyForTools(req.Message, domain, requestTools.ListManifests())
+	selected := p.selectTools(requestTools, domain, req.Message)
 	var traceCandidates []ToolCandidateTrace
-	candidates, err := NewHybridToolRetriever(p.tools.ListManifests()).Retrieve(context.Background(), ToolRetrieveRequest{
+	candidates, err := NewHybridToolRetriever(requestTools.ListManifests()).Retrieve(context.Background(), ToolRetrieveRequest{
 		UserInput:       req.Message,
 		Domain:          domain,
 		KnowledgePolicy: knowledgePolicy,
@@ -64,7 +65,7 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 		return nil, fmt.Errorf("no tools matched domain %q", domain)
 	}
 
-	manifests := manifestMap(p.tools.ListManifests())
+	manifests := manifestMap(requestTools.ListManifests())
 	steps := make([]AgentStep, 0, len(selected))
 	var previous string
 	for _, manifest := range selected {
@@ -140,14 +141,14 @@ func defaultKnowledgePolicyForTools(message, domain string, manifests []*tool.To
 	return policy
 }
 
-func (p *HeuristicPlanner) selectTools(domain, message string) []*tool.ToolManifest {
+func (p *HeuristicPlanner) selectTools(tools ToolListProvider, domain, message string) []*tool.ToolManifest {
 	type scored struct {
 		manifest *tool.ToolManifest
 		score    int
 		index    int
 		phase    int
 	}
-	all := p.tools.ListManifests()
+	all := tools.ListManifests()
 	scoredTools := make([]scored, 0, len(all))
 	hasDomainCapability := false
 	for i, manifest := range all {
