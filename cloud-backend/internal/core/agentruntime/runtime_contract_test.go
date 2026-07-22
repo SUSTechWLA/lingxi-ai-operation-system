@@ -459,6 +459,47 @@ func TestRemoveReferencesToRemovedStepsPrunesNestedObjectsAndArraysPrecisely(t *
 	}
 }
 
+func TestRemoveReferencesToRemovedStepsDropsFixedArrayContainerWhenElementIsRemoved(t *testing.T) {
+	removedArray := [2]string{"literal", "{{gone.output.value}}"}
+	unknownArray := [2]string{"literal", "{{missing.output.value}}"}
+	safeArray := [2]string{"literal", "{{keep.output.value}}"}
+	plan := &AgentPlan{Goal: "fixed array removed", Steps: []AgentStep{
+		{ID: "keep", Tool: "provider_a", Arguments: map[string]interface{}{}},
+		{
+			ID: "consume", Tool: "consumer_tool", DependsOn: []string{"gone", "keep"},
+			Arguments: map[string]interface{}{
+				"topLevelRemoved": removedArray,
+				"payload": map[string]interface{}{
+					"nestedRemoved": removedArray,
+					"unknown":       unknownArray,
+					"safe":          safeArray,
+				},
+			},
+		},
+	}}
+
+	removeReferencesToRemovedSteps(plan, map[string]bool{"gone": true})
+	consumer := findPlanStep(plan, "consume")
+	if _, exists := consumer.Arguments["topLevelRemoved"]; exists {
+		t.Fatalf("top-level fixed array containing removed reference survived: %#v", consumer.Arguments)
+	}
+	payload := consumer.Arguments["payload"].(map[string]interface{})
+	if _, exists := payload["nestedRemoved"]; exists {
+		t.Fatalf("nested fixed array containing removed reference survived: %#v", payload)
+	}
+	if payload["unknown"] != unknownArray || payload["safe"] != safeArray {
+		t.Fatalf("fixed-array cleanup changed non-removed references: %#v", payload)
+	}
+	if !reflect.DeepEqual(consumer.DependsOn, []string{"keep"}) {
+		t.Fatalf("fixed-array cleanup dependencies = %#v, want only keep", consumer.DependsOn)
+	}
+	first := cloneContractPlanDeep(plan)
+	removeReferencesToRemovedSteps(plan, map[string]bool{"gone": true})
+	if !reflect.DeepEqual(plan, first) {
+		t.Fatalf("fixed-array cleanup is not idempotent:\nfirst=%#v\nsecond=%#v", first.Steps, plan.Steps)
+	}
+}
+
 func qualityGateForProduction(plan *AgentPlan, productionID string) AgentStep {
 	if plan == nil {
 		return AgentStep{}

@@ -140,7 +140,10 @@ func pruneRemovedStepReferenceValue(value reflect.Value, removedStepIDs map[stri
 		for i := 0; i < value.Len(); i++ {
 			child, keep := pruneRemovedStepReferenceValue(value.Index(i), removedStepIDs)
 			if !keep {
-				return value, true
+				// Fixed arrays cannot shrink without changing their declared type.
+				// Delete the whole array value through its parent instead of
+				// retaining a stale reference or silently substituting a zero value.
+				return reflect.Value{}, false
 			}
 			pruned.Index(i).Set(child)
 		}
