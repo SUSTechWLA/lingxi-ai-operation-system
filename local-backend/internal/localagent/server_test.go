@@ -584,6 +584,7 @@ func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
 				"headers":{" Authorization ":"Bearer test-token"},
 				"toolPrefix":"echo.",
 				"toolNameMap":{"echo.health":"health"},
+				"approvalMode":" BEFORE_EXECUTE ",
 				"enabled":true
 			}]
 	}`)
@@ -635,6 +636,87 @@ func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
 	}
 	if provider.ToolPrefix != "echo." || provider.ToolNameMap["echo.health"] != "health" {
 		t.Fatalf("stdio tool mapping not preserved: %+v", provider)
+	}
+	if provider.ApprovalMode != "before_execute" || storedProvider.ApprovalMode != "before_execute" {
+		t.Fatalf("approval mode not normalized and persisted: response=%q stored=%q", provider.ApprovalMode, storedProvider.ApprovalMode)
+	}
+}
+
+func TestLocalMCPProviderSettingsRejectsInvalidApprovalModeWithoutPersisting(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "mcp-providers.json")
+	if err := os.WriteFile(configPath, []byte(`{
+		"providers":[{
+			"id":"existing",
+			"transport":"stdio",
+			"command":"python3",
+			"approvalMode":"none",
+			"enabled":true
+		}]
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer(Config{DataDir: root})
+	req := httptest.NewRequest(http.MethodPut, "/api/local/mcp-providers", bytes.NewBufferString(`{
+		"providers":[{
+			"id":"unsafe",
+			"transport":"stdio",
+			"command":"python3",
+			"approvalMode":"after_artifact",
+			"enabled":true
+		}]
+	}`))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid approval mode status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "approvalMode") {
+		t.Fatalf("invalid approval mode error must identify approvalMode: %s", rec.Body.String())
+	}
+
+	providers, err := server.ReadMCPProviders()
+	if err != nil {
+		t.Fatalf("read providers after rejected update: %v", err)
+	}
+	if existing, ok := localMCPProviderByID(providers, "existing"); !ok || existing.ApprovalMode != "none" {
+		t.Fatalf("existing provider was not preserved: %+v", providers)
+	}
+	if _, ok := localMCPProviderByID(providers, "unsafe"); ok {
+		t.Fatalf("invalid provider was persisted: %+v", providers)
+	}
+}
+
+func TestNormalizeMCPProvidersApprovalModes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		mode string
+		want string
+	}{
+		{name: "empty remains backward compatible", mode: "", want: ""},
+		{name: "none", mode: " NONE ", want: localmcp.ApprovalModeNone},
+		{name: "before execute", mode: "Before_Execute", want: localmcp.ApprovalModeBeforeExecute},
+		{name: "always", mode: " ALWAYS ", want: localmcp.ApprovalModeAlways},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			providers, err := normalizeMCPProviders([]localmcp.ProviderConfig{{
+				ID:           "test",
+				Transport:    "stdio",
+				Command:      "python3",
+				ApprovalMode: test.mode,
+			}})
+			if err != nil {
+				t.Fatalf("normalizeMCPProviders returned error: %v", err)
+			}
+			if len(providers) != 1 || providers[0].ApprovalMode != test.want {
+				t.Fatalf("normalized approvalMode = %#v, want %q", providers, test.want)
+			}
+		})
 	}
 }
 

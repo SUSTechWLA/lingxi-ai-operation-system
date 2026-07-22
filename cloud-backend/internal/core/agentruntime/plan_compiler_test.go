@@ -67,6 +67,45 @@ func TestPlanCompiler_InsertsAfterArtifactReviewFromToolManifest(t *testing.T) {
 	requireEdge(t, dag, "script_generation_review", "shot_split")
 }
 
+func TestPlanCompiler_InsertsBeforeExecuteReviewFromMCPProviderApprovalMode(t *testing.T) {
+	manifests := tool.ManifestsFromMCPTools(tool.MCPProviderConfig{
+		ID:           "custom",
+		Transport:    "stdio",
+		ToolPrefix:   "custom.",
+		Enabled:      true,
+		ApprovalMode: tool.ApprovalBeforeExecute,
+	}, []tool.MCPTool{{
+		Name:        "generate",
+		Description: "Generate an artifact through a local MCP provider.",
+		InputSchema: map[string]interface{}{"type": "object"},
+	}})
+	if len(manifests) != 1 {
+		t.Fatalf("MCP manifests = %#v, want one", manifests)
+	}
+	compiler := NewPlanCompiler(staticToolCatalog{manifests[0].Name: manifests[0]})
+
+	dag, err := compiler.Compile(&AgentPlan{
+		Goal:   "run a local provider tool",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{{
+			ID:        "mcp_generation",
+			Tool:      manifests[0].Name,
+			Arguments: map[string]interface{}{"prompt": "safe test"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Compile returned error: %v", err)
+	}
+
+	review := requireNode(t, dag, "mcp_generation_review_before", string(model.NodeTypeReviewGate), "审核-mcp_generation")
+	if got, _ := review.Input["reviewPhase"].(string); got != "before_execute" {
+		t.Fatalf("MCP review phase = %q, want before_execute", got)
+	}
+	requireNode(t, dag, "mcp_generation_exec", string(model.NodeTypeTool), "external")
+	requireEdge(t, dag, "mcp_generation_review_before", "mcp_generation_exec")
+}
+
 func TestPlanCompiler_ExternalToolNodeRoutesThroughExternalBridge(t *testing.T) {
 	compiler := NewPlanCompiler(staticToolCatalog{
 		"video_prompt_generator": &tool.ToolManifest{

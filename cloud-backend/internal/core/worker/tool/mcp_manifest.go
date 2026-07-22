@@ -51,6 +51,7 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 		capabilities := inferMCPCapabilities(provider.ID, logicalName, remoteTool.Description)
 		inputSchema := cloneJSONSchema(remoteTool.InputSchema)
 		outputSchema := cloneJSONSchema(remoteTool.OutputSchema)
+		approvalPolicy := mcpProviderApprovalPolicy(provider.ApprovalMode)
 		manifests = append(manifests, &ToolManifest{
 			Name:               logicalName,
 			Description:        remoteTool.Description,
@@ -69,6 +70,7 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 			RiskLevel:          RiskMedium,
 			SideEffect:         false,
 			Idempotent:         false,
+			ApprovalPolicy:     approvalPolicy,
 			ExecutionPlane:     ExecutionPlaneLocal,
 			RequiresUserDevice: true,
 			ArtifactLocation:   ArtifactLocationLocal,
@@ -93,6 +95,37 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 		})
 	}
 	return manifests
+}
+
+func mcpProviderApprovalPolicy(mode string) ApprovalPolicy {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", ApprovalNone:
+		return ApprovalPolicy{Mode: ApprovalNone}
+	case ApprovalBeforeExecute:
+		return ApprovalPolicy{
+			Required:         true,
+			Mode:             ApprovalBeforeExecute,
+			BlocksDownstream: true,
+			Reason:           "The MCP provider requires user approval before tool execution.",
+		}
+	case ApprovalAlways:
+		return ApprovalPolicy{
+			Required:         true,
+			Mode:             ApprovalAlways,
+			BlocksDownstream: true,
+			Reason:           "The MCP provider requires user approval before and after tool execution.",
+		}
+	default:
+		// Local provider registration rejects unknown values. Keep programmatic
+		// callers conservative as defense in depth rather than silently
+		// downgrading an invalid value to no approval.
+		return ApprovalPolicy{
+			Required:         true,
+			Mode:             ApprovalAlways,
+			BlocksDownstream: true,
+			Reason:           "The MCP provider has an invalid approval mode and requires explicit review.",
+		}
+	}
 }
 
 func logicalMCPToolName(provider MCPProviderConfig, remoteName string) string {

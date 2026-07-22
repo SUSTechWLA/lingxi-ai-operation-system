@@ -16,12 +16,13 @@ func TestMCPProviderToolsConvertToToolManifestWithPrefix(t *testing.T) {
 		"additionalProperties": false,
 	}
 	manifests := ManifestsFromMCPTools(MCPProviderConfig{
-		ID:         "jimeng",
-		Label:      "JiMeng MCP",
-		Transport:  "stdio",
-		ToolPrefix: "jimeng.",
-		Enabled:    true,
-		Timeout:    120,
+		ID:           "jimeng",
+		Label:        "JiMeng MCP",
+		Transport:    "stdio",
+		ToolPrefix:   "jimeng.",
+		Enabled:      true,
+		Timeout:      120,
+		ApprovalMode: ApprovalBeforeExecute,
 	}, []MCPTool{
 		{
 			Name:         "generate_video",
@@ -46,6 +47,9 @@ func TestMCPProviderToolsConvertToToolManifestWithPrefix(t *testing.T) {
 	}
 	if m.LocalCommand != "LOCAL_MCP_TOOL_CALL" {
 		t.Fatalf("localCommand = %q, want LOCAL_MCP_TOOL_CALL", m.LocalCommand)
+	}
+	if !m.ApprovalPolicy.Required || m.ApprovalPolicy.Mode != ApprovalBeforeExecute || !m.ApprovalPolicy.BlocksDownstream {
+		t.Fatalf("before_execute provider approval did not become an executable manifest policy: %#v", m.ApprovalPolicy)
 	}
 	if m.Parameters["scenes"].Type != "array" || !m.Parameters["scenes"].Required {
 		t.Fatalf("input schema should convert to ParamDef: %#v", m.Parameters)
@@ -109,5 +113,25 @@ func TestMCPProviderToolsConvertWithToolNameMapAndDisabledTools(t *testing.T) {
 	}
 	if manifests[0].ProviderBinding.RemoteToolName != "generate_image" {
 		t.Fatalf("remote tool = %q, want generate_image", manifests[0].ProviderBinding.RemoteToolName)
+	}
+}
+
+func TestMCPProviderInvalidApprovalModeDoesNotDowngradeToNoApproval(t *testing.T) {
+	manifests := ManifestsFromMCPTools(MCPProviderConfig{
+		ID:           "invalid-config",
+		Transport:    "stdio",
+		Enabled:      true,
+		ApprovalMode: "typo",
+	}, []MCPTool{{
+		Name:        "dangerous_tool",
+		Description: "A tool discovered from an invalid programmatic provider configuration.",
+		InputSchema: map[string]interface{}{"type": "object"},
+	}})
+	if len(manifests) != 1 {
+		t.Fatalf("manifests = %#v, want one guarded manifest", manifests)
+	}
+	policy := manifests[0].ApprovalPolicy
+	if !policy.Required || policy.Mode != ApprovalAlways || !policy.BlocksDownstream {
+		t.Fatalf("invalid programmatic approval mode must fail closed behind review: %#v", policy)
 	}
 }

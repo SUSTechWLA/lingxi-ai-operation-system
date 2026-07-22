@@ -164,10 +164,23 @@ async def _smoke_server(contract: ServerContract) -> None:
             for tool in tools:
                 _assert_tool_schema(contract.name, tool)
 
-            actual_names = {tool.name for tool in tools}
+            name_counts: dict[str, int] = {}
+            for tool in tools:
+                name_counts[tool.name] = name_counts.get(tool.name, 0) + 1
+            duplicates = sorted(name for name, count in name_counts.items() if count > 1)
+            if duplicates:
+                raise AssertionError(f"{contract.name}: tools/list returned duplicate names {duplicates}")
+
+            actual_names = set(name_counts)
             missing = contract.expected_tools - actual_names
-            if missing:
-                raise AssertionError(f"{contract.name}: tools/list missing {sorted(missing)}")
+            unexpected = actual_names - contract.expected_tools
+            if missing or unexpected:
+                problems: list[str] = []
+                if missing:
+                    problems.append(f"missing {sorted(missing)}")
+                if unexpected:
+                    problems.append(f"unexpected {sorted(unexpected)}")
+                raise AssertionError(f"{contract.name}: tools/list contract mismatch: {'; '.join(problems)}")
 
             print(
                 f"PASS {contract.name}: protocol={protocol_version}, "

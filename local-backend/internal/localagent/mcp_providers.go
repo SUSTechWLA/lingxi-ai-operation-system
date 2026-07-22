@@ -489,7 +489,7 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 		provider.Command = strings.TrimSpace(provider.Command)
 		provider.WorkingDir = strings.TrimSpace(provider.WorkingDir)
 		provider.ToolPrefix = strings.TrimSpace(provider.ToolPrefix)
-		provider.ApprovalMode = strings.TrimSpace(provider.ApprovalMode)
+		provider.ApprovalMode = strings.ToLower(strings.TrimSpace(provider.ApprovalMode))
 		provider.Args = compactArgs(provider.Args)
 		provider.Env = compactEnv(provider.Env)
 		provider.Headers = compactHeaders(provider.Headers)
@@ -500,6 +500,15 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 		provider.DisabledTools = compactStringList(provider.DisabledTools)
 		if provider.ID == "" {
 			return nil, errors.New("provider id is required")
+		}
+		switch provider.ApprovalMode {
+		case "", localmcp.ApprovalModeNone, localmcp.ApprovalModeBeforeExecute, localmcp.ApprovalModeAlways:
+		default:
+			return nil, fmt.Errorf(
+				"provider %q approvalMode %q is unsupported; allowed values are none, before_execute, and always",
+				provider.ID,
+				provider.ApprovalMode,
+			)
 		}
 		if seen[provider.ID] {
 			return nil, fmt.Errorf("duplicate provider id %q", provider.ID)

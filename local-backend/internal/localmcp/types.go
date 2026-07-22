@@ -2,6 +2,12 @@ package localmcp
 
 import "encoding/json"
 
+const (
+	ApprovalModeNone          = "none"
+	ApprovalModeBeforeExecute = "before_execute"
+	ApprovalModeAlways        = "always"
+)
+
 type ProviderConfig struct {
 	ID            string            `json:"id"`
 	Label         string            `json:"label"`
