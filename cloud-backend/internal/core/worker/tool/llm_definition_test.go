@@ -3,13 +3,14 @@ package tool
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 func TestLLMToolAdaptersPreserveCanonicalSchemaAndProviderShapes(t *testing.T) {
 	inputSchema := nestedLLMToolTestSchema()
 	definition := LLMToolDefinition{
-		Name:        "media.render_video-1",
+		Name:        "media_render-video-1",
 		Description: "Render a video from structured scenes",
 		InputSchema: inputSchema,
 		OutputSchema: map[string]interface{}{
@@ -20,7 +21,7 @@ func TestLLMToolAdaptersPreserveCanonicalSchemaAndProviderShapes(t *testing.T) {
 			"required":             []interface{}{"videoUrl"},
 			"additionalProperties": false,
 		},
-		Strict: true,
+		Strict: false,
 		Annotations: map[string]interface{}{
 			"readOnlyHint": false,
 		},
@@ -34,7 +35,7 @@ func TestLLMToolAdaptersPreserveCanonicalSchemaAndProviderShapes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToOpenAIResponsesTool() error = %v", err)
 	}
-	if responsesTool.Type != "function" || responsesTool.Name != definition.Name || responsesTool.Description != definition.Description || !responsesTool.Strict {
+	if responsesTool.Type != "function" || responsesTool.Name != definition.Name || responsesTool.Description != definition.Description || responsesTool.Strict {
 		t.Fatalf("unexpected OpenAI Responses shape: %#v", responsesTool)
 	}
 	assertSchemaEqual(t, responsesTool.Parameters, inputSchema)
@@ -44,7 +45,7 @@ func TestLLMToolAdaptersPreserveCanonicalSchemaAndProviderShapes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToOpenAIChatCompletionsTool() error = %v", err)
 	}
-	if chatTool.Type != "function" || chatTool.Function.Name != definition.Name || chatTool.Function.Description != definition.Description || !chatTool.Function.Strict {
+	if chatTool.Type != "function" || chatTool.Function.Name != definition.Name || chatTool.Function.Description != definition.Description || chatTool.Function.Strict {
 		t.Fatalf("unexpected OpenAI Chat Completions shape: %#v", chatTool)
 	}
 	assertSchemaEqual(t, chatTool.Function.Parameters, inputSchema)
@@ -59,7 +60,7 @@ func TestLLMToolAdaptersPreserveCanonicalSchemaAndProviderShapes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToAnthropicTool() error = %v", err)
 	}
-	if anthropicTool.Name != definition.Name || anthropicTool.Description != definition.Description || !anthropicTool.Strict {
+	if anthropicTool.Name != definition.Name || anthropicTool.Description != definition.Description || anthropicTool.Strict {
 		t.Fatalf("unexpected Anthropic shape: %#v", anthropicTool)
 	}
 	assertSchemaEqual(t, anthropicTool.InputSchema, inputSchema)
@@ -81,6 +82,103 @@ func TestLLMToolAdaptersPreserveCanonicalSchemaAndProviderShapes(t *testing.T) {
 	anthropicTool.InputSchema["required"].([]interface{})[0] = "changed"
 	geminiDeclaration.Parameters["$defs"].(map[string]interface{})["scene"] = map[string]interface{}{"type": "string"}
 	assertSchemaEqual(t, definition.InputSchema, nestedLLMToolTestSchema())
+}
+
+func TestLLMToolAdaptersAcceptValidStrictSchemaWithoutMutation(t *testing.T) {
+	inputSchema := strictLLMToolTestSchema()
+	definition := LLMToolDefinition{
+		Name:        "strict_tool-1",
+		Description: "Strict portable tool",
+		InputSchema: inputSchema,
+		Strict:      true,
+	}
+
+	responsesTool, err := ToOpenAIResponsesTool(definition)
+	if err != nil {
+		t.Fatalf("ToOpenAIResponsesTool() error = %v", err)
+	}
+	chatTool, err := ToOpenAIChatCompletionsTool(definition)
+	if err != nil {
+		t.Fatalf("ToOpenAIChatCompletionsTool() error = %v", err)
+	}
+	anthropicTool, err := ToAnthropicTool(definition)
+	if err != nil {
+		t.Fatalf("ToAnthropicTool() error = %v", err)
+	}
+	geminiDeclaration, err := ToGeminiFunctionDeclaration(definition)
+	if err != nil {
+		t.Fatalf("ToGeminiFunctionDeclaration() error = %v", err)
+	}
+
+	if !responsesTool.Strict || !chatTool.Function.Strict || !anthropicTool.Strict {
+		t.Fatalf("explicit strict mode was not preserved: responses=%t chat=%t anthropic=%t", responsesTool.Strict, chatTool.Function.Strict, anthropicTool.Strict)
+	}
+	assertSchemaEqual(t, responsesTool.Parameters, inputSchema)
+	assertSchemaEqual(t, chatTool.Function.Parameters, inputSchema)
+	assertSchemaEqual(t, anthropicTool.InputSchema, inputSchema)
+	assertSchemaEqual(t, geminiDeclaration.Parameters, inputSchema)
+	assertSchemaEqual(t, definition.InputSchema, strictLLMToolTestSchema())
+}
+
+func TestLLMToolDefinitionRejectsNonPortableStrictSchemas(t *testing.T) {
+	tests := []struct {
+		name        string
+		schema      map[string]interface{}
+		wantMessage string
+	}{
+		{
+			name: "missing additional properties",
+			schema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}},
+				"required":   []interface{}{"name"},
+			},
+			wantMessage: "additionalProperties=false",
+		},
+		{
+			name: "nested object missing required property",
+			schema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"child": map[string]interface{}{
+						"type":                 "object",
+						"properties":           map[string]interface{}{"name": map[string]interface{}{"type": "string"}},
+						"required":             []interface{}{},
+						"additionalProperties": false,
+					},
+				},
+				"required":             []interface{}{"child"},
+				"additionalProperties": false,
+			},
+			wantMessage: "required",
+		},
+		{
+			name: "unsupported keyword",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{},
+				"required":             []interface{}{},
+				"additionalProperties": false,
+				"oneOf": []interface{}{
+					map[string]interface{}{"type": "object", "properties": map[string]interface{}{}, "required": []interface{}{}, "additionalProperties": false},
+				},
+			},
+			wantMessage: "oneOf",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			definition := LLMToolDefinition{Name: "strict_tool", InputSchema: tt.schema, Strict: true}
+			_, err := ToOpenAIResponsesTool(definition)
+			if err == nil {
+				t.Fatal("ToOpenAIResponsesTool() error = nil, want strict schema validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantMessage) {
+				t.Fatalf("error = %q, want message containing %q", err, tt.wantMessage)
+			}
+		})
+	}
 }
 
 func TestLLMToolAdaptersDoNotEnableStrictByDefault(t *testing.T) {
@@ -129,6 +227,18 @@ func TestLLMToolDefinitionValidateRejectsInvalidNameAndInputRoot(t *testing.T) {
 			definition: LLMToolDefinition{Name: "bad tool", InputSchema: map[string]interface{}{"type": "object"}},
 		},
 		{
+			name:       "dot is not portable",
+			definition: LLMToolDefinition{Name: "bad.tool", InputSchema: map[string]interface{}{"type": "object"}},
+		},
+		{
+			name:       "colon is not portable",
+			definition: LLMToolDefinition{Name: "bad:tool", InputSchema: map[string]interface{}{"type": "object"}},
+		},
+		{
+			name:       "longer than 64 characters",
+			definition: LLMToolDefinition{Name: strings.Repeat("a", 65), InputSchema: map[string]interface{}{"type": "object"}},
+		},
+		{
 			name:       "missing root type",
 			definition: LLMToolDefinition{Name: "valid_tool", InputSchema: map[string]interface{}{"properties": map[string]interface{}{}}},
 		},
@@ -144,6 +254,16 @@ func TestLLMToolDefinitionValidateRejectsInvalidNameAndInputRoot(t *testing.T) {
 				t.Fatal("Validate() error = nil, want validation error")
 			}
 		})
+	}
+}
+
+func TestLLMToolDefinitionValidateAccepts64CharacterPortableName(t *testing.T) {
+	definition := LLMToolDefinition{
+		Name:        strings.Repeat("a", 62) + "-_",
+		InputSchema: map[string]interface{}{"type": "object"},
+	}
+	if err := definition.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 
@@ -177,6 +297,28 @@ func nestedLLMToolTestSchema() map[string]interface{} {
 				"additionalProperties": false,
 			},
 		},
+		"additionalProperties": false,
+	}
+}
+
+func strictLLMToolTestSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"title": map[string]interface{}{"type": "string"},
+			"scenes": map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"id": map[string]interface{}{"type": "string"},
+					},
+					"required":             []interface{}{"id"},
+					"additionalProperties": false,
+				},
+			},
+		},
+		"required":             []interface{}{"title", "scenes"},
 		"additionalProperties": false,
 	}
 }

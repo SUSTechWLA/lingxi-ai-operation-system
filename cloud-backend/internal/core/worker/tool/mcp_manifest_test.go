@@ -62,6 +62,30 @@ func TestMCPProviderToolsConvertToToolManifestWithPrefix(t *testing.T) {
 	if !reflect.DeepEqual(m.ProviderCapabilities["inputSchema"], inputSchema) || !reflect.DeepEqual(m.ProviderCapabilities["outputSchema"], outputSchema) {
 		t.Fatalf("provider capability schemas were not preserved: %#v", m.ProviderCapabilities)
 	}
+
+	m.InputSchema["type"] = "string"
+	if inputSchema["type"] != "object" || m.ProviderCapabilities["inputSchema"].(map[string]interface{})["type"] != "object" {
+		t.Fatalf("canonical input schema must not share references with source or provider capabilities")
+	}
+	inputSchema["properties"].(map[string]interface{})["callback"].(map[string]interface{})["type"] = "number"
+	if reflect.DeepEqual(m.InputSchema["properties"].(map[string]interface{})["callback"].(map[string]interface{})["type"], "number") ||
+		reflect.DeepEqual(m.ProviderCapabilities["inputSchema"].(map[string]interface{})["properties"].(map[string]interface{})["callback"].(map[string]interface{})["type"], "number") {
+		t.Fatalf("source input schema mutation leaked into manifest copies")
+	}
+	m.ProviderCapabilities["inputSchema"].(map[string]interface{})["additionalProperties"] = true
+	if m.InputSchema["additionalProperties"] != false || inputSchema["additionalProperties"] != false {
+		t.Fatalf("provider capability input schema mutation leaked into canonical or source schema")
+	}
+
+	m.OutputSchema["additionalProperties"] = true
+	if outputSchema["additionalProperties"] != false || m.ProviderCapabilities["outputSchema"].(map[string]interface{})["additionalProperties"] != false {
+		t.Fatalf("canonical output schema must not share references with source or provider capabilities")
+	}
+	outputSchema["properties"].(map[string]interface{})["videoUrl"].(map[string]interface{})["type"] = "number"
+	if m.OutputSchema["properties"].(map[string]interface{})["videoUrl"].(map[string]interface{})["type"] != "string" ||
+		m.ProviderCapabilities["outputSchema"].(map[string]interface{})["properties"].(map[string]interface{})["videoUrl"].(map[string]interface{})["type"] != "string" {
+		t.Fatalf("source output schema mutation leaked into manifest copies")
+	}
 }
 
 func TestMCPProviderToolsConvertWithToolNameMapAndDisabledTools(t *testing.T) {

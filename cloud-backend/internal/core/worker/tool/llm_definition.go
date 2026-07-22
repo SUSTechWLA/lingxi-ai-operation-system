@@ -7,9 +7,20 @@ import (
 	"strings"
 )
 
-const maxLLMToolNameLength = 128
+const maxLLMToolNameLength = 64
 
-var llmToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.:-]*$`)
+var llmToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+var portableStrictSchemaKeywords = map[string]struct{}{
+	"type":                 {},
+	"title":                {},
+	"description":          {},
+	"enum":                 {},
+	"properties":           {},
+	"required":             {},
+	"additionalProperties": {},
+	"items":                {},
+}
 
 // LLMToolDefinition is the provider-neutral contract used to expose a tool to
 // an LLM. Its schemas remain standard JSON Schema maps; provider wire formats
@@ -46,6 +57,77 @@ func (definition LLMToolDefinition) Validate() error {
 	if definition.Annotations != nil {
 		if _, err := json.Marshal(definition.Annotations); err != nil {
 			return fmt.Errorf("marshal tool annotations: %w", err)
+		}
+	}
+	if definition.Strict {
+		if err := validatePortableStrictSchema(definition.InputSchema, "$"); err != nil {
+			return fmt.Errorf("tool input schema is not portable in strict mode: %w", err)
+		}
+	}
+	return nil
+}
+
+func validatePortableStrictSchema(schema map[string]interface{}, path string) error {
+	for keyword := range schema {
+		if _, ok := portableStrictSchemaKeywords[keyword]; !ok {
+			return fmt.Errorf("keyword %q at %s is unsupported", keyword, path)
+		}
+	}
+
+	typeName, ok := schema["type"].(string)
+	if !ok || typeName == "" {
+		return fmt.Errorf("type at %s must be a single JSON Schema type", path)
+	}
+	switch typeName {
+	case "object":
+		return validatePortableStrictObject(schema, path)
+	case "array":
+		items, ok := schema["items"].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("array at %s must define one items schema", path)
+		}
+		return validatePortableStrictSchema(items, path+".items")
+	case "string", "number", "integer", "boolean", "null":
+		if _, exists := schema["properties"]; exists {
+			return fmt.Errorf("properties at %s require type object", path)
+		}
+		if _, exists := schema["items"]; exists {
+			return fmt.Errorf("items at %s require type array", path)
+		}
+		return nil
+	default:
+		return fmt.Errorf("type %q at %s is unsupported", typeName, path)
+	}
+}
+
+func validatePortableStrictObject(schema map[string]interface{}, path string) error {
+	if additionalProperties, ok := schema["additionalProperties"].(bool); !ok || additionalProperties {
+		return fmt.Errorf("object at %s must set additionalProperties=false", path)
+	}
+
+	properties, ok := schema["properties"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("object at %s must define properties", path)
+	}
+	required := schemaRequiredSet(schema["required"])
+	if len(properties) > 0 && len(required) == 0 {
+		return fmt.Errorf("object at %s must list every property in required", path)
+	}
+	for name, rawProperty := range properties {
+		if !required[name] {
+			return fmt.Errorf("property %q at %s must be listed in required", name, path)
+		}
+		propertySchema, ok := rawProperty.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("property %q at %s must contain a schema object", name, path)
+		}
+		if err := validatePortableStrictSchema(propertySchema, path+".properties."+name); err != nil {
+			return err
+		}
+	}
+	for name := range required {
+		if _, ok := properties[name]; !ok {
+			return fmt.Errorf("required property %q at %s is not defined in properties", name, path)
 		}
 	}
 	return nil
@@ -156,4 +238,32 @@ func deepCopyJSONSchema(schema map[string]interface{}) (map[string]interface{}, 
 		return nil, fmt.Errorf("unmarshal JSON Schema copy: %w", err)
 	}
 	return copied, nil
+}
+
+func cloneJSONSchema(schema map[string]interface{}) map[string]interface{} {
+	if schema == nil {
+		return nil
+	}
+	cloned := make(map[string]interface{}, len(schema))
+	for key, value := range schema {
+		cloned[key] = cloneJSONSchemaValue(value)
+	}
+	return cloned
+}
+
+func cloneJSONSchemaValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return cloneJSONSchema(typed)
+	case []interface{}:
+		cloned := make([]interface{}, len(typed))
+		for index, item := range typed {
+			cloned[index] = cloneJSONSchemaValue(item)
+		}
+		return cloned
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return value
+	}
 }

@@ -49,6 +49,8 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 			transport = "stdio"
 		}
 		capabilities := inferMCPCapabilities(provider.ID, logicalName, remoteTool.Description)
+		inputSchema := cloneJSONSchema(remoteTool.InputSchema)
+		outputSchema := cloneJSONSchema(remoteTool.OutputSchema)
 		manifests = append(manifests, &ToolManifest{
 			Name:               logicalName,
 			Description:        remoteTool.Description,
@@ -56,10 +58,10 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 			Boundary:           BoundaryMCPProvider,
 			Transport:          &ToolTransport{Type: transport, Endpoint: provider.Endpoint},
 			Timeout:            provider.Timeout,
-			InputSchema:        remoteTool.InputSchema,
-			OutputSchema:       remoteTool.OutputSchema,
-			Parameters:         jsonSchemaToParamDefs(remoteTool.InputSchema),
-			Output:             jsonSchemaToParamDefs(remoteTool.OutputSchema),
+			InputSchema:        inputSchema,
+			OutputSchema:       outputSchema,
+			Parameters:         jsonSchemaToParamDefs(inputSchema),
+			Output:             jsonSchemaToParamDefs(outputSchema),
 			Capabilities:       capabilities,
 			Tags:               []string{"mcp", strings.TrimSpace(provider.ID)},
 			CostLevel:          CostMedium,
@@ -85,8 +87,8 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 				"enabledTools":  append([]string(nil), provider.EnabledTools...),
 				"disabledTools": append([]string(nil), provider.DisabledTools...),
 				"approvalMode":  provider.ApprovalMode,
-				"inputSchema":   remoteTool.InputSchema,
-				"outputSchema":  remoteTool.OutputSchema,
+				"inputSchema":   cloneJSONSchema(remoteTool.InputSchema),
+				"outputSchema":  cloneJSONSchema(remoteTool.OutputSchema),
 			},
 		})
 	}
