@@ -214,6 +214,8 @@ type ToolManifestRecord struct {
 	Endpoint             string          `json:"endpoint,omitempty"`
 	Transport            json.RawMessage `json:"transport,omitempty"`
 	TimeoutMs            int             `json:"timeout_ms,omitempty"`
+	InputSchema          json.RawMessage `json:"input_schema,omitempty"`
+	OutputSchema         json.RawMessage `json:"output_schema,omitempty"`
 	Parameters           json.RawMessage `json:"parameters"`
 	Output               json.RawMessage `json:"output"`
 	Examples             json.RawMessage `json:"examples"`

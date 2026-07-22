@@ -1,9 +1,11 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -172,6 +174,8 @@ func (s *ToolManifestService) invalidateCache(ctx context.Context) error {
 
 // manifestToRecord converts a ToolManifest to a model.ToolManifestRecord for DB storage.
 func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
+	inputSchema := marshalCanonicalSchema(m.InputSchema)
+	outputSchema := marshalCanonicalSchema(m.OutputSchema)
 	params, _ := json.Marshal(m.Parameters)
 	output, _ := json.Marshal(m.Output)
 	examples, _ := json.Marshal(m.Examples)
@@ -226,6 +230,8 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 		Endpoint:             m.Endpoint,
 		Transport:            transport,
 		TimeoutMs:            m.Timeout,
+		InputSchema:          inputSchema,
+		OutputSchema:         outputSchema,
 		Parameters:           params,
 		Output:               output,
 		Examples:             examples,
@@ -255,4 +261,187 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 		PromptRef:            m.PromptRef,
 		ResourceRefs:         resourceRefs,
 	}
+}
+
+// manifestFromRecord restores a persisted manifest. Canonical JSON Schemas are
+// authoritative when present. Rows created before canonical schema persistence
+// are upgraded in memory from their legacy Parameters and Output projections.
+func manifestFromRecord(record *model.ToolManifestRecord) (*ToolManifest, error) {
+	if record == nil {
+		return nil, fmt.Errorf("tool manifest record is nil")
+	}
+
+	var parameters map[string]ParamDef
+	if err := unmarshalRecordJSON(record.Parameters, &parameters, "parameters"); err != nil {
+		return nil, err
+	}
+	var output map[string]ParamDef
+	if err := unmarshalRecordJSON(record.Output, &output, "output"); err != nil {
+		return nil, err
+	}
+
+	inputSchema, err := unmarshalCanonicalSchema(record.InputSchema, "input_schema")
+	if err != nil {
+		return nil, err
+	}
+	if len(inputSchema) == 0 && len(parameters) > 0 {
+		inputSchema = legacyProjectionToSchema(parameters, true)
+	}
+	outputSchema, err := unmarshalCanonicalSchema(record.OutputSchema, "output_schema")
+	if err != nil {
+		return nil, err
+	}
+	if len(outputSchema) == 0 && len(output) > 0 {
+		outputSchema = legacyProjectionToSchema(output, false)
+	}
+
+	manifest := &ToolManifest{
+		Name:               record.Name,
+		Description:        record.Description,
+		Type:               record.Type,
+		Boundary:           record.Boundary,
+		Version:            record.Version,
+		Endpoint:           record.Endpoint,
+		Timeout:            record.TimeoutMs,
+		InputSchema:        inputSchema,
+		OutputSchema:       outputSchema,
+		Parameters:         parameters,
+		Output:             output,
+		Sandbox:            record.Sandbox,
+		CostLevel:          record.CostLevel,
+		LatencyLevel:       record.LatencyLevel,
+		RiskLevel:          record.RiskLevel,
+		SideEffect:         record.SideEffect,
+		Idempotent:         record.Idempotent,
+		ExecutionPlane:     record.ExecutionPlane,
+		RequiresUserDevice: record.RequiresUserDevice,
+		ArtifactLocation:   record.ArtifactLocation,
+		LocalCommand:       record.LocalCommand,
+		Provider:           record.Provider,
+		SkillPackageID:     record.SkillPackageID,
+		PromptRef:          record.PromptRef,
+		RegisteredAt:       record.CreatedAt,
+	}
+
+	if err := unmarshalRecordJSON(record.Transport, &manifest.Transport, "transport"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.Examples, &manifest.Examples, "examples"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.Capabilities, &manifest.Capabilities, "capabilities"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.Tags, &manifest.Tags, "tags"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.WhenToUse, &manifest.WhenToUse, "when_to_use"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.WhenNotToUse, &manifest.WhenNotToUse, "when_not_to_use"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.ApprovalPolicy, &manifest.ApprovalPolicy, "approval_policy"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.ArtifactPolicy, &manifest.ArtifactPolicy, "artifact_policy"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.LocalRequirements, &manifest.LocalRequirements, "local_requirements"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.ProviderBinding, &manifest.ProviderBinding, "provider_binding"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.ProviderCapabilities, &manifest.ProviderCapabilities, "provider_capabilities"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.NextRecommendedTools, &manifest.NextRecommendedTools, "next_recommended_tools"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.FailureModes, &manifest.FailureModes, "failure_modes"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalRecordJSON(record.ResourceRefs, &manifest.ResourceRefs, "resource_refs"); err != nil {
+		return nil, err
+	}
+
+	return manifest, nil
+}
+
+func marshalCanonicalSchema(schema map[string]interface{}) json.RawMessage {
+	if len(schema) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return encoded
+}
+
+func unmarshalCanonicalSchema(raw json.RawMessage, field string) (map[string]interface{}, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("{}")) {
+		return nil, nil
+	}
+	var schema map[string]interface{}
+	if err := json.Unmarshal(trimmed, &schema); err != nil {
+		return nil, fmt.Errorf("decode tool manifest %s: %w", field, err)
+	}
+	return schema, nil
+}
+
+func unmarshalRecordJSON(raw json.RawMessage, target interface{}, field string) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	if err := json.Unmarshal(trimmed, target); err != nil {
+		return fmt.Errorf("decode tool manifest %s: %w", field, err)
+	}
+	return nil
+}
+
+func legacyProjectionToSchema(projection map[string]ParamDef, includeRequired bool) map[string]interface{} {
+	properties := make(map[string]interface{}, len(projection))
+	requiredNames := make([]string, 0, len(projection))
+	for name, parameter := range projection {
+		property := map[string]interface{}{}
+		if parameter.Type != "" {
+			property["type"] = parameter.Type
+		}
+		if parameter.Description != "" {
+			property["description"] = parameter.Description
+		}
+		if parameter.Default != nil {
+			property["default"] = parameter.Default
+		}
+		if len(parameter.Enum) > 0 {
+			values := make([]interface{}, len(parameter.Enum))
+			for i, value := range parameter.Enum {
+				values[i] = value
+			}
+			property["enum"] = values
+		}
+		properties[name] = property
+		if includeRequired && parameter.Required {
+			requiredNames = append(requiredNames, name)
+		}
+	}
+
+	schema := map[string]interface{}{
+		"type":                 "object",
+		"properties":           properties,
+		"additionalProperties": false,
+	}
+	if len(requiredNames) > 0 {
+		sort.Strings(requiredNames)
+		required := make([]interface{}, len(requiredNames))
+		for i, name := range requiredNames {
+			required[i] = name
+		}
+		schema["required"] = required
+	}
+	return schema
 }

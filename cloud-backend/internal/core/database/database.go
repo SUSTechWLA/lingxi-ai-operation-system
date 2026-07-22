@@ -230,6 +230,8 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    version VARCHAR(50) DEFAULT '1.0',
 		    endpoint TEXT,
 		    timeout_ms INT DEFAULT 30000,
+		    input_schema JSONB DEFAULT '{}',
+		    output_schema JSONB DEFAULT '{}',
 		    parameters JSONB DEFAULT '{}',
 		    output JSONB DEFAULT '{}',
 		    examples JSONB DEFAULT '[]',
@@ -238,6 +240,8 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    updated_at TIMESTAMPTZ DEFAULT NOW()
 		);
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS capabilities JSONB DEFAULT '[]';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS input_schema JSONB DEFAULT '{}';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS output_schema JSONB DEFAULT '{}';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS boundary VARCHAR(32);
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS when_to_use JSONB DEFAULT '[]';

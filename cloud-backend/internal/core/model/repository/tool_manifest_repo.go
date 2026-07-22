@@ -26,6 +26,8 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 	}
 	m.UpdatedAt = now
 
+	inputSchema, _ := json.Marshal(m.InputSchema)
+	outputSchema, _ := json.Marshal(m.OutputSchema)
 	params, _ := json.Marshal(m.Parameters)
 	output, _ := json.Marshal(m.Output)
 	examples, _ := json.Marshal(m.Examples)
@@ -45,7 +47,7 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO tool_manifests (name, description, type, version, endpoint, transport, timeout_ms,
-		 parameters, output, examples, sandbox, capabilities, tags, cost_level, latency_level,
+		 input_schema, output_schema, parameters, output, examples, sandbox, capabilities, tags, cost_level, latency_level,
 		 risk_level, side_effect, idempotent, approval_policy, artifact_policy,
 		 execution_plane, requires_user_device, artifact_location, local_command, local_requirements,
 		 provider, provider_capabilities, next_recommended_tools, failure_modes, skill_package_id, prompt_ref, resource_refs,
@@ -53,19 +55,19 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
 		         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
 		         $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-		         $31, $32, $33, $34, $35, $36, $37, $38)
+		         $31, $32, $33, $34, $35, $36, $37, $38, $39, $40)
 		 ON CONFLICT (name) DO UPDATE SET
 		   description=$2, type=$3, version=$4, endpoint=$5, transport=$6, timeout_ms=$7,
-		   parameters=$8, output=$9, examples=$10, sandbox=$11, capabilities=$12,
-		   tags=$13, cost_level=$14, latency_level=$15, risk_level=$16,
-		   side_effect=$17, idempotent=$18, approval_policy=$19, artifact_policy=$20,
-		   execution_plane=$21, requires_user_device=$22, artifact_location=$23,
-		   local_command=$24, local_requirements=$25, provider=$26, provider_capabilities=$27,
-		   next_recommended_tools=$28, failure_modes=$29, skill_package_id=$30,
-		   prompt_ref=$31, resource_refs=$32, boundary=$33, when_to_use=$34,
-		   when_not_to_use=$35, provider_binding=$36, updated_at=$38`,
+		   input_schema=$8, output_schema=$9, parameters=$10, output=$11, examples=$12,
+		   sandbox=$13, capabilities=$14, tags=$15, cost_level=$16, latency_level=$17,
+		   risk_level=$18, side_effect=$19, idempotent=$20, approval_policy=$21,
+		   artifact_policy=$22, execution_plane=$23, requires_user_device=$24,
+		   artifact_location=$25, local_command=$26, local_requirements=$27, provider=$28,
+		   provider_capabilities=$29, next_recommended_tools=$30, failure_modes=$31,
+		   skill_package_id=$32, prompt_ref=$33, resource_refs=$34, boundary=$35,
+		   when_to_use=$36, when_not_to_use=$37, provider_binding=$38, updated_at=$40`,
 		m.Name, m.Description, m.Type, m.Version, m.Endpoint, transport, m.TimeoutMs,
-		params, output, examples, m.Sandbox,
+		inputSchema, outputSchema, params, output, examples, m.Sandbox,
 		capabilities, tags, m.CostLevel, m.LatencyLevel, m.RiskLevel,
 		m.SideEffect, m.Idempotent, approvalPolicy, artifactPolicy,
 		m.ExecutionPlane, m.RequiresUserDevice, m.ArtifactLocation, m.LocalCommand, localRequirements,
@@ -79,7 +81,7 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 func (r *ToolManifestRepository) FindByName(ctx context.Context, name string) (*model.ToolManifestRecord, error) {
 	row := r.pool.QueryRow(ctx,
 		`SELECT name, description, type, version, endpoint, transport, timeout_ms,
-		        parameters, output, examples, sandbox, capabilities, tags,
+		        input_schema, output_schema, parameters, output, examples, sandbox, capabilities, tags,
 		        cost_level, latency_level, risk_level, side_effect, idempotent,
 		        approval_policy, artifact_policy, execution_plane, requires_user_device,
 		        artifact_location, local_command, local_requirements, provider, provider_capabilities,
@@ -95,7 +97,7 @@ func (r *ToolManifestRepository) FindByName(ctx context.Context, name string) (*
 func (r *ToolManifestRepository) FindAll(ctx context.Context) ([]*model.ToolManifestRecord, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT name, description, type, version, endpoint, transport, timeout_ms,
-		        parameters, output, examples, sandbox, capabilities, tags,
+		        input_schema, output_schema, parameters, output, examples, sandbox, capabilities, tags,
 		        cost_level, latency_level, risk_level, side_effect, idempotent,
 		        approval_policy, artifact_policy, execution_plane, requires_user_device,
 		        artifact_location, local_command, local_requirements, provider, provider_capabilities,
@@ -128,7 +130,7 @@ func (r *ToolManifestRepository) Delete(ctx context.Context, name string) error 
 // scanManifest scans a single tool_manifests row into a ToolManifestRecord.
 func scanManifest(row pgx.Row) (*model.ToolManifestRecord, error) {
 	var m model.ToolManifestRecord
-	var params, output, examples, transport []byte
+	var inputSchema, outputSchema, params, output, examples, transport []byte
 	var capabilities, tags, whenToUse, whenNotToUse, approvalPolicy, artifactPolicy, localRequirements, providerBinding, providerCapabilities []byte
 	var nextRecommendedTools, failureModes, resourceRefs []byte
 	var endpoint *string
@@ -139,7 +141,7 @@ func scanManifest(row pgx.Row) (*model.ToolManifestRecord, error) {
 
 	if err := row.Scan(
 		&m.Name, &m.Description, &m.Type, &version, &endpoint, &transport, &m.TimeoutMs,
-		&params, &output, &examples, &m.Sandbox, &capabilities, &tags,
+		&inputSchema, &outputSchema, &params, &output, &examples, &m.Sandbox, &capabilities, &tags,
 		&costLevel, &latencyLevel, &riskLevel, &m.SideEffect, &m.Idempotent,
 		&approvalPolicy, &artifactPolicy, &executionPlane, &m.RequiresUserDevice,
 		&artifactLocation, &localCommand, &localRequirements, &provider, &providerCapabilities,
@@ -161,6 +163,12 @@ func scanManifest(row pgx.Row) (*model.ToolManifestRecord, error) {
 	}
 	if len(transport) > 0 {
 		m.Transport = transport
+	}
+	if len(inputSchema) > 0 {
+		m.InputSchema = inputSchema
+	}
+	if len(outputSchema) > 0 {
+		m.OutputSchema = outputSchema
 	}
 	if costLevel != nil {
 		m.CostLevel = *costLevel
