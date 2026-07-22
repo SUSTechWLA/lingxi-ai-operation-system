@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +14,7 @@ import (
 )
 
 func TestMCPToolCallExecutorCallsConfiguredProvider(t *testing.T) {
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -102,7 +101,7 @@ func TestMCPToolCallExecutorRequiresProviderID(t *testing.T) {
 func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 	callCount := 0
 	promptText := validMCPVideoPrompt("开场流程被点亮")
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -204,7 +203,7 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 func TestMCPToolCallExecutorDefersRemainingRequestsWhenGenerationIsPending(t *testing.T) {
 	callCount := 0
 	promptText := validMCPVideoPrompt("第一个片段开始排队")
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -288,7 +287,7 @@ func TestMCPToolCallExecutorDefersRemainingRequestsWhenGenerationIsPending(t *te
 }
 
 func TestMCPToolCallExecutorDefersBatchWhenGenerateCallTimesOut(t *testing.T) {
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond)
 		var req map[string]interface{}
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -369,7 +368,7 @@ func TestMCPToolCallExecutorDownloadsGeneratedVideoIntoShotFusionPlan(t *testing
 		t.Fatalf("write source video: %v", err)
 	}
 
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -472,7 +471,7 @@ func TestMCPToolCallExecutorPackagesDeterministicIPArollWithoutAIGCPreflight(t *
 		t.Fatalf("write source video: %v", err)
 	}
 
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -564,7 +563,7 @@ func TestMCPToolCallExecutorDefersAfterDefaultReadyGenerationBudget(t *testing.T
 	}
 
 	callCount := 0
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -635,7 +634,7 @@ func TestMCPToolCallExecutorDefersWhenBatchTimeoutIsReached(t *testing.T) {
 	}
 
 	callCount := 0
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -701,7 +700,7 @@ func TestMCPToolCallExecutorDefersWhenBatchTimeoutIsReached(t *testing.T) {
 
 func TestMCPToolCallExecutorMarksFailedQueryResultWithoutWaiting(t *testing.T) {
 	dataDir := t.TempDir()
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -773,7 +772,7 @@ func TestMCPToolCallExecutorMarksFailedQueryResultWithoutWaiting(t *testing.T) {
 }
 
 func TestMCPToolCallExecutorDefersProviderBusyExternalBatch(t *testing.T) {
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -856,7 +855,7 @@ func TestMCPArgumentsFromExternalRequestNormalizesResolution(t *testing.T) {
 func TestMCPToolCallExecutorRoutesImageExternalRequestToGenerateImage(t *testing.T) {
 	var toolName string
 	var toolArgs map[string]interface{}
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -936,7 +935,7 @@ func TestMCPToolCallExecutorRoutesImageExternalRequestToGenerateImage(t *testing
 }
 
 func TestMCPToolCallExecutorReportsMissingReadyVideoAssets(t *testing.T) {
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -1012,7 +1011,7 @@ func TestMCPToolCallExecutorReportsMissingReadyVideoAssets(t *testing.T) {
 }
 
 func TestMCPToolCallExecutorFailsStrictBatchWhenReadyVideoIsMissing(t *testing.T) {
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -1058,7 +1057,7 @@ func TestMCPToolCallExecutorFailsStrictBatchWhenReadyVideoIsMissing(t *testing.T
 
 func TestMCPToolCallExecutorBlocksUnclearVideoPromptBeforeProviderCall(t *testing.T) {
 	callCount := 0
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		t.Fatalf("provider should not be called when prompt QA fails")
 	}))
@@ -1107,7 +1106,7 @@ func TestMCPToolCallExecutorBlocksUnclearVideoPromptBeforeProviderCall(t *testin
 
 func TestMCPToolCallExecutorBlocksMissingUsableReferencesBeforeProviderCall(t *testing.T) {
 	callCount := 0
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		t.Fatalf("provider should not be called when reference QA fails")
 	}))
@@ -1157,7 +1156,7 @@ func TestMCPToolCallExecutorPassesAIGCLayerPromptToJiMeng(t *testing.T) {
 	callCount := 0
 	aigcPrompt := validMCPVideoPrompt("AIGC 视频层提示词被正确投放给即梦")
 	wrongLayerPrompt := "HyperFrames 文字层：只负责字幕、标题、UI 卡片和精确中文渲染。"
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1222,7 +1221,7 @@ func TestMCPToolCallExecutorPassesAIGCLayerPromptToJiMeng(t *testing.T) {
 func TestMCPToolCallExecutorAllowsClearTimedVideoPrompt(t *testing.T) {
 	callCount := 0
 	promptText := validMCPVideoPrompt("创作桌流程变清楚")
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

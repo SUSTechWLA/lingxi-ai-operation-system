@@ -85,6 +85,7 @@ type registerMCPRequest struct {
 	Command       string            `json:"command"`
 	Args          []string          `json:"args"`
 	Env           map[string]string `json:"env"`
+	Headers       map[string]string `json:"headers"`
 	WorkingDir    string            `json:"workingDir"`
 	ToolPrefix    string            `json:"toolPrefix"`
 	ToolNameMap   map[string]string `json:"toolNameMap"`
@@ -262,6 +263,7 @@ func (s *Server) handleJiMengRegisterMCP(w http.ResponseWriter, r *http.Request)
 		Command:       command,
 		Args:          args,
 		Env:           req.Env,
+		Headers:       req.Headers,
 		WorkingDir:    req.WorkingDir,
 		ToolPrefix:    toolPrefix,
 		ToolNameMap:   req.ToolNameMap,
@@ -444,6 +446,7 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 		provider.ApprovalMode = strings.TrimSpace(provider.ApprovalMode)
 		provider.Args = compactArgs(provider.Args)
 		provider.Env = compactEnv(provider.Env)
+		provider.Headers = compactHeaders(provider.Headers)
 		provider.ToolNameMap = compactToolNameMap(provider.ToolNameMap)
 		provider.EnabledTools = compactStringList(provider.EnabledTools)
 		provider.DisabledTools = compactStringList(provider.DisabledTools)
@@ -507,6 +510,24 @@ func compactEnv(env map[string]string) map[string]string {
 	}
 	out := make(map[string]string, len(env))
 	for key, value := range env {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func compactHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	for key, value := range headers {
 		key = strings.TrimSpace(key)
 		if key == "" {
 			continue

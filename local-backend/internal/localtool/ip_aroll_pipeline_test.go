@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +20,7 @@ func TestIPArollMCPOutputFeedsHyperFramesComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)

@@ -469,7 +469,7 @@ func TestReadMCPProvidersAddsBundledIPAvatarToExistingConfig(t *testing.T) {
 
 func TestLocalMCPProviderSettingsSaveAndStatus(t *testing.T) {
 	root := t.TempDir()
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode mcp request: %v", err)
@@ -537,6 +537,7 @@ func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
 				"command":"python3",
 				"args":["/opt/mcp/echo_server.py"],
 				"env":{"ECHO_MODE":"test"},
+				"headers":{" Authorization ":"Bearer test-token"},
 				"toolPrefix":"echo.",
 				"toolNameMap":{"echo.health":"health"},
 				"enabled":true
@@ -567,6 +568,9 @@ func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
 	if provider.Env["ECHO_MODE"] != "test" {
 		t.Fatalf("stdio env not preserved: %+v", provider.Env)
 	}
+	if provider.Headers["Authorization"] != "Bearer test-token" || len(provider.Headers) != 1 {
+		t.Fatalf("provider headers not normalized and preserved: %+v", provider.Headers)
+	}
 	if provider.ToolPrefix != "echo." || provider.ToolNameMap["echo.health"] != "health" {
 		t.Fatalf("stdio tool mapping not preserved: %+v", provider)
 	}
@@ -575,7 +579,7 @@ func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
 func TestJiMengSetupStatusReadsDreaminaStatusThroughMCP(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeAgentCommandRunner{}
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode mcp request: %v", err)
@@ -743,7 +747,7 @@ func localMCPProviderByID(providers []localmcp.ProviderConfig, id string) (local
 
 func TestJiMengLoginHeadlessCallsRegisteredMCPProvider(t *testing.T) {
 	root := t.TempDir()
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode mcp request: %v", err)
