@@ -52,6 +52,9 @@ func NewToolManifestRepository(pool *pgxpool.Pool) *ToolManifestRepository {
 }
 
 func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManifestRecord) error {
+	if m == nil {
+		return fmt.Errorf("tool manifest record is nil")
+	}
 	now := time.Now()
 	if m.CreatedAt.IsZero() {
 		m.CreatedAt = now
