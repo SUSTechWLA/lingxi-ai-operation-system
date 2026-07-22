@@ -2,6 +2,7 @@ package localrunner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -15,9 +16,9 @@ type RunnerService interface {
 	RegisterRunner(ctx context.Context, req RegisterRunnerRequest) (*RegisterRunnerResponse, error)
 	Heartbeat(ctx context.Context, runnerID string, req HeartbeatRequest) error
 	ClaimJob(ctx context.Context, runnerID string) (*LocalJob, error)
-	ReportProgress(ctx context.Context, jobID string, req ProgressRequest) error
-	CompleteJob(ctx context.Context, jobID string, req CompleteJobRequest) (*LocalJob, error)
-	FailJob(ctx context.Context, jobID string, req FailJobRequest) (*LocalJob, error)
+	ReportProgress(ctx context.Context, identity JobMutationIdentity, jobID string, req ProgressRequest) error
+	CompleteJob(ctx context.Context, identity JobMutationIdentity, jobID string, req CompleteJobRequest) (*LocalJob, error)
+	FailJob(ctx context.Context, identity JobMutationIdentity, jobID string, req FailJobRequest) (*LocalJob, error)
 	GetJob(ctx context.Context, jobID string) (*LocalJob, error)
 	ValidateRunnerAccess(ctx context.Context, userID, deviceID, runnerID, sessionID string) error
 	ValidateJobAccess(ctx context.Context, userID, runnerID, jobID string) error
@@ -143,12 +144,13 @@ func (h *Handler) reportProgress(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateJobFromRequest(c); err != nil {
+	identity, err := h.validateJobFromRequest(c)
+	if err != nil {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}
-	if err := h.service.ReportProgress(c.Request.Context(), c.Param("jobId"), req); err != nil {
-		writeError(c, http.StatusInternalServerError, err.Error())
+	if err := h.service.ReportProgress(c.Request.Context(), identity, c.Param("jobId"), req); err != nil {
+		writeJobMutationError(c, err)
 		return
 	}
 
@@ -170,7 +172,8 @@ func (h *Handler) completeJob(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateJobFromRequest(c); err != nil {
+	identity, err := h.validateJobFromRequest(c)
+	if err != nil {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}
@@ -188,13 +191,13 @@ func (h *Handler) completeJob(c *gin.Context) {
 	req.Output = normalizeCompleteJobOutput(jobContext, req.Output)
 	if manifest := h.manifestForLocalJob(jobContext); manifest != nil {
 		if err := tool.ValidateLocalJobOutput(manifest, req.Output); err != nil {
-			h.failInvalidCompletion(c, jobContext, err)
+			h.failInvalidCompletion(c, identity, jobContext, err)
 			return
 		}
 	}
-	job, err := h.service.CompleteJob(c.Request.Context(), c.Param("jobId"), req)
+	job, err := h.service.CompleteJob(c.Request.Context(), identity, c.Param("jobId"), req)
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, err.Error())
+		writeJobMutationError(c, err)
 		return
 	}
 	if jobContext == nil {
@@ -231,9 +234,9 @@ func (h *Handler) manifestForLocalJob(job *LocalJob) *tool.ToolManifest {
 	return nil
 }
 
-func (h *Handler) failInvalidCompletion(c *gin.Context, job *LocalJob, validationErr error) {
+func (h *Handler) failInvalidCompletion(c *gin.Context, identity JobMutationIdentity, job *LocalJob, validationErr error) {
 	message := "OUTPUT_SCHEMA_INVALID: " + validationErr.Error()
-	failed, err := h.service.FailJob(c.Request.Context(), c.Param("jobId"), FailJobRequest{
+	failed, err := h.service.FailJob(c.Request.Context(), identity, c.Param("jobId"), FailJobRequest{
 		Success: false,
 		Error: map[string]interface{}{
 			"code":    "OUTPUT_SCHEMA_INVALID",
@@ -380,13 +383,14 @@ func (h *Handler) failJob(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateJobFromRequest(c); err != nil {
+	identity, err := h.validateJobFromRequest(c)
+	if err != nil {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}
-	job, err := h.service.FailJob(c.Request.Context(), c.Param("jobId"), req)
+	job, err := h.service.FailJob(c.Request.Context(), identity, c.Param("jobId"), req)
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, err.Error())
+		writeJobMutationError(c, err)
 		return
 	}
 	if h.results != nil && job != nil && job.NodeID != "" {
@@ -402,6 +406,16 @@ func (h *Handler) failJob(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func writeJobMutationError(c *gin.Context, err error) {
+	status := http.StatusInternalServerError
+	if errors.Is(err, ErrJobAccessDenied) || errors.Is(err, ErrRunnerAccessDenied) {
+		status = http.StatusForbidden
+	} else if errors.Is(err, ErrJobAlreadyCompleted) {
+		status = http.StatusConflict
+	}
+	writeError(c, status, err.Error())
 }
 
 // validateRunnerFromRequest checks that the runner ID from the URL matches
@@ -426,7 +440,7 @@ func (h *Handler) validateRunnerFromRequest(c *gin.Context) error {
 
 // validateJobFromRequest checks that the requesting runner (from X-Runner-ID header)
 // has access to the job.
-func (h *Handler) validateJobFromRequest(c *gin.Context) error {
+func (h *Handler) validateJobFromRequest(c *gin.Context) (JobMutationIdentity, error) {
 	jobID := c.Param("jobId")
 	userID, _ := auth.UserIDFromContext(c.Request.Context())
 	deviceID, _ := auth.DeviceIDFromContext(c.Request.Context())
@@ -435,16 +449,19 @@ func (h *Handler) validateJobFromRequest(c *gin.Context) error {
 		runnerID = c.GetHeader("X-Runner-Id")
 	}
 	if runnerID == "" {
-		return fmt.Errorf("X-Runner-ID header required")
+		return JobMutationIdentity{}, fmt.Errorf("X-Runner-ID header required")
 	}
 	sessionID := c.GetHeader("X-Runner-Session-ID")
 	if sessionID == "" {
 		sessionID = c.GetHeader("X-Runner-Session-Id")
 	}
 	if err := h.service.ValidateRunnerAccess(c.Request.Context(), userID, deviceID, runnerID, sessionID); err != nil {
-		return err
+		return JobMutationIdentity{}, err
 	}
-	return h.service.ValidateJobAccess(c.Request.Context(), userID, runnerID, jobID)
+	if err := h.service.ValidateJobAccess(c.Request.Context(), userID, runnerID, jobID); err != nil {
+		return JobMutationIdentity{}, err
+	}
+	return JobMutationIdentity{UserID: userID, DeviceID: deviceID, RunnerID: runnerID, SessionID: sessionID}, nil
 }
 
 func writeError(c *gin.Context, status int, message string) {

@@ -11,6 +11,43 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/config"
 )
 
+const localMCPReplanMigrationSQL = `UPDATE local_jobs
+SET status='FAILED',
+    error_message='MCP_CATALOG_REPLAN_REQUIRED',
+    error_json=jsonb_build_object(
+      'code', 'MCP_CATALOG_REPLAN_REQUIRED',
+      'message', 'Legacy MCP job has no immutable runner catalog binding; create a new plan and dispatch again'
+    ),
+    diagnostics=jsonb_build_object('migration', 'mcp_catalog_binding_v1'),
+    retryable=false,
+    runner_id=NULL,
+    lease_expires_at=NULL,
+    completed_at=NOW(),
+    updated_at=NOW()
+WHERE command='LOCAL_MCP_TOOL_CALL'
+  AND status IN ('PENDING','CLAIMED','RUNNING')
+  AND (
+    BTRIM(COALESCE(catalog_revision,''))='' OR
+    BTRIM(COALESCE(mcp_provider_id,''))='' OR
+    BTRIM(COALESCE(mcp_logical_tool_name,''))='' OR
+    BTRIM(COALESCE(mcp_remote_tool_name,''))=''
+  )`
+
+const localOrphanJobMigrationSQL = `UPDATE local_jobs
+SET status='FAILED',
+    error_message='TASK_OWNER_UNRESOLVED',
+    error_json=jsonb_build_object(
+      'code', 'TASK_OWNER_UNRESOLVED',
+      'message', 'Job owner could not be resolved from durable task state; dispatch again from an authenticated workflow'
+    ),
+    retryable=false,
+    runner_id=NULL,
+    lease_expires_at=NULL,
+    completed_at=NOW(),
+    updated_at=NOW()
+WHERE status IN ('PENDING','CLAIMED','RUNNING')
+  AND BTRIM(COALESCE(user_id,''))=''`
+
 const videoProjectConfigRevisionMigration = `
 	ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS config_revision BIGINT NOT NULL DEFAULT 0;
 	CREATE OR REPLACE FUNCTION enforce_video_project_config_revision_guard() RETURNS trigger AS $$
@@ -583,6 +620,12 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	`
 	if _, err := pool.Exec(ctx, localRunnerSchema); err != nil {
 		zap.L().Warn("Failed to run local runner migrations (non-fatal)", zap.Error(err))
+	}
+	if _, err := pool.Exec(ctx, localMCPReplanMigrationSQL); err != nil {
+		zap.L().Warn("Failed to quarantine legacy MCP jobs (non-fatal)", zap.Error(err))
+	}
+	if _, err := pool.Exec(ctx, localOrphanJobMigrationSQL); err != nil {
+		zap.L().Warn("Failed to quarantine ownerless local jobs (non-fatal)", zap.Error(err))
 	}
 
 	// Migrate: drop legacy bid tables (业务线已移除)

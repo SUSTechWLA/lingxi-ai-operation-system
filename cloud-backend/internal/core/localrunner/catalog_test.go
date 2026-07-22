@@ -103,4 +103,29 @@ func TestMCPToolAdvertisementWireCannotCarryTransportSecrets(t *testing.T) {
 	}
 }
 
+func TestCloudCatalogFailsClosedOnInvalidSchemaStructure(t *testing.T) {
+	base := MCPToolAdvertisement{
+		ProviderID: "p", LogicalToolName: "p.echo", RemoteToolName: "echo",
+		InputSchema: map[string]any{"type": "object"},
+	}
+	for name, schema := range map[string]map[string]any{
+		"array root":   {"type": "array"},
+		"remote ref":   {"type": "object", "properties": map[string]any{"x": map[string]any{"$ref": "https://evil.invalid/schema"}}},
+		"bad required": {"type": "object", "required": "x"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tool := base
+			tool.InputSchema = schema
+			tools := []MCPToolAdvertisement{tool}
+			err := ValidateRunnerCapabilities([]RunnerCapability{{
+				ToolName: "mcp", Command: CommandLocalMCPToolCall, Available: true,
+				CatalogRevision: MCPToolCatalogRevision(tools), MCPTools: tools,
+			}})
+			if err == nil {
+				t.Fatalf("invalid schema accepted: %#v", schema)
+			}
+		})
+	}
+}
+
 func boolPointer(value bool) *bool { return &value }

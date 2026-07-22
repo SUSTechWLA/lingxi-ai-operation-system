@@ -126,6 +126,9 @@ func validateMCPToolAdvertisement(tool MCPToolAdvertisement) error {
 		if len(wire) > MaxMCPToolSchemaBytes {
 			return fmt.Errorf("%s exceeds %d bytes", label, MaxMCPToolSchemaBytes)
 		}
+		if err := validateMCPJSONSchema(label, schema); err != nil {
+			return err
+		}
 	}
 	switch tool.ApprovalMode {
 	case "", "none", "before_execute", "always":

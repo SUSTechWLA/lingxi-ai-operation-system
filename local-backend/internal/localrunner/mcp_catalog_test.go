@@ -158,3 +158,55 @@ func TestMCPToolCatalogDiscoveryBoundsEachProviderProbe(t *testing.T) {
 		t.Fatalf("provider probe was not bounded: elapsed=%v diagnostics=%#v", time.Since(started), diagnostics)
 	}
 }
+
+func TestMCPToolCatalogDiscoveryOmitsStructurallyInvalidToolsWithoutDroppingProvider(t *testing.T) {
+	discoverer := newMCPToolCatalogDiscoverer(
+		func() ([]localmcp.ProviderConfig, error) {
+			return []localmcp.ProviderConfig{{ID: "p", Enabled: true, ApprovalMode: localmcp.ApprovalModeNone, TimeoutSec: 30}}, nil
+		},
+		func(localmcp.ProviderConfig) mcpToolLister {
+			return &fakeMCPToolLister{tools: []localmcp.Tool{
+				{Name: "good", InputSchema: map[string]any{"type": "object"}},
+				{Name: "array-root", InputSchema: map[string]any{"type": "array"}},
+				{Name: "remote-ref", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"x": map[string]any{"$ref": "https://evil.invalid/schema"}}}},
+				{Name: "bad-annotation", InputSchema: map[string]any{"type": "object"}, Annotations: map[string]any{"readOnlyHint": "yes"}},
+			}}
+		},
+	)
+	catalog, diagnostics := discoverer.Discover(context.Background())
+	if len(catalog.Tools) != 1 || catalog.Tools[0].LogicalToolName != "good" {
+		t.Fatalf("invalid tools should be isolated: %#v", catalog.Tools)
+	}
+	if len(diagnostics) != 3 {
+		t.Fatalf("want one diagnostic per invalid tool, got %#v", diagnostics)
+	}
+}
+
+func TestLocalMCPAdvertisementRejectsInvalidProviderPolicyAndDeepSchema(t *testing.T) {
+	base := MCPToolAdvertisement{
+		ProviderID: "p", LogicalToolName: "p.echo", RemoteToolName: "echo",
+		InputSchema: map[string]any{"type": "object"},
+	}
+	invalidApproval := base
+	invalidApproval.ApprovalMode = "sometimes"
+	if err := validateLocalMCPToolAdvertisement(invalidApproval); err == nil {
+		t.Fatal("invalid approval mode accepted")
+	}
+	invalidTimeout := base
+	invalidTimeout.TimeoutSec = 86401
+	if err := validateLocalMCPToolAdvertisement(invalidTimeout); err == nil {
+		t.Fatal("invalid timeout accepted")
+	}
+	deep := map[string]any{"type": "object"}
+	cursor := deep
+	for range maxMCPToolSchemaDepth + 2 {
+		next := map[string]any{"type": "object"}
+		cursor["properties"] = map[string]any{"nested": next}
+		cursor = next
+	}
+	deepSchema := base
+	deepSchema.InputSchema = deep
+	if err := validateLocalMCPToolAdvertisement(deepSchema); err == nil || !strings.Contains(err.Error(), "depth") {
+		t.Fatalf("deep schema accepted: %v", err)
+	}
+}

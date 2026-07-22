@@ -177,6 +177,15 @@ type FailJobRequest struct {
 	Retryable   bool                   `json:"retryable"`
 }
 
+// JobMutationIdentity is populated only from authenticated request context and
+// runner session headers. It is never decoded from a job mutation body.
+type JobMutationIdentity struct {
+	UserID    string
+	DeviceID  string
+	RunnerID  string
+	SessionID string
+}
+
 type DispatchLocalJobRequest struct {
 	UserID             string                 `json:"userId,omitempty"`
 	TargetRunnerID     string                 `json:"targetRunnerId,omitempty"`

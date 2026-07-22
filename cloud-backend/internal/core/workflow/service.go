@@ -125,7 +125,7 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 
 // Instantiate creates a Task and submits the template's DAG to the orchestrator.
 // This is the core "instantiate a workflow" operation.
-func (s *Service) Instantiate(ctx context.Context, templateID string, overrides map[string]interface{}) (string, error) {
+func (s *Service) Instantiate(ctx context.Context, userID, templateID string, overrides map[string]interface{}) (string, error) {
 	t, err := s.repo.FindByID(ctx, templateID)
 	if err != nil {
 		return "", fmt.Errorf("template not found: %w", err)
@@ -150,7 +150,7 @@ func (s *Service) Instantiate(ctx context.Context, templateID string, overrides 
 	}
 
 	// Create task
-	task, err := s.orchService.CreateTask(ctx, map[string]interface{}{
+	task, err := s.orchService.CreateTask(ctx, userID, map[string]interface{}{
 		"source":        "workflow-template",
 		"template_id":   templateID,
 		"template_name": t.Name,

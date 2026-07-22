@@ -385,6 +385,21 @@ func TestHandlerFailJobAdvancesNodeFailure(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsAtomicMutationAuthorizationFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{mutationErr: ErrJobAccessDenied}
+	router := gin.New()
+	NewHandler(service, nil).RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_stale/progress", bytes.NewBufferString(`{"progress":0.5}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_old")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
 type fakeRunnerService struct {
 	registerReq   RegisterRunnerRequest
 	claimRunnerID string
@@ -394,6 +409,7 @@ type fakeRunnerService struct {
 	failReq       FailJobRequest
 	job           *LocalJob
 	heartbeats    []HeartbeatRequest
+	mutationErr   error
 }
 
 func (f *fakeRunnerService) RegisterRunner(_ context.Context, req RegisterRunnerRequest) (*RegisterRunnerResponse, error) {
@@ -416,20 +432,20 @@ func (f *fakeRunnerService) ClaimJob(_ context.Context, runnerID string) (*Local
 	return f.job, nil
 }
 
-func (f *fakeRunnerService) ReportProgress(_ context.Context, _ string, _ ProgressRequest) error {
-	return nil
+func (f *fakeRunnerService) ReportProgress(_ context.Context, _ JobMutationIdentity, _ string, _ ProgressRequest) error {
+	return f.mutationErr
 }
 
-func (f *fakeRunnerService) CompleteJob(_ context.Context, jobID string, req CompleteJobRequest) (*LocalJob, error) {
+func (f *fakeRunnerService) CompleteJob(_ context.Context, _ JobMutationIdentity, jobID string, req CompleteJobRequest) (*LocalJob, error) {
 	f.completeJobID = jobID
 	f.completeReq = req
-	return f.job, nil
+	return f.job, f.mutationErr
 }
 
-func (f *fakeRunnerService) FailJob(_ context.Context, jobID string, req FailJobRequest) (*LocalJob, error) {
+func (f *fakeRunnerService) FailJob(_ context.Context, _ JobMutationIdentity, jobID string, req FailJobRequest) (*LocalJob, error) {
 	f.failJobID = jobID
 	f.failReq = req
-	return f.job, nil
+	return f.job, f.mutationErr
 }
 
 func (f *fakeRunnerService) GetJob(_ context.Context, _ string) (*LocalJob, error) {

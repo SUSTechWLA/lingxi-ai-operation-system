@@ -78,7 +78,7 @@ func TestLoopRegistersMCPToolCatalogAndHeartbeatsOnlyRevisionChanges(t *testing.
 	reg.Register(localtool.ExecutorFunc(func(context.Context, localtool.Job) (*localtool.Result, error) {
 		return &localtool.Result{Output: map[string]interface{}{}}, nil
 	}), localtool.CommandLocalMCPToolCall)
-	source := &fakeCatalogSource{catalog: MCPToolCatalog{
+	source := &fakeCatalogSource{fingerprint: "config-a", catalog: MCPToolCatalog{
 		Revision: strings.Repeat("a", 64),
 		Tools: []MCPToolAdvertisement{{
 			ProviderID: "studio", LogicalToolName: "studio.render", RemoteToolName: "render",
@@ -101,6 +101,7 @@ func TestLoopRegistersMCPToolCatalogAndHeartbeatsOnlyRevisionChanges(t *testing.
 	}
 
 	source.catalog = MCPToolCatalog{Revision: strings.Repeat("b", 64), Tools: []MCPToolAdvertisement{}}
+	source.fingerprint = "config-b"
 	if err := loop.RunOnce(context.Background()); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
@@ -125,10 +126,96 @@ func findCapability(capabilities []Capability, command string) *Capability {
 type fakeCatalogSource struct {
 	catalog     MCPToolCatalog
 	diagnostics []MCPProviderDiagnostic
+	fingerprint string
+	discoveries int
 }
 
 func (f *fakeCatalogSource) Discover(context.Context) (MCPToolCatalog, []MCPProviderDiagnostic) {
+	f.discoveries++
 	return f.catalog, f.diagnostics
+}
+
+func (f *fakeCatalogSource) Fingerprint(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return f.fingerprint, nil
+}
+
+func TestMCPCatalogRefreshUsesTenMinuteTTLAndConfigurationFingerprint(t *testing.T) {
+	client := &fakeClient{register: RegisterRunnerResponse{RunnerID: "runner_001", SessionID: "session_001", PollIntervalSec: 3}}
+	reg := localtool.NewRegistry()
+	reg.Register(localtool.ExecutorFunc(func(context.Context, localtool.Job) (*localtool.Result, error) { return nil, nil }), localtool.CommandLocalMCPToolCall)
+	source := &fakeCatalogSource{fingerprint: "config-v1", catalog: MCPToolCatalog{Revision: strings.Repeat("a", 64)}}
+	loop := NewLoop(client, reg, LoopOptions{MCPToolCatalogSource: source})
+	if loop.options.MCPCatalogRefreshInterval < 10*time.Minute {
+		t.Fatalf("default catalog TTL=%v, want at least 10m", loop.options.MCPCatalogRefreshInterval)
+	}
+	now := time.Unix(1_700_000_000, 0)
+	loop.now = func() time.Time { return now }
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for range 18 {
+		now = now.Add(30 * time.Second)
+		if err := loop.RunOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if source.discoveries != 1 {
+		t.Fatalf("30s ticks spawned discovery %d times, want once", source.discoveries)
+	}
+	source.fingerprint = "config-v2"
+	now = now.Add(30 * time.Second)
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.discoveries != 2 {
+		t.Fatalf("configuration change did not refresh immediately: %d", source.discoveries)
+	}
+	now = now.Add(loop.options.MCPCatalogRefreshInterval + time.Second)
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.discoveries != 3 {
+		t.Fatalf("TTL expiry did not refresh: %d", source.discoveries)
+	}
+}
+
+func TestMCPCatalogDiscoveryFailureBacksOffAndHonorsCancellation(t *testing.T) {
+	client := &fakeClient{register: RegisterRunnerResponse{RunnerID: "runner_001", SessionID: "session_001"}}
+	source := &fakeCatalogSource{
+		fingerprint: "broken-v1",
+		catalog:     MCPToolCatalog{Revision: strings.Repeat("a", 64)},
+		diagnostics: []MCPProviderDiagnostic{{Code: "TOOLS_LIST_FAILED", Message: "offline"}},
+	}
+	loop := NewLoop(client, localtool.NewRegistry(), LoopOptions{MCPToolCatalogSource: source})
+	now := time.Unix(1_700_000_000, 0)
+	loop.now = func() time.Time { return now }
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(30 * time.Second)
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.discoveries != 1 {
+		t.Fatalf("failed discovery ignored backoff: %d", source.discoveries)
+	}
+	now = now.Add(2 * time.Minute)
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.discoveries != 2 {
+		t.Fatalf("failed discovery did not retry after backoff: %d", source.discoveries)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	loop.catalogNextRefreshAt = time.Time{}
+	loop.refreshMCPToolCatalog(cancelled)
+	if source.discoveries != 2 {
+		t.Fatalf("cancelled context triggered discovery: %d", source.discoveries)
+	}
 }
 
 func TestLoopFailsUnsupportedCommand(t *testing.T) {

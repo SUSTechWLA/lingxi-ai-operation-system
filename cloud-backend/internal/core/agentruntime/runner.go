@@ -79,7 +79,7 @@ type PlanRepairer interface {
 }
 
 type Orchestrator interface {
-	CreateTask(ctx context.Context, input map[string]interface{}) (*model.Task, error)
+	CreateTask(ctx context.Context, userID string, input map[string]interface{}) (*model.Task, error)
 	SubmitDAG(ctx context.Context, taskID string, dagReq *model.DAGRequest) error
 	GetTaskWithDetails(ctx context.Context, taskID string) (map[string]interface{}, error)
 }
@@ -364,7 +364,6 @@ planOK:
 	taskInput := map[string]interface{}{
 		"source":         "agentruntime",
 		"agentRunId":     run.ID,
-		"userId":         req.UserID,
 		"message":        req.Message,
 		"domain":         plan.Domain,
 		"context":        sanitizedRunContext(req.Context),
@@ -375,7 +374,7 @@ planOK:
 		taskInput["planJudgeWarnings"] = judgeReport.Warnings
 		taskInput["planJudgePassed"] = judgeReport.Passed
 	}
-	task, err := r.orchestrator.CreateTask(ctx, taskInput)
+	task, err := r.orchestrator.CreateTask(ctx, req.UserID, taskInput)
 	if err != nil {
 		return nil, fmt.Errorf("create agent task: %w", err)
 	}

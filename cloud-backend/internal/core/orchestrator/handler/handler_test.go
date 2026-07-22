@@ -1,12 +1,17 @@
 package handler
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/tangying-ai/aios-core/internal/core/auth"
+	"github.com/tangying-ai/aios-core/internal/core/model"
 )
 
 func init() {
@@ -42,6 +47,63 @@ func TestOrchestratorHandler_Health(t *testing.T) {
 	}
 	if envelope.Data["service"] != "ai-orchestrator" {
 		t.Errorf("Expected service ai-orchestrator, got %v", envelope.Data["service"])
+	}
+}
+
+type recordingOrchestrator struct {
+	userID string
+	input  map[string]interface{}
+	dag    *model.DAGRequest
+}
+
+func (r *recordingOrchestrator) CreateTask(_ context.Context, userID string, input map[string]interface{}) (*model.Task, error) {
+	r.userID, r.input = userID, input
+	return &model.Task{ID: "task-auth", UserID: userID, Status: model.TaskCreated}, nil
+}
+func (r *recordingOrchestrator) SubmitDAG(_ context.Context, _ string, dag *model.DAGRequest) error {
+	r.dag = dag
+	return nil
+}
+func (*recordingOrchestrator) GetTaskWithDetails(context.Context, string) (map[string]interface{}, error) {
+	return nil, nil
+}
+func (*recordingOrchestrator) GetTaskProgress(context.Context, string) (*model.TaskProgressResponse, error) {
+	return nil, nil
+}
+
+func authenticatedRouter(h *OrchestratorHandler, userID string) *gin.Engine {
+	router := gin.New()
+	h.RegisterRoutes(router, func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), userID))
+		c.Next()
+	})
+	return router
+}
+
+func TestCreateTaskUsesAuthenticatedOwnerInsteadOfForgedBody(t *testing.T) {
+	service := &recordingOrchestrator{}
+	h := &OrchestratorHandler{orchestratorService: service}
+	req := httptest.NewRequest(http.MethodPost, "/api/task/create", bytes.NewBufferString(`{"userId":"attacker","user_id":"attacker-2","query":"hello"}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	authenticatedRouter(h, "user-auth").ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if service.userID != "user-auth" {
+		t.Fatalf("CreateTask owner=%q", service.userID)
+	}
+}
+
+func TestSubmitDAGFromNLUsesAuthenticatedOwner(t *testing.T) {
+	service := &recordingOrchestrator{}
+	h := &OrchestratorHandler{orchestratorService: service}
+	req := httptest.NewRequest(http.MethodPost, "/api/node", bytes.NewBufferString(`{"userId":"attacker","nodes":[],"edges":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	authenticatedRouter(h, "user-auth").ServeHTTP(res, req)
+	if res.Code != http.StatusOK || service.userID != "user-auth" || service.dag == nil {
+		t.Fatalf("status=%d owner=%q dag=%#v body=%s", res.Code, service.userID, service.dag, res.Body.String())
 	}
 }
 

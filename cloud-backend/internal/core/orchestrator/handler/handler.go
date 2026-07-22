@@ -1,25 +1,34 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 	contextSvc "github.com/tangying-ai/aios-core/internal/core/context/service"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 )
 
+type TaskOrchestrator interface {
+	CreateTask(ctx context.Context, userID string, input map[string]interface{}) (*model.Task, error)
+	SubmitDAG(ctx context.Context, taskID string, dagReq *model.DAGRequest) error
+	GetTaskWithDetails(ctx context.Context, taskID string) (map[string]interface{}, error)
+	GetTaskProgress(ctx context.Context, taskID string) (*model.TaskProgressResponse, error)
+}
+
 type OrchestratorHandler struct {
-	orchestratorService *service.OrchestratorService
+	orchestratorService TaskOrchestrator
 	stateMachine        *service.StateMachine
 	taskExecutionCtrl   *service.TaskExecutionControl
 	contextService      *contextSvc.ContextService
 }
 
 func NewOrchestratorHandler(
-	orchestratorService *service.OrchestratorService,
+	orchestratorService TaskOrchestrator,
 	stateMachine *service.StateMachine,
 	taskExecutionCtrl *service.TaskExecutionControl,
 	contextService *contextSvc.ContextService,
@@ -61,7 +70,12 @@ func (h *OrchestratorHandler) CreateTask(c *gin.Context) {
 		return
 	}
 
-	task, err := h.orchestratorService.CreateTask(c.Request.Context(), request)
+	userID, ok := auth.UserIDFromContext(c.Request.Context())
+	if !ok || userID == "" {
+		httpx.Fail(c, http.StatusUnauthorized, "authenticated user is required")
+		return
+	}
+	task, err := h.orchestratorService.CreateTask(c.Request.Context(), userID, request)
 	if err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
@@ -296,8 +310,13 @@ func (h *OrchestratorHandler) SubmitDAGFromNL(c *gin.Context) {
 		return
 	}
 
+	userID, ok := auth.UserIDFromContext(c.Request.Context())
+	if !ok || userID == "" {
+		httpx.Fail(c, http.StatusUnauthorized, "authenticated user is required")
+		return
+	}
 	input := map[string]interface{}{"source": "nl-translator"}
-	task, err := h.orchestratorService.CreateTask(c.Request.Context(), input)
+	task, err := h.orchestratorService.CreateTask(c.Request.Context(), userID, input)
 	if err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return

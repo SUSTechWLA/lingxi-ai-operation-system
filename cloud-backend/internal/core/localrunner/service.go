@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
@@ -31,6 +32,64 @@ var ErrJobAlreadyCompleted = fmt.Errorf("job already completed")
 type Service struct {
 	pool *pgxpool.Pool
 }
+
+const resolveDispatchOwnerSQL = `
+SELECT owner FROM (
+  SELECT NULLIF(BTRIM(t.user_id), '') AS owner, 1 AS priority
+  FROM ai_task t WHERE t.id=$1
+  UNION ALL
+  SELECT NULLIF(BTRIM(wr.user_id), '') AS owner, 2 AS priority
+  FROM workflow_runs wr WHERE wr.task_id=$1
+  UNION ALL
+  SELECT NULLIF(BTRIM(vp.user_id), '') AS owner, 3 AS priority
+  FROM workflow_runs wr
+  JOIN video_projects vp ON vp.id=wr.project_id
+  WHERE wr.task_id=$1
+  UNION ALL
+  SELECT NULLIF(BTRIM(vp.user_id), '') AS owner, 4 AS priority
+  FROM video_projects vp WHERE $1='' AND vp.id=$2
+) durable_owners
+WHERE owner IS NOT NULL
+ORDER BY priority
+LIMIT 1`
+
+const backfillDispatchOwnerSQL = `UPDATE ai_task
+ SET user_id=$2
+ WHERE id=$1
+   AND (user_id IS NULL OR BTRIM(user_id)='' OR user_id=$2)
+ RETURNING user_id`
+
+const jobMutationAccessPredicateSQL = `
+ lj.id=$1
+ AND COALESCE(lj.user_id,'')=$2
+ AND COALESCE(lj.runner_id,'')=$3
+ AND (lj.target_runner_id IS NULL OR lj.target_runner_id='' OR lj.target_runner_id=$3)
+ AND lj.status IN ('CLAIMED','RUNNING')
+ AND lj.lease_expires_at IS NOT NULL
+ AND lj.lease_expires_at > NOW()
+ AND EXISTS (
+   SELECT 1 FROM local_runners lr
+   WHERE lr.id=$3
+     AND COALESCE(lr.user_id,'')=$2
+     AND COALESCE(lr.device_id,'')=$4
+     AND COALESCE(lr.session_id,'')=$5
+     AND lr.status='ONLINE'
+     AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
+ )`
+
+const runnerHeartbeatLeaseExtensionSQL = `UPDATE local_jobs
+ SET lease_expires_at=NOW() + INTERVAL '5 minutes', updated_at=NOW()
+ WHERE runner_id=$1
+   AND status IN ('CLAIMED','RUNNING')
+   AND lease_expires_at IS NOT NULL
+   AND lease_expires_at > NOW()`
+
+const reapExpiredLeasesSQL = `UPDATE local_jobs
+ SET status='PENDING', runner_id=NULL, lease_expires_at=NULL,
+     attempt=attempt+1, updated_at=NOW()
+ WHERE status IN ('CLAIMED','RUNNING')
+   AND lease_expires_at IS NOT NULL
+   AND lease_expires_at < NOW()`
 
 func NewService(pool *pgxpool.Pool) *Service {
 	return &Service{pool: pool}
@@ -104,17 +163,28 @@ func (s *Service) Heartbeat(ctx context.Context, runnerID string, req HeartbeatR
 		encoded := string(wire)
 		capabilitiesJSON = &encoded
 	}
-	_, err := s.pool.Exec(ctx,
+	result, err := s.pool.Exec(ctx,
 		`UPDATE local_runners
 		 SET last_heartbeat=$2, status=$3, running_jobs=$4, disk_free_mb=$5,
 		     cpu_load=$6, memory_usage_mb=$7, last_error=$8,
 		     capabilities=CASE WHEN $9::text IS NULL THEN capabilities ELSE $9::jsonb END,
 		     updated_at=NOW()
-		 WHERE id=$1`,
+		 WHERE id=$1 AND COALESCE(session_id,'')=$10 AND status<>'REVOKED'`,
 		runnerID, time.Now(), string(status), req.RunningJobs, req.DiskFreeMb,
-		req.CPULoad, req.MemoryUsageMb, lastError, capabilitiesJSON,
+		req.CPULoad, req.MemoryUsageMb, lastError, capabilitiesJSON, strings.TrimSpace(req.SessionID),
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("%w: heartbeat session is no longer current", ErrRunnerAccessDenied)
+	}
+	if status == RunnerOnline {
+		if _, err := s.pool.Exec(ctx, runnerHeartbeatLeaseExtensionSQL, runnerID); err != nil {
+			return fmt.Errorf("extend active job leases: %w", err)
+		}
+	}
+	return nil
 }
 
 // CreateJob creates a new local job for a project.
@@ -142,7 +212,7 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 	if projectID == "" {
 		projectID = "default"
 	}
-	userID, err := s.resolveDispatchUserID(ctx, req.TaskID, req.UserID)
+	userID, err := s.resolveDispatchUserID(ctx, req.TaskID, projectID, req.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -239,23 +309,48 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 	return job, nil
 }
 
-func (s *Service) resolveDispatchUserID(ctx context.Context, taskID, requestedUserID string) (string, error) {
+func (s *Service) resolveDispatchUserID(ctx context.Context, taskID, projectID, requestedUserID string) (string, error) {
+	taskID = strings.TrimSpace(taskID)
+	projectID = strings.TrimSpace(projectID)
 	requestedUserID = strings.TrimSpace(requestedUserID)
-	if strings.TrimSpace(taskID) == "" {
-		return requestedUserID, nil
-	}
-	var taskUserID *string
-	err := s.pool.QueryRow(ctx, `SELECT user_id FROM ai_task WHERE id=$1`, taskID).Scan(&taskUserID)
+	var resolvedUserID string
+	err := s.pool.QueryRow(ctx, resolveDispatchOwnerSQL, taskID, projectID).Scan(&resolvedUserID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return requestedUserID, nil
+			return "", fmt.Errorf("local job owner cannot be resolved from task/workflow/project")
 		}
 		return "", fmt.Errorf("resolve local job task owner: %w", err)
 	}
-	if taskUserID == nil {
-		return "", nil
+	resolvedUserID = strings.TrimSpace(resolvedUserID)
+	if err := validateResolvedDispatchOwner(resolvedUserID, requestedUserID); err != nil {
+		return "", err
 	}
-	return strings.TrimSpace(*taskUserID), nil
+	if taskID != "" {
+		var persistedOwner string
+		updateErr := s.pool.QueryRow(ctx, backfillDispatchOwnerSQL, taskID, resolvedUserID).Scan(&persistedOwner)
+		if updateErr != nil {
+			if updateErr == pgx.ErrNoRows {
+				return "", fmt.Errorf("local job task owner changed during dispatch")
+			}
+			return "", fmt.Errorf("backfill authoritative task owner: %w", updateErr)
+		}
+		if strings.TrimSpace(persistedOwner) != resolvedUserID {
+			return "", fmt.Errorf("local job task owner mismatch after backfill")
+		}
+	}
+	return resolvedUserID, nil
+}
+
+func validateResolvedDispatchOwner(resolvedUserID, requestedUserID string) error {
+	resolvedUserID = strings.TrimSpace(resolvedUserID)
+	requestedUserID = strings.TrimSpace(requestedUserID)
+	if resolvedUserID == "" {
+		return fmt.Errorf("local job owner cannot be resolved from durable task/workflow/project state")
+	}
+	if requestedUserID != "" && requestedUserID != resolvedUserID {
+		return fmt.Errorf("local job requested owner mismatch")
+	}
+	return nil
 }
 
 func (s *Service) validateMCPDispatchTarget(ctx context.Context, req DispatchLocalJobRequest) error {
@@ -378,14 +473,20 @@ func (s *Service) ClaimJob(ctx context.Context, runnerID string) (*LocalJob, err
 }
 
 // ReportProgress updates job progress.
-func (s *Service) ReportProgress(ctx context.Context, jobID string, req ProgressRequest) error {
-	_, err := s.pool.Exec(ctx,
-		`UPDATE local_jobs
-		 SET status='RUNNING', progress=$2, current_step=$3, message=$4, updated_at=NOW()
-		 WHERE id=$1`,
-		jobID, req.Progress, req.Step, req.Message,
+func (s *Service) ReportProgress(ctx context.Context, identity JobMutationIdentity, jobID string, req ProgressRequest) error {
+	result, err := s.pool.Exec(ctx,
+		`UPDATE local_jobs lj
+		 SET status='RUNNING', progress=$6, current_step=$7, message=$8,
+		     lease_expires_at=NOW() + INTERVAL '5 minutes', updated_at=NOW()
+		 WHERE `+jobMutationAccessPredicateSQL,
+		jobID, strings.TrimSpace(identity.UserID), strings.TrimSpace(identity.RunnerID),
+		strings.TrimSpace(identity.DeviceID), strings.TrimSpace(identity.SessionID),
+		req.Progress, req.Step, req.Message,
 	)
 	if err != nil {
+		return err
+	}
+	if err := requireSingleJobMutation(result); err != nil {
 		return err
 	}
 	for _, line := range req.Logs {
@@ -397,54 +498,60 @@ func (s *Service) ReportProgress(ctx context.Context, jobID string, req Progress
 	return nil
 }
 
-// CompleteJob marks a job as completed. Idempotent: if the job is already
-// completed, it returns the existing job without modifying state.
-func (s *Service) CompleteJob(ctx context.Context, jobID string, req CompleteJobRequest) (*LocalJob, error) {
-	// Idempotency: if already completed, return existing job
-	existing, err := s.GetJob(ctx, jobID)
-	if err == nil && existing != nil && (existing.Status == JobCompleted || existing.Status == JobFailed) {
-		return existing, nil
-	}
-
+// CompleteJob marks a currently leased job as completed. Terminal jobs and
+// stale leases are rejected so an old runner cannot replay a completion.
+func (s *Service) CompleteJob(ctx context.Context, identity JobMutationIdentity, jobID string, req CompleteJobRequest) (*LocalJob, error) {
 	if req.Output == nil {
 		req.Output = map[string]interface{}{}
 	}
 	outputJSON, _ := json.Marshal(req.Output)
 	row := s.pool.QueryRow(ctx,
 		`WITH completed AS (
-		  UPDATE local_jobs
-		  SET status='COMPLETED', progress=1.0, output=$2, completed_at=NOW(), updated_at=NOW()
-		  WHERE id=$1 AND status NOT IN ('COMPLETED', 'FAILED')
+		  UPDATE local_jobs lj
+		  SET status='COMPLETED', progress=1.0, output=$6, completed_at=NOW(), updated_at=NOW()
+		  WHERE `+jobMutationAccessPredicateSQL+`
 		  RETURNING *
 		 ) `+localJobSelectPrefix()+` FROM completed`,
-		jobID, string(outputJSON),
+		jobID, strings.TrimSpace(identity.UserID), strings.TrimSpace(identity.RunnerID),
+		strings.TrimSpace(identity.DeviceID), strings.TrimSpace(identity.SessionID), string(outputJSON),
 	)
-	return scanJob(row)
+	job, err := scanJob(row)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("%w: completion authorization, lease, claim, target, or state predicate failed", ErrJobAccessDenied)
+	}
+	return job, err
 }
 
-// FailJob marks a job as failed. Idempotent: if the job is already
-// completed or failed, it returns the existing job without modifying state.
-func (s *Service) FailJob(ctx context.Context, jobID string, req FailJobRequest) (*LocalJob, error) {
-	// Idempotency: if already completed/failed, return existing job
-	existing, err := s.GetJob(ctx, jobID)
-	if err == nil && existing != nil && (existing.Status == JobCompleted || existing.Status == JobFailed) {
-		return existing, nil
-	}
-
+// FailJob marks a currently leased job as failed. Terminal jobs and stale
+// leases are immutable and therefore rejected.
+func (s *Service) FailJob(ctx context.Context, identity JobMutationIdentity, jobID string, req FailJobRequest) (*LocalJob, error) {
 	errorMessage := errorMessageFromMap(req.Error)
 	errorJSON, _ := json.Marshal(req.Error)
 	diagnosticsJSON, _ := json.Marshal(req.Diagnostics)
 	row := s.pool.QueryRow(ctx,
 		`WITH failed AS (
-		  UPDATE local_jobs
-		  SET status='FAILED', error_message=$2, error_json=$3::jsonb, diagnostics=$4::jsonb, retryable=$5,
+		  UPDATE local_jobs lj
+		  SET status='FAILED', error_message=$6, error_json=$7::jsonb, diagnostics=$8::jsonb, retryable=$9,
 		      completed_at=NOW(), updated_at=NOW()
-		  WHERE id=$1 AND status NOT IN ('COMPLETED', 'FAILED')
+		  WHERE `+jobMutationAccessPredicateSQL+`
 		  RETURNING *
 		 ) `+localJobSelectPrefix()+` FROM failed`,
-		jobID, errorMessage, string(errorJSON), string(diagnosticsJSON), req.Retryable,
+		jobID, strings.TrimSpace(identity.UserID), strings.TrimSpace(identity.RunnerID),
+		strings.TrimSpace(identity.DeviceID), strings.TrimSpace(identity.SessionID),
+		errorMessage, string(errorJSON), string(diagnosticsJSON), req.Retryable,
 	)
-	return scanJob(row)
+	job, err := scanJob(row)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("%w: failure authorization, lease, claim, target, or state predicate failed", ErrJobAccessDenied)
+	}
+	return job, err
+}
+
+func requireSingleJobMutation(result pgconn.CommandTag) error {
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("%w: progress authorization, lease, claim, target, or state predicate failed", ErrJobAccessDenied)
+	}
+	return nil
 }
 
 // GetJob fetches a local job by ID.
@@ -531,29 +638,27 @@ func (s *Service) ValidateRunnerAccess(ctx context.Context, userID, deviceID, ru
 	return nil
 }
 
-// ValidateJobAccess verifies that a job exists, belongs to the given user,
-// and is claimed by the given runner (if already claimed).
+// ValidateJobAccess verifies that the job has a live claim owned by the exact
+// user/runner pair and still matches any immutable target binding.
 func (s *Service) ValidateJobAccess(ctx context.Context, userID, runnerID, jobID string) error {
-	var dbRunnerID, dbUserID, dbStatus string
+	var allowed bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT COALESCE(runner_id,''), COALESCE(user_id,''), status FROM local_jobs WHERE id=$1`, jobID,
-	).Scan(&dbRunnerID, &dbUserID, &dbStatus)
+		`SELECT EXISTS (
+		  SELECT 1 FROM local_jobs lj
+		  WHERE lj.id=$1
+		    AND COALESCE(lj.user_id,'')=$2
+		    AND COALESCE(lj.runner_id,'')=$3
+		    AND (lj.target_runner_id IS NULL OR lj.target_runner_id='' OR lj.target_runner_id=$3)
+		    AND lj.status IN ('CLAIMED','RUNNING')
+		    AND lj.lease_expires_at IS NOT NULL
+		    AND lj.lease_expires_at > NOW()
+		)`, jobID, strings.TrimSpace(userID), strings.TrimSpace(runnerID),
+	).Scan(&allowed)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return fmt.Errorf("job not found: %s", jobID)
-		}
 		return fmt.Errorf("validate job: %w", err)
 	}
-	if dbUserID != strings.TrimSpace(userID) {
-		return fmt.Errorf("%w: job belongs to a different user", ErrJobAccessDenied)
-	}
-	// Once a job is claimed, only the claiming runner can complete/fail it
-	if dbRunnerID != "" && dbRunnerID != runnerID {
-		return fmt.Errorf("%w: job %s claimed by runner %s, not %s", ErrJobAccessDenied, jobID, dbRunnerID, runnerID)
-	}
-	// Completed/failed jobs are immutable (idempotent check)
-	if dbStatus == string(JobCompleted) || dbStatus == string(JobFailed) {
-		return ErrJobAlreadyCompleted
+	if !allowed {
+		return fmt.Errorf("%w: job must be actively leased to the current runner and target", ErrJobAccessDenied)
 	}
 	return nil
 }
@@ -666,14 +771,7 @@ func errorMessageFromMap(m map[string]interface{}) string {
 // and resets them to PENDING so they can be reclaimed. Increments the attempt
 // counter on each reaped job. Returns the number of jobs reaped.
 func (s *Service) ReapExpiredLeases(ctx context.Context) (int, error) {
-	result, err := s.pool.Exec(ctx,
-		`UPDATE local_jobs
-		 SET status='PENDING', runner_id=NULL, lease_expires_at=NULL,
-		     attempt=attempt+1, updated_at=NOW()
-		 WHERE status='CLAIMED'
-		   AND lease_expires_at IS NOT NULL
-		   AND lease_expires_at < NOW()`,
-	)
+	result, err := s.pool.Exec(ctx, reapExpiredLeasesSQL)
 	if err != nil {
 		return 0, fmt.Errorf("reap expired leases: %w", err)
 	}

@@ -202,9 +202,12 @@ func (h *Handler) StartRun(c *gin.Context) {
 		httpx.Fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
-	if userID := ginUserID(c); userID != "" {
-		req.UserID = userID
+	userID := ginUserID(c)
+	if userID == "" {
+		httpx.Fail(c, http.StatusUnauthorized, "authenticated user is required")
+		return
 	}
+	req.UserID = userID
 	if key := strings.TrimSpace(c.GetHeader("Idempotency-Key")); key != "" {
 		req.RunID = idempotentRunID(req.UserID, key)
 		fingerprint, err := startRequestFingerprint(req)

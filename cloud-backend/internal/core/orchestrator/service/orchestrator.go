@@ -38,8 +38,11 @@ func NewOrchestratorService(
 	}
 }
 
-func (s *OrchestratorService) CreateTask(ctx context.Context, input map[string]interface{}) (*model.Task, error) {
-	task := repository.NewTaskFromMap(input)
+func (s *OrchestratorService) CreateTask(ctx context.Context, userID string, input map[string]interface{}) (*model.Task, error) {
+	task, err := repository.NewTaskForUser(userID, input)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.taskRepo.Save(ctx, task); err != nil {
 		return nil, fmt.Errorf("failed to save task: %w", err)
 	}

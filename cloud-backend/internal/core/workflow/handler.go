@@ -1,17 +1,29 @@
 package workflow
 
 import (
+	"context"
+
 	"github.com/gin-gonic/gin"
 
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 )
 
-// Handler serves HTTP endpoints for workflow templates.
-type Handler struct {
-	svc *Service
+type TemplateService interface {
+	List(context.Context) ([]*Template, error)
+	Get(context.Context, string) (*Template, error)
+	Create(context.Context, *CreateTemplateRequest) (*Template, error)
+	Update(context.Context, string, *UpdateTemplateRequest) (*Template, error)
+	Delete(context.Context, string) error
+	Instantiate(context.Context, string, string, map[string]interface{}) (string, error)
 }
 
-func NewHandler(svc *Service) *Handler {
+// Handler serves HTTP endpoints for workflow templates.
+type Handler struct {
+	svc TemplateService
+}
+
+func NewHandler(svc TemplateService) *Handler {
 	return &Handler{svc: svc}
 }
 
@@ -101,7 +113,12 @@ func (h *Handler) Delete(c *gin.Context) {
 func (h *Handler) Instantiate(c *gin.Context) {
 	var req InstantiateRequest
 	_ = c.ShouldBindJSON(&req)
-	taskID, err := h.svc.Instantiate(c.Request.Context(), c.Param("id"), req.Overrides)
+	userID, authenticated := auth.UserIDFromContext(c.Request.Context())
+	if !authenticated || userID == "" {
+		fail(c, 401, "authenticated user is required")
+		return
+	}
+	taskID, err := h.svc.Instantiate(c.Request.Context(), userID, c.Param("id"), req.Overrides)
 	if err != nil {
 		fail(c, 500, err.Error())
 		return

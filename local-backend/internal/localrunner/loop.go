@@ -33,16 +33,24 @@ type MCPToolCatalogSource interface {
 	Discover(context.Context) (MCPToolCatalog, []MCPProviderDiagnostic)
 }
 
+type mcpToolCatalogFingerprinter interface {
+	Fingerprint(context.Context) (string, error)
+}
+
 type Loop struct {
-	client              CloudClient
-	registry            *localtool.Registry
-	options             LoopOptions
-	runnerID            string
-	sessionID           string
-	pendingReports      *PendingReportStore
-	capabilities        []Capability
-	catalogRevision     string
-	catalogDiscoveredAt time.Time
+	client               CloudClient
+	registry             *localtool.Registry
+	options              LoopOptions
+	runnerID             string
+	sessionID            string
+	pendingReports       *PendingReportStore
+	capabilities         []Capability
+	catalogRevision      string
+	catalogDiscoveredAt  time.Time
+	catalogFingerprint   string
+	catalogNextRefreshAt time.Time
+	catalogFailures      int
+	now                  func() time.Time
 }
 
 func NewLoop(client CloudClient, registry *localtool.Registry, options LoopOptions) *Loop {
@@ -50,13 +58,14 @@ func NewLoop(client CloudClient, registry *localtool.Registry, options LoopOptio
 		options.PollInterval = 3 * time.Second
 	}
 	if options.MCPCatalogRefreshInterval <= 0 {
-		options.MCPCatalogRefreshInterval = 30 * time.Second
+		options.MCPCatalogRefreshInterval = 10 * time.Minute
 	}
 	return &Loop{
 		client:         client,
 		registry:       registry,
 		options:        options,
 		pendingReports: NewPendingReportStore(options.DataDir),
+		now:            time.Now,
 	}
 }
 
@@ -125,11 +134,19 @@ func (l *Loop) ensureRegistered(ctx context.Context) error {
 	probe := Probe(ctx, l.options.WorkspaceRoot)
 	l.capabilities = l.executableCapabilities(probe)
 	if l.options.MCPToolCatalogSource != nil {
+		fingerprint, fingerprintErr := l.mcpCatalogFingerprint(ctx)
 		catalog, diagnostics := l.options.MCPToolCatalogSource.Discover(ctx)
 		l.logMCPDiagnostics(diagnostics)
 		l.capabilities = withMCPToolCatalog(l.capabilities, catalog)
 		l.catalogRevision = catalog.Revision
-		l.catalogDiscoveredAt = time.Now()
+		now := l.currentTime()
+		l.catalogDiscoveredAt = now
+		l.catalogFingerprint = fingerprint
+		if fingerprintErr != nil || catalogDiscoveryFailed(diagnostics) {
+			l.scheduleCatalogFailure(now)
+		} else {
+			l.scheduleCatalogSuccess(now)
+		}
 	}
 	resp, err := l.client.Register(ctx, RegisterRunnerRequest{
 		DeviceID:      l.options.DeviceID,
@@ -153,18 +170,85 @@ func (l *Loop) refreshMCPToolCatalog(ctx context.Context) []Capability {
 	if l.options.MCPToolCatalogSource == nil {
 		return nil
 	}
-	if !l.catalogDiscoveredAt.IsZero() && time.Since(l.catalogDiscoveredAt) < l.options.MCPCatalogRefreshInterval {
+	if err := ctx.Err(); err != nil {
+		return nil
+	}
+	now := l.currentTime()
+	fingerprint, fingerprintErr := l.mcpCatalogFingerprint(ctx)
+	if fingerprintErr != nil {
+		if !now.Before(l.catalogNextRefreshAt) {
+			l.catalogFingerprint = fingerprint
+			l.scheduleCatalogFailure(now)
+		}
+		return nil
+	}
+	configurationChanged := fingerprint != "" && fingerprint != l.catalogFingerprint
+	if !configurationChanged && !l.catalogNextRefreshAt.IsZero() && now.Before(l.catalogNextRefreshAt) {
 		return nil
 	}
 	catalog, diagnostics := l.options.MCPToolCatalogSource.Discover(ctx)
-	l.catalogDiscoveredAt = time.Now()
+	if err := ctx.Err(); err != nil {
+		return nil
+	}
+	l.catalogDiscoveredAt = now
+	l.catalogFingerprint = fingerprint
 	l.logMCPDiagnostics(diagnostics)
+	if catalogDiscoveryFailed(diagnostics) {
+		l.scheduleCatalogFailure(now)
+	} else {
+		l.scheduleCatalogSuccess(now)
+	}
 	if catalog.Revision == l.catalogRevision {
 		return nil
 	}
 	l.catalogRevision = catalog.Revision
 	l.capabilities = withMCPToolCatalog(l.capabilities, catalog)
 	return append([]Capability(nil), l.capabilities...)
+}
+
+func (l *Loop) currentTime() time.Time {
+	if l.now != nil {
+		return l.now()
+	}
+	return time.Now()
+}
+
+func (l *Loop) mcpCatalogFingerprint(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	fingerprinter, ok := l.options.MCPToolCatalogSource.(mcpToolCatalogFingerprinter)
+	if !ok {
+		return "", nil
+	}
+	return fingerprinter.Fingerprint(ctx)
+}
+
+func (l *Loop) scheduleCatalogSuccess(now time.Time) {
+	l.catalogFailures = 0
+	l.catalogNextRefreshAt = now.Add(l.options.MCPCatalogRefreshInterval)
+}
+
+func (l *Loop) scheduleCatalogFailure(now time.Time) {
+	l.catalogFailures++
+	backoff := time.Minute
+	for i := 1; i < l.catalogFailures && backoff < l.options.MCPCatalogRefreshInterval; i++ {
+		backoff *= 2
+	}
+	if backoff > l.options.MCPCatalogRefreshInterval {
+		backoff = l.options.MCPCatalogRefreshInterval
+	}
+	l.catalogNextRefreshAt = now.Add(backoff)
+}
+
+func catalogDiscoveryFailed(diagnostics []MCPProviderDiagnostic) bool {
+	for _, diagnostic := range diagnostics {
+		switch diagnostic.Code {
+		case "PROVIDER_CONFIG_UNAVAILABLE", "TOOLS_LIST_FAILED", "CATALOG_PAYLOAD_LIMIT":
+			return true
+		}
+	}
+	return false
 }
 
 func withMCPToolCatalog(capabilities []Capability, catalog MCPToolCatalog) []Capability {

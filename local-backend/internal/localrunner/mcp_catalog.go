@@ -77,6 +77,32 @@ func newMCPToolCatalogDiscoverer(loader MCPProviderLoader, factory func(localmcp
 	return &MCPToolCatalogDiscoverer{loadProviders: loader, newClient: factory, providerProbeTimeout: 3 * time.Second}
 }
 
+// Fingerprint hashes the local provider configuration without exposing it.
+// Loading and hashing configuration is cheap and lets the runner refresh
+// immediately after edits without spawning stdio providers on every heartbeat.
+func (d *MCPToolCatalogDiscoverer) Fingerprint(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if d == nil || d.loadProviders == nil {
+		return "", nil
+	}
+	providers, err := d.loadProviders()
+	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	sort.SliceStable(providers, func(i, j int) bool { return providers[i].ID < providers[j].ID })
+	wire, err := json.Marshal(providers)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(wire)
+	return hex.EncodeToString(sum[:]), nil
+}
+
 func (d *MCPToolCatalogDiscoverer) Discover(ctx context.Context) (MCPToolCatalog, []MCPProviderDiagnostic) {
 	if d == nil || d.loadProviders == nil || d.newClient == nil {
 		return canonicalMCPToolCatalog(nil), nil
@@ -137,6 +163,10 @@ func (d *MCPToolCatalogDiscoverer) Discover(ctx context.Context) (MCPToolCatalog
 }
 
 func safeMCPToolAdvertisement(provider localmcp.ProviderConfig, tool localmcp.Tool) (MCPToolAdvertisement, error) {
+	annotations, err := safeMCPToolAnnotations(tool.Annotations)
+	if err != nil {
+		return MCPToolAdvertisement{}, fmt.Errorf("annotations: %w", err)
+	}
 	ad := MCPToolAdvertisement{
 		ProviderID:      strings.TrimSpace(provider.ID),
 		LogicalToolName: strings.TrimSpace(tool.Name),
@@ -144,9 +174,8 @@ func safeMCPToolAdvertisement(provider localmcp.ProviderConfig, tool localmcp.To
 		Description:     strings.TrimSpace(tool.Description),
 		ApprovalMode:    strings.TrimSpace(provider.ApprovalMode),
 		TimeoutSec:      provider.TimeoutSec,
-		Annotations:     safeMCPToolAnnotations(tool.Annotations),
+		Annotations:     annotations,
 	}
-	var err error
 	if ad.InputSchema, err = cloneBoundedSchema(tool.InputSchema); err != nil {
 		return MCPToolAdvertisement{}, fmt.Errorf("input schema: %w", err)
 	}
@@ -173,6 +202,22 @@ func validateLocalMCPToolAdvertisement(ad MCPToolAdvertisement) error {
 	if ad.InputSchema == nil {
 		return fmt.Errorf("input schema is required")
 	}
+	if err := validateMCPJSONSchema("input schema", ad.InputSchema); err != nil {
+		return err
+	}
+	if ad.OutputSchema != nil {
+		if err := validateMCPJSONSchema("output schema", ad.OutputSchema); err != nil {
+			return err
+		}
+	}
+	switch ad.ApprovalMode {
+	case "", localmcp.ApprovalModeNone, localmcp.ApprovalModeBeforeExecute, localmcp.ApprovalModeAlways:
+	default:
+		return fmt.Errorf("invalid approval mode %q", ad.ApprovalMode)
+	}
+	if ad.TimeoutSec < 0 || ad.TimeoutSec > 86400 {
+		return fmt.Errorf("timeout must be 0..86400 seconds")
+	}
 	return nil
 }
 
@@ -194,22 +239,35 @@ func cloneBoundedSchema(schema map[string]interface{}) (map[string]interface{}, 
 	return clone, nil
 }
 
-func safeMCPToolAnnotations(input map[string]interface{}) MCPToolAnnotations {
+func safeMCPToolAnnotations(input map[string]interface{}) (MCPToolAnnotations, error) {
 	var result MCPToolAnnotations
-	if value, ok := input["title"].(string); ok && len(value) <= maxMCPToolNameBytes {
-		result.Title = value
+	if value, exists := input["title"]; exists {
+		title, ok := value.(string)
+		if !ok || len(title) > maxMCPToolNameBytes {
+			return MCPToolAnnotations{}, fmt.Errorf("title must be a string of at most %d bytes", maxMCPToolNameBytes)
+		}
+		result.Title = title
 	}
-	copyBool := func(key string, target **bool) {
-		if value, ok := input[key].(bool); ok {
-			copy := value
+	copyBool := func(key string, target **bool) error {
+		if value, exists := input[key]; exists {
+			boolean, ok := value.(bool)
+			if !ok {
+				return fmt.Errorf("%s must be boolean", key)
+			}
+			copy := boolean
 			*target = &copy
 		}
+		return nil
 	}
-	copyBool("readOnlyHint", &result.ReadOnlyHint)
-	copyBool("destructiveHint", &result.DestructiveHint)
-	copyBool("idempotentHint", &result.IdempotentHint)
-	copyBool("openWorldHint", &result.OpenWorldHint)
-	return result
+	for key, target := range map[string]**bool{
+		"readOnlyHint": &result.ReadOnlyHint, "destructiveHint": &result.DestructiveHint,
+		"idempotentHint": &result.IdempotentHint, "openWorldHint": &result.OpenWorldHint,
+	} {
+		if err := copyBool(key, target); err != nil {
+			return MCPToolAnnotations{}, err
+		}
+	}
+	return result, nil
 }
 
 func canonicalMCPToolCatalog(tools []MCPToolAdvertisement) MCPToolCatalog {
