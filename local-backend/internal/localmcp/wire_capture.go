@@ -91,6 +91,7 @@ func (c *wireCapture) decodeTools() ([]Tool, error) {
 	for index := range c.listPages {
 		pages[index] = append(json.RawMessage(nil), c.listPages[index]...)
 	}
+	c.listPages = nil
 	c.mu.Unlock()
 	tools := make([]Tool, 0)
 	for _, page := range pages {
@@ -114,6 +115,7 @@ func (c *wireCapture) decodeTools() ([]Tool, error) {
 func (c *wireCapture) decodeCallResult() (*ToolCallResult, error) {
 	c.mu.Lock()
 	raw := append(json.RawMessage(nil), c.callResult...)
+	c.callResult = nil
 	c.mu.Unlock()
 	if len(raw) == 0 {
 		return nil, nil

@@ -33,6 +33,7 @@ func NewMCPToolCallExecutorWithDataDir(loader MCPProviderLoader, dataDir string)
 }
 
 func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, error) {
+	started := time.Now()
 	if e.loadProviders == nil {
 		return nil, errors.New("mcp provider loader is not configured")
 	}
@@ -61,17 +62,27 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 	if !ok {
 		return nil, fmt.Errorf("mcp provider %q is not configured or enabled", providerID)
 	}
-	timeout := time.Duration(job.TimeoutSec) * time.Second
+	timeout := shortestPositiveMCPTimeout(job.TimeoutSec, provider.TimeoutSec)
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
-	client := localmcp.NewClient(provider, &http.Client{Timeout: timeout})
+	deadline := started.Add(timeout)
+	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
+		deadline = callerDeadline
+	}
+	operationCtx, cancelOperation := context.WithDeadline(ctx, deadline)
+	defer cancelOperation()
+	httpTimeout := time.Until(deadline)
+	if httpTimeout <= 0 {
+		return nil, context.DeadlineExceeded
+	}
+	client := localmcp.NewClient(provider, &http.Client{Timeout: httpTimeout})
 	defer client.Close()
 	if requests := slicePayload(job.Payload, "externalGenerationRequests"); len(requests) > 0 {
-		return e.executeExternalGenerationBatch(ctx, client, provider.ID, toolName, job, requests)
+		return e.executeExternalGenerationBatch(operationCtx, client, provider.ID, toolName, job, requests)
 	}
 	args := mapPayload(job.Payload, "arguments")
-	callResult, err := client.CallTool(ctx, toolName, args)
+	callResult, err := client.CallTool(operationCtx, toolName, args)
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +96,20 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 		"raw":               callResult.Raw,
 		"error":             mcpErrorText(callResult),
 	}}, nil
+}
+
+func shortestPositiveMCPTimeout(seconds ...int) time.Duration {
+	var shortest time.Duration
+	for _, value := range seconds {
+		if value <= 0 {
+			continue
+		}
+		candidate := time.Duration(value) * time.Second
+		if shortest == 0 || candidate < shortest {
+			shortest = candidate
+		}
+	}
+	return shortest
 }
 
 func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context, client *localmcp.Client, providerID string, toolName string, job Job, requests []interface{}) (*Result, error) {

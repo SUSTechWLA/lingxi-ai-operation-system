@@ -2,6 +2,7 @@ package localtool
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,6 +92,43 @@ func TestMCPToolCallExecutorRequiresProviderID(t *testing.T) {
 	if err == nil {
 		t.Fatal("Execute error = nil, want missing providerId error")
 	}
+}
+
+func TestMCPToolCallExecutorAppliesJobTimeoutToHangingStdioProvider(t *testing.T) {
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{
+			ID:         "hanging",
+			Transport:  "stdio",
+			Command:    os.Args[0],
+			Args:       []string{"-test.run=TestMCPToolCallExecutorHangingStdioHelperProcess"},
+			Env:        map[string]string{"GO_WANT_HANGING_MCP_HELPER": "1"},
+			TimeoutSec: 2,
+			Enabled:    true,
+		}}, nil
+	})
+	started := time.Now()
+	_, err := executor.Execute(context.Background(), Job{
+		Command:    CommandLocalMCPToolCall,
+		TimeoutSec: 1,
+		Payload: map[string]interface{}{
+			"providerId": "hanging",
+			"toolName":   "hanging.never",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("Execute error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 1500*time.Millisecond {
+		t.Fatalf("job timeout did not bound stdio MCP operation, elapsed=%v", elapsed)
+	}
+}
+
+func TestMCPToolCallExecutorHangingStdioHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HANGING_MCP_HELPER") != "1" {
+		return
+	}
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	os.Exit(0)
 }
 
 func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {

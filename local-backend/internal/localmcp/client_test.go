@@ -266,6 +266,17 @@ func TestClientHonorsShorterCallerDeadline(t *testing.T) {
 	}
 }
 
+func TestNewClientCapsHTTPTimeoutAtProviderTimeout(t *testing.T) {
+	client := NewClient(ProviderConfig{ID: "timeout", Endpoint: "https://example.invalid/mcp", TimeoutSec: 2, Enabled: true}, &http.Client{Timeout: 30 * time.Second})
+	if got := client.httpClient.Timeout; got != 2*time.Second {
+		t.Fatalf("HTTP timeout = %v, want provider timeout 2s", got)
+	}
+	shortClient := NewClient(ProviderConfig{ID: "shorter", Endpoint: "https://example.invalid/mcp", TimeoutSec: 2, Enabled: true}, &http.Client{Timeout: 500 * time.Millisecond})
+	if got := shortClient.httpClient.Timeout; got != 500*time.Millisecond {
+		t.Fatalf("shorter supplied HTTP timeout = %v, want 500ms", got)
+	}
+}
+
 func TestToolContentPreservesUnknownCompatibilityFields(t *testing.T) {
 	raw := []byte(`{"type":"text","text":"ok","futureStandardField":{"enabled":true},"_meta":{"vendor/id":"1"}}`)
 	var content ToolContent
@@ -309,6 +320,9 @@ func TestCaptureConnectionPreservesUnknownWireFields(t *testing.T) {
 	if len(rawTools) != 1 || rawTools[0].Raw["futureToolField"] == nil || rawTools[0].Annotations["futureHint"] != "hint" {
 		t.Fatalf("unknown tool wire fields were lost: %#v", rawTools)
 	}
+	if tools, err := capture.decodeTools(); err != nil || len(tools) != 0 {
+		t.Fatalf("captured tool payload must be taken exactly once: tools=%#v err=%v", tools, err)
+	}
 
 	capture.beginCallTool()
 	toolCall := &jsonrpc.Request{ID: mustJSONRPCID(t, "call-1"), Method: "tools/call", Params: json.RawMessage(`{"name":"future"}`)}
@@ -325,9 +339,28 @@ func TestCaptureConnectionPreservesUnknownWireFields(t *testing.T) {
 	if rawResult.Raw["futureResultField"] == nil || rawResult.Content[0].Raw["futureContentField"] != "kept" || rawResult.Meta["trace"] != "trace-1" {
 		t.Fatalf("unknown result wire fields were lost: %#v", rawResult)
 	}
+	if result, err := capture.decodeCallResult(); err != nil || result != nil {
+		t.Fatalf("captured call payload must be taken exactly once: result=%#v err=%v", result, err)
+	}
 	capture.clear()
 	if tools, _ := capture.decodeTools(); len(tools) != 0 {
 		t.Fatalf("capture was not cleared: %#v", tools)
+	}
+}
+
+func TestWireCaptureReleasesLargePayloadAfterTake(t *testing.T) {
+	capture := newWireCapture()
+	large := strings.Repeat("x", 1<<20)
+	capture.callResult = json.RawMessage(`{"content":[{"type":"text","text":"` + large + `"}]}`)
+	result, err := capture.decodeCallResult()
+	if err != nil || result == nil || len(result.Content) != 1 || len(result.Content[0].Text) != len(large) {
+		t.Fatalf("large captured result was not decoded: result=%#v err=%v", result, err)
+	}
+	capture.mu.Lock()
+	retained := len(capture.callResult)
+	capture.mu.Unlock()
+	if retained != 0 {
+		t.Fatalf("wire capture retained %d bytes after take", retained)
 	}
 }
 

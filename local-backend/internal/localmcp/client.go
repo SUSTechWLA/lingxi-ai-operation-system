@@ -36,9 +36,16 @@ func NewClient(cfg ProviderConfig, httpClient *http.Client) *Client {
 		httpClient = http.DefaultClient
 	}
 	capture := newWireCapture()
+	clonedHTTPClient := cloneHTTPClientWithHeaders(httpClient, cfg.Headers)
+	if cfg.TimeoutSec > 0 {
+		providerTimeout := time.Duration(cfg.TimeoutSec) * time.Second
+		if clonedHTTPClient.Timeout <= 0 || clonedHTTPClient.Timeout > providerTimeout {
+			clonedHTTPClient.Timeout = providerTimeout
+		}
+	}
 	return &Client{
 		cfg:        cfg,
-		httpClient: cloneHTTPClientWithHeaders(httpClient, cfg.Headers),
+		httpClient: clonedHTTPClient,
 		sdkClient: mcp.NewClient(
 			&mcp.Implementation{Name: clientImplementationName, Version: clientImplementationVersion},
 			&mcp.ClientOptions{Capabilities: &mcp.ClientCapabilities{}},
@@ -51,6 +58,7 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	c.operationMu.Lock()
 	defer c.operationMu.Unlock()
 	c.capture.beginListTools()
+	defer c.capture.clear()
 	callCtx, cancel := c.withProviderTimeout(ctx)
 	defer cancel()
 	session, err := c.ensureSession(callCtx)
@@ -79,6 +87,7 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 	c.operationMu.Lock()
 	defer c.operationMu.Unlock()
 	c.capture.beginCallTool()
+	defer c.capture.clear()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, errors.New("tool name is required")

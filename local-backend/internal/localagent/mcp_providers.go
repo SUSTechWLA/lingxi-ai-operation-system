@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -109,14 +110,19 @@ func (s *Server) handleMCPProviders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, LocalMCPProviderSettingsResponse{Providers: providers})
+		writeJSON(w, http.StatusOK, LocalMCPProviderSettingsResponse{Providers: sanitizeMCPProviders(providers)})
 	case http.MethodPut:
 		var req LocalMCPProviderSettingsResponse
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid MCP provider payload")
 			return
 		}
-		providers, err := normalizeMCPProviders(req.Providers)
+		existing, err := s.readMCPProviders()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		providers, err := normalizeMCPProviders(mergeMCPProviderHeaders(existing, req.Providers))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -125,7 +131,7 @@ func (s *Server) handleMCPProviders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, LocalMCPProviderSettingsResponse{Providers: providers})
+		writeJSON(w, http.StatusOK, LocalMCPProviderSettingsResponse{Providers: sanitizeMCPProviders(providers)})
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -169,7 +175,7 @@ func (s *Server) handleJiMengSetupStatus(w http.ResponseWriter, r *http.Request)
 	}
 	for _, provider := range providers {
 		if provider.ID == jimengProviderID {
-			copy := provider
+			copy := sanitizeMCPProvider(provider)
 			resp.MCPProvider = &copy
 			resp.MCPStartCommand = mcpStartCommand(provider)
 			break
@@ -288,7 +294,7 @@ func (s *Server) handleJiMengRegisterMCP(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":          "ok",
-		"provider":        provider,
+		"provider":        sanitizeMCPProvider(provider),
 		"mcpStartCommand": mcpStartCommand(provider),
 	})
 }
@@ -341,15 +347,17 @@ func (s *Server) mcpProviderStatus(ctx context.Context) ([]LocalMCPProviderStatu
 	}
 	statuses := make([]LocalMCPProviderStatus, 0, len(providers))
 	for _, provider := range providers {
-		status := LocalMCPProviderStatus{ProviderConfig: provider}
+		status := LocalMCPProviderStatus{ProviderConfig: sanitizeMCPProvider(provider)}
 		if provider.Enabled {
 			checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			client := localmcp.NewClient(provider, nil)
+			client := localmcp.NewClient(provider, &http.Client{Timeout: 3 * time.Second})
 			tools, err := client.ListTools(checkCtx)
-			_ = client.Close()
+			closeErr := client.Close()
 			cancel()
 			if err != nil {
 				status.Error = err.Error()
+			} else if closeErr != nil {
+				status.Error = closeErr.Error()
 			} else {
 				status.Reachable = true
 				status.Tools = tools
@@ -420,7 +428,43 @@ func (s *Server) writeMCPProviders(providers []localmcp.ProviderConfig) error {
 	if err != nil {
 		return err
 	}
-	return writeIndentedJSON(s.mcpProvidersPath(), LocalMCPProviderSettingsResponse{Providers: normalized})
+	return writeMCPProviderJSON(s.mcpProvidersPath(), LocalMCPProviderSettingsResponse{Providers: normalized})
+}
+
+func writeMCPProviderJSON(path string, value interface{}) (returnErr error) {
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, ".mcp-providers-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer func() {
+		if temp != nil {
+			_ = temp.Close()
+		}
+		if returnErr != nil {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err := temp.Chmod(0o600); err != nil {
+		return err
+	}
+	enc := json.NewEncoder(temp)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(value); err != nil {
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	temp = nil
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Server) mcpProvidersPath() string {
@@ -449,6 +493,8 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 		provider.Args = compactArgs(provider.Args)
 		provider.Env = compactEnv(provider.Env)
 		provider.Headers = compactHeaders(provider.Headers)
+		provider.HasHeaders = false
+		provider.HeaderKeys = nil
 		provider.ToolNameMap = compactToolNameMap(provider.ToolNameMap)
 		provider.EnabledTools = compactStringList(provider.EnabledTools)
 		provider.DisabledTools = compactStringList(provider.DisabledTools)
@@ -488,6 +534,39 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 		out = append(out, provider)
 	}
 	return out, nil
+}
+
+func mergeMCPProviderHeaders(existing, incoming []localmcp.ProviderConfig) []localmcp.ProviderConfig {
+	existingHeaders := make(map[string]map[string]string, len(existing))
+	for _, provider := range existing {
+		existingHeaders[provider.ID] = provider.Headers
+	}
+	merged := append([]localmcp.ProviderConfig(nil), incoming...)
+	for index := range merged {
+		if merged[index].Headers == nil {
+			merged[index].Headers = existingHeaders[strings.TrimSpace(merged[index].ID)]
+		}
+	}
+	return merged
+}
+
+func sanitizeMCPProviders(providers []localmcp.ProviderConfig) []localmcp.ProviderConfig {
+	sanitized := make([]localmcp.ProviderConfig, len(providers))
+	for index, provider := range providers {
+		sanitized[index] = sanitizeMCPProvider(provider)
+	}
+	return sanitized
+}
+
+func sanitizeMCPProvider(provider localmcp.ProviderConfig) localmcp.ProviderConfig {
+	provider.HasHeaders = len(provider.Headers) > 0
+	provider.HeaderKeys = make([]string, 0, len(provider.Headers))
+	for key := range provider.Headers {
+		provider.HeaderKeys = append(provider.HeaderKeys, key)
+	}
+	sort.Strings(provider.HeaderKeys)
+	provider.Headers = nil
+	return provider
 }
 
 func compactArgs(args []string) []string {
