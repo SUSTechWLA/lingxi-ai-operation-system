@@ -135,6 +135,8 @@ func TestPendingStaleMCPCallbackSQLIsTenantAndSessionScoped(t *testing.T) {
 		"lj.status='failed'", "coalesce(lj.user_id,'')=$1", "coalesce(lj.runner_id,'')=$3",
 		"coalesce(lj.target_runner_id,'')=$3", "lj.error_json->>'code'='mcp_catalog_stale'",
 		"result_callback_state='pending'", "followup_callback_state='pending'",
+		"result_callback_state='processing'", "result_callback_lease_untilisnull", "result_callback_lease_until<now()",
+		"followup_callback_state='processing'", "followup_callback_lease_untilisnull", "followup_callback_lease_until<now()",
 		"lr.id=$3", "coalesce(lr.user_id,'')=$1", "coalesce(lr.device_id,'')=$2", "coalesce(lr.session_id,'')=$4",
 		"lr.status='online'", "lr.last_heartbeat",
 	} {

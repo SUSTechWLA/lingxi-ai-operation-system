@@ -210,7 +210,18 @@ const pendingStaleMCPCallbacksSQL = ` FROM local_jobs lj
    AND COALESCE(lj.runner_id,'')=$3
    AND COALESCE(lj.target_runner_id,'')=$3
    AND lj.error_json->>'code'='MCP_CATALOG_STALE'
-   AND (lj.result_callback_state='PENDING' OR lj.followup_callback_state='PENDING')
+	   AND (
+	     lj.result_callback_state='PENDING'
+	     OR (
+	       lj.result_callback_state='PROCESSING'
+	       AND (lj.result_callback_lease_until IS NULL OR lj.result_callback_lease_until < NOW())
+	     )
+	     OR lj.followup_callback_state='PENDING'
+	     OR (
+	       lj.followup_callback_state='PROCESSING'
+	       AND (lj.followup_callback_lease_until IS NULL OR lj.followup_callback_lease_until < NOW())
+	     )
+	   )
    AND EXISTS (
      SELECT 1 FROM local_runners lr
      WHERE lr.id=$3
