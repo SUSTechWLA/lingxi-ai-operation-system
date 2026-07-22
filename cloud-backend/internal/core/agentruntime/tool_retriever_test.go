@@ -2,11 +2,119 @@ package agentruntime
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
+
+func TestToolRetrieverPreservesCanonicalSchemasAndProviderMetadata(t *testing.T) {
+	inputSchema := map[string]interface{}{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]interface{}{
+			"request": map[string]interface{}{
+				"oneOf": []interface{}{
+					map[string]interface{}{"$ref": "#/$defs/byID"},
+					map[string]interface{}{"$ref": "#/$defs/byQuery"},
+				},
+			},
+		},
+		"$defs": map[string]interface{}{
+			"byID":    map[string]interface{}{"type": "object", "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}}},
+			"byQuery": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string", "enum": []interface{}{"new", "all"}}}},
+		},
+	}
+	outputSchema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"items": map[string]interface{}{"type": "array", "items": map[string]interface{}{"$ref": "#/$defs/item"}},
+		},
+		"$defs": map[string]interface{}{"item": map[string]interface{}{"type": "object"}},
+	}
+	manifest := &tool.ToolManifest{
+		Name:                 "mcp_search",
+		Description:          "Search provider records",
+		Type:                 "mcp",
+		Capabilities:         []string{"general", "search"},
+		Tags:                 []string{"search"},
+		InputSchema:          inputSchema,
+		OutputSchema:         outputSchema,
+		Provider:             "records-provider",
+		ProviderCapabilities: map[string]interface{}{"supportsProgress": true, "protocolVersion": "2025-11-25"},
+		CostLevel:            tool.CostLow,
+		RiskLevel:            tool.RiskLow,
+	}
+
+	candidates, err := NewHybridToolRetriever([]*tool.ToolManifest{manifest}).Retrieve(context.Background(), ToolRetrieveRequest{
+		UserInput:     "search records",
+		Domain:        "general",
+		MaxCandidates: 1,
+	})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("got %d candidates, want 1", len(candidates))
+	}
+	candidate := candidates[0]
+	if !reflect.DeepEqual(candidate.InputSchema, inputSchema) || !reflect.DeepEqual(candidate.OutputSchema, outputSchema) {
+		t.Fatalf("canonical schemas were changed: input=%#v output=%#v", candidate.InputSchema, candidate.OutputSchema)
+	}
+	if !reflect.DeepEqual(candidate.ProviderCapabilities, manifest.ProviderCapabilities) {
+		t.Fatalf("provider metadata was not copied: %#v", candidate.ProviderCapabilities)
+	}
+
+	// Candidate data is safe for prompt construction and cannot mutate the registry manifest.
+	candidate.InputSchema["type"] = "mutated"
+	candidate.ProviderCapabilities["supportsProgress"] = false
+	if inputSchema["type"] != "object" || manifest.ProviderCapabilities["supportsProgress"] != true {
+		t.Fatalf("candidate aliases manifest data: schema=%#v provider=%#v", inputSchema, manifest.ProviderCapabilities)
+	}
+}
+
+func TestToolRetrieverDerivesClosedCanonicalSchemaFromLegacyParamDefs(t *testing.T) {
+	manifest := &tool.ToolManifest{
+		Name:         "legacy_lookup",
+		Description:  "Look up a record",
+		Capabilities: []string{"general", "search"},
+		Tags:         []string{"lookup"},
+		Parameters: map[string]tool.ParamDef{
+			"query": {Type: "string", Description: "search query", Required: true, Enum: []string{"all", "new"}},
+			"limit": {Type: "number", Default: 10},
+		},
+		Output: map[string]tool.ParamDef{
+			"items": {Type: "array", Required: true},
+		},
+		CostLevel: tool.CostLow,
+		RiskLevel: tool.RiskLow,
+	}
+
+	candidates, err := NewHybridToolRetriever([]*tool.ToolManifest{manifest}).Retrieve(context.Background(), ToolRetrieveRequest{
+		UserInput:     "lookup records",
+		Domain:        "general",
+		MaxCandidates: 1,
+	})
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("Retrieve = (%#v, %v), want one candidate", candidates, err)
+	}
+	candidate := candidates[0]
+	if candidate.InputSchema["type"] != "object" || candidate.InputSchema["additionalProperties"] != false {
+		t.Fatalf("legacy input must become a closed object schema: %#v", candidate.InputSchema)
+	}
+	if got := candidate.InputSchema["required"]; !reflect.DeepEqual(got, []string{"query"}) {
+		t.Fatalf("required = %#v, want [query]", got)
+	}
+	properties, _ := candidate.InputSchema["properties"].(map[string]interface{})
+	query, _ := properties["query"].(map[string]interface{})
+	if _, exists := query["required"]; exists {
+		t.Fatalf("legacy ParamDef.required must be projected to root required, not a property keyword: %#v", query)
+	}
+	if !reflect.DeepEqual(candidate.LegacyParameters, manifest.Parameters) || !reflect.DeepEqual(candidate.LegacyOutput, manifest.Output) {
+		t.Fatalf("legacy projections not retained: %#v", candidate)
+	}
+}
 
 func TestToolRetrieverRanksFreshKnowledgeToolForCurrentEvent(t *testing.T) {
 	retriever := NewHybridToolRetriever([]*tool.ToolManifest{

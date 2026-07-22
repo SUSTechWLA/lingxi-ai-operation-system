@@ -35,19 +35,22 @@ type ToolRetrieveRequest struct {
 type RetrieveRequest = ToolRetrieveRequest
 
 type ToolCandidate struct {
-	Name         string                   `json:"name"`
-	Description  string                   `json:"description,omitempty"`
-	Capabilities []string                 `json:"capabilities,omitempty"`
-	Tags         []string                 `json:"tags,omitempty"`
-	Reason       string                   `json:"reason"`
-	Score        float64                  `json:"score"`
-	InputSchema  map[string]tool.ParamDef `json:"inputSchema,omitempty"`
-	OutputSchema map[string]tool.ParamDef `json:"outputSchema,omitempty"`
-	CostLevel    string                   `json:"costLevel,omitempty"`
-	RiskLevel    string                   `json:"riskLevel,omitempty"`
-	Type         string                   `json:"type,omitempty"`
-	Trace        ToolCandidateTrace       `json:"trace,omitempty"`
-	Manifest     *tool.ToolManifest       `json:"-"`
+	Name                 string                   `json:"name"`
+	Description          string                   `json:"description,omitempty"`
+	Capabilities         []string                 `json:"capabilities,omitempty"`
+	Tags                 []string                 `json:"tags,omitempty"`
+	Reason               string                   `json:"reason"`
+	Score                float64                  `json:"score"`
+	InputSchema          map[string]interface{}   `json:"inputSchema"`
+	OutputSchema         map[string]interface{}   `json:"outputSchema,omitempty"`
+	LegacyParameters     map[string]tool.ParamDef `json:"parameters,omitempty"`
+	LegacyOutput         map[string]tool.ParamDef `json:"output,omitempty"`
+	ProviderCapabilities map[string]interface{}   `json:"providerCapabilities,omitempty"`
+	CostLevel            string                   `json:"costLevel,omitempty"`
+	RiskLevel            string                   `json:"riskLevel,omitempty"`
+	Type                 string                   `json:"type,omitempty"`
+	Trace                ToolCandidateTrace       `json:"trace,omitempty"`
+	Manifest             *tool.ToolManifest       `json:"-"`
 }
 
 type HybridToolRetriever struct {
@@ -100,19 +103,22 @@ func (r *HybridToolRetriever) Retrieve(ctx context.Context, req ToolRetrieveRequ
 			continue
 		}
 		candidates = append(candidates, ToolCandidate{
-			Name:         manifest.Name,
-			Description:  manifest.Description,
-			Capabilities: append([]string(nil), manifest.Capabilities...),
-			Tags:         append([]string(nil), manifest.Tags...),
-			Reason:       strings.Join(reasonParts, "; "),
-			Score:        score,
-			InputSchema:  manifest.Parameters,
-			OutputSchema: manifest.Output,
-			CostLevel:    manifest.CostLevel,
-			RiskLevel:    manifest.RiskLevel,
-			Type:         manifest.Type,
-			Trace:        trace,
-			Manifest:     manifest,
+			Name:                 manifest.Name,
+			Description:          manifest.Description,
+			Capabilities:         append([]string(nil), manifest.Capabilities...),
+			Tags:                 append([]string(nil), manifest.Tags...),
+			Reason:               strings.Join(reasonParts, "; "),
+			Score:                score,
+			InputSchema:          canonicalToolSchema(manifest.InputSchema, manifest.Parameters),
+			OutputSchema:         canonicalToolSchema(manifest.OutputSchema, manifest.Output),
+			LegacyParameters:     cloneLegacyParamDefs(manifest.Parameters),
+			LegacyOutput:         cloneLegacyParamDefs(manifest.Output),
+			ProviderCapabilities: cloneJSONMap(manifest.ProviderCapabilities),
+			CostLevel:            manifest.CostLevel,
+			RiskLevel:            manifest.RiskLevel,
+			Type:                 manifest.Type,
+			Trace:                trace,
+			Manifest:             manifest,
 		})
 	}
 

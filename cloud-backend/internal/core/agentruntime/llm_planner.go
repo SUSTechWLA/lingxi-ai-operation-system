@@ -458,17 +458,20 @@ func compactToolCandidates(candidates []ToolCandidate) []map[string]interface{} 
 	out := make([]map[string]interface{}, 0, len(candidates))
 	for _, candidate := range candidates {
 		entry := map[string]interface{}{
-			"name":         candidate.Name,
-			"description":  candidate.Description,
-			"type":         candidate.Type,
-			"parameters":   candidate.InputSchema,
-			"output":       candidate.OutputSchema,
-			"capabilities": candidate.Capabilities,
-			"tags":         candidate.Tags,
-			"costLevel":    candidate.CostLevel,
-			"riskLevel":    candidate.RiskLevel,
-			"score":        candidate.Score,
-			"reason":       candidate.Reason,
+			"name":                 candidate.Name,
+			"description":          candidate.Description,
+			"type":                 candidate.Type,
+			"inputSchema":          cloneJSONMap(candidate.InputSchema),
+			"outputSchema":         cloneJSONMap(candidate.OutputSchema),
+			"parameters":           cloneLegacyParamDefs(candidate.LegacyParameters),
+			"output":               cloneLegacyParamDefs(candidate.LegacyOutput),
+			"providerCapabilities": cloneJSONMap(candidate.ProviderCapabilities),
+			"capabilities":         append([]string(nil), candidate.Capabilities...),
+			"tags":                 append([]string(nil), candidate.Tags...),
+			"costLevel":            candidate.CostLevel,
+			"riskLevel":            candidate.RiskLevel,
+			"score":                candidate.Score,
+			"reason":               candidate.Reason,
 		}
 		if candidate.Manifest != nil {
 			entry["boundary"] = candidate.Manifest.Boundary
@@ -493,7 +496,7 @@ func compactToolCandidates(candidates []ToolCandidate) []map[string]interface{} 
 				entry["humanReview"] = candidate.Manifest.HumanReview
 			}
 		}
-		out = append(out, entry)
+		out = append(out, cloneJSONMap(entry))
 	}
 	return out
 }
@@ -512,8 +515,10 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 			"executionPlane":       manifest.ExecutionPlane,
 			"requiresUserDevice":   manifest.RequiresUserDevice,
 			"artifactLocation":     manifest.ArtifactLocation,
-			"parameters":           manifest.Parameters,
-			"output":               manifest.Output,
+			"inputSchema":          canonicalToolSchema(manifest.InputSchema, manifest.Parameters),
+			"outputSchema":         canonicalToolSchema(manifest.OutputSchema, manifest.Output),
+			"parameters":           cloneLegacyParamDefs(manifest.Parameters),
+			"output":               cloneLegacyParamDefs(manifest.Output),
 			"capabilities":         manifest.Capabilities,
 			"tags":                 manifest.Tags,
 			"whenToUse":            manifest.WhenToUse,
@@ -528,6 +533,7 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 			"skillPackageId":       manifest.SkillPackageID,
 			"provider":             manifest.Provider,
 			"providerBinding":      manifest.ProviderBinding,
+			"providerCapabilities": cloneJSONMap(manifest.ProviderCapabilities),
 		}
 		// Include local-tool fields when applicable.
 		if manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
@@ -538,7 +544,7 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 		if manifest.HumanReview != nil {
 			entry["humanReview"] = manifest.HumanReview
 		}
-		out = append(out, entry)
+		out = append(out, cloneJSONMap(entry))
 	}
 	return out
 }

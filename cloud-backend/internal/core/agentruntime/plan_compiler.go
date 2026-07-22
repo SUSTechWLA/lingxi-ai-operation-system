@@ -65,8 +65,8 @@ func (c *PlanCompiler) Compile(plan *AgentPlan) (*model.DAGRequest, error) {
 		return nil, fmt.Errorf("agent plan has no steps")
 	}
 
-	// Detect missing quality checkers and auto-insert them.
-	steps := c.injectQualityGates(plan.Steps)
+	// PreparePlan inserts policy-required verification steps before Guard runs.
+	steps := plan.Steps
 
 	var err error
 	steps, err = c.applyDirectors(steps, plan.Domain)
@@ -131,6 +131,7 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 	c.wireIPArollDirectorToScript(plan)
 	deduplicateCanonicalProfileSteps(plan)
 	repairInvalidOutputReferences(plan.Steps, c.manifestsByPlan(plan))
+	plan.Steps = c.injectQualityGates(plan.Steps)
 	normalizePreparedPlanDependencies(plan)
 	c.expandPreparedPlanBudget(plan)
 	return plan
@@ -2623,21 +2624,30 @@ func isContentGenerationTool(toolName string, manifest *tool.ToolManifest) bool 
 // injectQualityGates scans the plan steps and auto-inserts quality checker steps
 // after production tools that don't already have an explicit quality check in the plan.
 func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
-	// Build tool presence set to avoid duplicates.
-	toolSet := make(map[string]bool, len(steps))
+	usedStepIDs := make(map[string]bool, len(steps)*2)
+	existingGateForProduction := make(map[string]bool)
 	for _, s := range steps {
-		toolSet[s.Tool] = true
+		usedStepIDs[s.ID] = true
+		if s.Tool == "__quality_gate__" {
+			if productionStep, _ := s.Arguments["productionStep"].(string); productionStep != "" {
+				existingGateForProduction[productionStep] = true
+			}
+		}
 	}
 
 	var out []AgentStep
 	out = make([]AgentStep, 0, len(steps)*3)
+	pendingGatesByChecker := make(map[string][]AgentStep)
 
 	for _, step := range steps {
 		out = append(out, step)
+		if pending := pendingGatesByChecker[step.ID]; len(pending) > 0 {
+			out = append(out, pending...)
+		}
 
 		manifest := c.manifestFor(step.Tool)
 		checkerName, hasChecker := qualityCheckerFor(step.Tool, manifest)
-		if !hasChecker || toolSet[checkerName] {
+		if !hasChecker || existingGateForProduction[step.ID] {
 			continue
 		}
 
@@ -2647,9 +2657,17 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 			continue
 		}
 
+		if existingChecker, ok := qualityCheckerDependingOn(steps, checkerName, step.ID); ok {
+			gateStep := buildRequiredQualityGate(step, manifest, existingChecker.ID, checkerName, c.manifestFor(checkerName))
+			pendingGatesByChecker[existingChecker.ID] = append(pendingGatesByChecker[existingChecker.ID], gateStep)
+			usedStepIDs[gateStep.ID] = true
+			continue
+		}
+
+		checkerStepID := uniqueQualityStepID(checkerName, step.ID+"_"+checkerName, usedStepIDs)
 		// Auto-insert a quality check step.
 		checkerStep := AgentStep{
-			ID:              checkerName,
+			ID:              checkerStepID,
 			Intent:          fmt.Sprintf("自动质量检查：%s 的输出", step.Tool),
 			Tool:            checkerName,
 			DependsOn:       []string{step.ID},
@@ -2658,36 +2676,11 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 			ProduceArtifact: true,
 		}
 		out = append(out, checkerStep)
-		toolSet[checkerName] = true
+		usedStepIDs[checkerStepID] = true
 
-		// Auto-insert a quality gate step that blocks downstream when quality fails.
-		// Uses __quality_gate__ marker tool compiled as a CONTROL node below.
-		minScore := manifest.QualityPolicy.MinScore
-		if minScore <= 0 {
-			minScore = 85
-		}
-		gateID := step.ID + "_quality_gate"
-		gateStep := AgentStep{
-			ID:        gateID,
-			Intent:    fmt.Sprintf("质量门禁：%s 评分需 >=%d", checkerName, minScore),
-			Tool:      "__quality_gate__",
-			DependsOn: []string{checkerName},
-			Arguments: map[string]interface{}{
-				"checkerStep":           checkerName,
-				"qualityCheckerNode":    compiledToolOutputNodeID(checkerName, c.manifestFor(checkerName)),
-				"productionStep":        step.ID,
-				"productionTool":        step.Tool,
-				"productionSourceNode":  compiledToolSourceNodeID(step.ID, manifest),
-				"minScore":              minScore,
-				"autoApproveWhenPassed": true,
-				"autoRepair":            manifest.QualityPolicy.AutoRepair,
-				"maxRepairAttempts":     manifest.QualityPolicy.MaxRepairAttempts,
-			},
-			ExpectedOutput:  []string{"gateResult"},
-			ProduceArtifact: false,
-		}
+		gateStep := buildRequiredQualityGate(step, manifest, checkerStepID, checkerName, c.manifestFor(checkerName))
 		out = append(out, gateStep)
-		toolSet[gateID] = true
+		usedStepIDs[gateStep.ID] = true
 	}
 
 	// Rewire downstream dependencies through quality gates.
@@ -2700,7 +2693,7 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 				if prev.Tool == "__quality_gate__" {
 					prod, _ := prev.Arguments["productionStep"].(string)
 					checker, _ := prev.Arguments["checkerStep"].(string)
-					if prod != "" && dep == prod && s.ID != checker && s.Tool != checker {
+					if prod != "" && (dep == prod || dep == checker) && s.ID != checker && s.ID != prev.ID {
 						s.DependsOn[j] = prev.ID
 					}
 				}
@@ -2709,6 +2702,61 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 	}
 
 	return out
+}
+
+func qualityCheckerDependingOn(steps []AgentStep, checkerTool, productionStep string) (AgentStep, bool) {
+	for _, candidate := range steps {
+		if candidate.Tool != checkerTool {
+			continue
+		}
+		for _, dependency := range candidate.DependsOn {
+			if dependency == productionStep {
+				return candidate, true
+			}
+		}
+	}
+	return AgentStep{}, false
+}
+
+func uniqueQualityStepID(preferred, fallback string, used map[string]bool) string {
+	if !used[preferred] {
+		return preferred
+	}
+	if !used[fallback] {
+		return fallback
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := fmt.Sprintf("%s_%d", fallback, suffix)
+		if !used[candidate] {
+			return candidate
+		}
+	}
+}
+
+func buildRequiredQualityGate(production AgentStep, manifest *tool.ToolManifest, checkerStepID, checkerTool string, checkerManifest *tool.ToolManifest) AgentStep {
+	minScore := manifest.QualityPolicy.MinScore
+	if minScore <= 0 {
+		minScore = 85
+	}
+	return AgentStep{
+		ID:        production.ID + "_quality_gate",
+		Intent:    fmt.Sprintf("质量门禁：%s 评分需 >=%d", checkerTool, minScore),
+		Tool:      "__quality_gate__",
+		DependsOn: []string{checkerStepID},
+		Arguments: map[string]interface{}{
+			"checkerStep":           checkerStepID,
+			"qualityCheckerNode":    compiledToolOutputNodeID(checkerStepID, checkerManifest),
+			"productionStep":        production.ID,
+			"productionTool":        production.Tool,
+			"productionSourceNode":  compiledToolSourceNodeID(production.ID, manifest),
+			"minScore":              minScore,
+			"autoApproveWhenPassed": true,
+			"autoRepair":            manifest.QualityPolicy.AutoRepair,
+			"maxRepairAttempts":     manifest.QualityPolicy.MaxRepairAttempts,
+		},
+		ExpectedOutput:  []string{"gateResult"},
+		ProduceArtifact: false,
+	}
 }
 
 func compiledToolSourceNodeID(stepID string, manifest *tool.ToolManifest) string {

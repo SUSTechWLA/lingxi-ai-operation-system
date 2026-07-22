@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -59,6 +60,127 @@ func TestLLMPlanner_GeneratesAgentPlanFromTopKTools(t *testing.T) {
 	}
 	if !strings.Contains(client.lastUserPrompt, "AgentPlan") || !strings.Contains(client.lastSystemText, "禁止输出 DAGRequest") {
 		t.Fatalf("planner prompt must ask for AgentPlan and forbid DAGRequest, system=%q user=%q", client.lastSystemText, client.lastUserPrompt)
+	}
+}
+
+func TestLLMPlannerPromptInjectsCompletePublicRequestContextAndCanonicalToolSchema(t *testing.T) {
+	client := &fakePlannerLLM{response: `{
+		"goal":"research a launch",
+		"domain":"general",
+		"mode":"analysis",
+		"steps":[{"id":"research","intent":"retrieve knowledge","tool":"mcp_research","reason":"matches research capability","arguments":{"query":"launch"},"expectedOutput":["facts"]}],
+		"budget":{"maxToolCalls":1,"maxSteps":1,"maxReplans":0,"maxCostLevel":"low"},
+		"stopPolicy":{"stopWhenEnough":true}
+	}`}
+	canonicalInput := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"query": map[string]interface{}{"$ref": "#/$defs/query"},
+		},
+		"required":             []interface{}{"query"},
+		"additionalProperties": false,
+		"$defs": map[string]interface{}{
+			"query": map[string]interface{}{"type": "string", "oneOf": []interface{}{map[string]interface{}{"enum": []interface{}{"launch", "status"}}}},
+		},
+	}
+	tools := staticToolList{{
+		Name: "mcp_research", Description: "research launch records", Type: "mcp",
+		Capabilities: []string{"general", "research", "script_generation"}, Tags: []string{"research", "launch"},
+		InputSchema:          canonicalInput,
+		OutputSchema:         map[string]interface{}{"type": "object", "properties": map[string]interface{}{"facts": map[string]interface{}{"type": "array"}}},
+		Parameters:           map[string]tool.ParamDef{"query": {Type: "string", Required: true}},
+		Output:               map[string]tool.ParamDef{"facts": {Type: "array"}},
+		Provider:             "knowledge-mcp",
+		ProviderCapabilities: map[string]interface{}{"protocolVersion": "2025-11-25", "supportsProgress": true},
+		CostLevel:            tool.CostLow, RiskLevel: tool.RiskLow,
+	}}
+	planner := NewLLMPlanner(tools, client, LLMPlannerOptions{MaxTools: 1})
+	req := StartRunRequest{
+		Message: "research launch status",
+		Domain:  "general",
+		Mode:    "analysis",
+		Context: map[string]interface{}{
+			"retrievedKnowledge": map[string]interface{}{"facts": []interface{}{"public launch fact"}, "sources": []interface{}{"kb://launch"}},
+			"compactedContext": CompactedContext{
+				ProjectGoal: "verify launch", CurrentStage: "research",
+				HardConstraints: []string{"cite public sources"},
+				RoleMemories:    []RoleMemory{{RoleID: "researcher", Stage: "research", Summary: "previous public findings", KeyDecisions: []string{"use canonical MCP tool"}}},
+			},
+		},
+	}
+
+	if _, err := planner.GeneratePlan(context.Background(), req); err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	parts := strings.SplitN(client.lastUserPrompt, "\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("planner prompt has no JSON payload: %q", client.lastUserPrompt)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(parts[1]), &payload); err != nil {
+		t.Fatalf("decode planner payload: %v", err)
+	}
+	request, _ := payload["userRequest"].(map[string]interface{})
+	if request["message"] != req.Message || request["domain"] != req.Domain || request["mode"] != req.Mode {
+		t.Fatalf("request identity missing from prompt: %#v", request)
+	}
+	contextValue, _ := request["context"].(map[string]interface{})
+	if !reflectJSONEqual(contextValue, req.Context) {
+		t.Fatalf("complete context was not injected: %#v", contextValue)
+	}
+	candidates, _ := payload["candidateTools"].([]interface{})
+	candidate, _ := candidates[0].(map[string]interface{})
+	if !reflectJSONEqual(candidate["inputSchema"], canonicalInput) {
+		t.Fatalf("canonical schema missing or changed in prompt: %#v", candidate)
+	}
+	providerCapabilities, _ := candidate["providerCapabilities"].(map[string]interface{})
+	if providerCapabilities["protocolVersion"] != "2025-11-25" {
+		t.Fatalf("provider metadata missing from candidate: %#v", candidate)
+	}
+	if strings.Contains(strings.ToLower(client.lastUserPrompt), "chain-of-thought") || strings.Contains(strings.ToLower(client.lastUserPrompt), "raw reasoning") {
+		t.Fatalf("planner prompt must not request hidden reasoning: %s", client.lastUserPrompt)
+	}
+}
+
+func reflectJSONEqual(left, right interface{}) bool {
+	leftJSON, _ := json.Marshal(left)
+	rightJSON, _ := json.Marshal(right)
+	var normalizedLeft interface{}
+	var normalizedRight interface{}
+	_ = json.Unmarshal(leftJSON, &normalizedLeft)
+	_ = json.Unmarshal(rightJSON, &normalizedRight)
+	return reflect.DeepEqual(normalizedLeft, normalizedRight)
+}
+
+func TestCompactToolManifestsReturnsCanonicalIndependentRepairPayload(t *testing.T) {
+	manifest := &tool.ToolManifest{
+		Name:         "mcp_repair_tool",
+		Capabilities: []string{"repair", "mcp_provider"},
+		InputSchema: map[string]interface{}{
+			"type": "object", "$defs": map[string]interface{}{"target": map[string]interface{}{"type": "string"}},
+			"properties": map[string]interface{}{"target": map[string]interface{}{"$ref": "#/$defs/target"}},
+		},
+		OutputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"fixed": map[string]interface{}{"type": "boolean"}}},
+		Parameters:   map[string]tool.ParamDef{"target": {Type: "string", Required: true}},
+		Provider:     "repair-provider",
+		ProviderBinding: &tool.ProviderBinding{
+			ProviderID: "repair-provider", RemoteToolName: "repair", ToolNameMap: map[string]string{"mcp_repair_tool": "repair"},
+		},
+		ProviderCapabilities: map[string]interface{}{"protocolVersion": "2025-11-25"},
+	}
+
+	payload := compactToolManifests([]*tool.ToolManifest{manifest})
+	if len(payload) != 1 || !reflectJSONEqual(payload[0]["inputSchema"], manifest.InputSchema) {
+		t.Fatalf("repair payload lost canonical schema: %#v", payload)
+	}
+	input := payload[0]["inputSchema"].(map[string]interface{})
+	input["type"] = "mutated"
+	capabilities := payload[0]["capabilities"].([]string)
+	capabilities[0] = "mutated"
+	binding := payload[0]["providerBinding"].(*tool.ProviderBinding)
+	binding.ToolNameMap["mcp_repair_tool"] = "mutated"
+	if manifest.InputSchema["type"] != "object" || manifest.Capabilities[0] != "repair" || manifest.ProviderBinding.ToolNameMap["mcp_repair_tool"] != "repair" {
+		t.Fatalf("repair prompt payload aliases manifest registry state: %#v", manifest)
 	}
 }
 

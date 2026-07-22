@@ -724,6 +724,15 @@ func (g *PlanGuard) ValidateWithWarnings(plan *AgentPlan) ([]string, error) {
 }
 
 func (g *PlanGuard) manifestFor(name string) *tool.ToolManifest {
+	if name == "__quality_gate__" {
+		return &tool.ToolManifest{
+			Name:      "__quality_gate__",
+			Type:      "control",
+			Boundary:  tool.BoundaryCloudBuiltin,
+			CostLevel: tool.CostLow,
+			RiskLevel: tool.RiskLow,
+		}
+	}
 	if g == nil || g.tools == nil {
 		return nil
 	}
