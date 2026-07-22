@@ -249,6 +249,90 @@ func TestPlanCompilerQualityGateIDsAreUniqueAndPrepareIsIdempotent(t *testing.T)
 	}
 }
 
+func TestPlanCompilerStableTopologyPreservesExplicitCheckerMultipleDependencies(t *testing.T) {
+	catalog := qualityContractCatalog()
+	catalog["context_provider"] = &tool.ToolManifest{Name: "context_provider", Output: map[string]tool.ParamDef{"value": {Type: "string"}}}
+	plan := &AgentPlan{
+		Goal: "multi dependency quality check", Domain: "general", Mode: "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "produce", Tool: "producer"},
+			{ID: "context", Tool: "context_provider", ExpectedOutput: []string{"value"}},
+			{ID: "explicit_check", Tool: "quality_checker", DependsOn: []string{"produce", "context"}, Arguments: map[string]interface{}{"evidence": "{{context.output.value}}"}},
+			{ID: "consume", Tool: "consumer", DependsOn: []string{"produce"}},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	prepared := compiler.PreparePlan(plan)
+	gate := qualityGateForProduction(prepared, "produce")
+	gotOrder := make([]string, 0, len(prepared.Steps))
+	for _, step := range prepared.Steps {
+		gotOrder = append(gotOrder, step.ID)
+	}
+	wantOrder := []string{"produce", "context", "explicit_check", gate.ID, "consume"}
+	if !reflect.DeepEqual(gotOrder, wantOrder) {
+		t.Fatalf("stable quality topology = %#v, want %#v", gotOrder, wantOrder)
+	}
+	checker := findPlanStep(prepared, "explicit_check")
+	if !reflect.DeepEqual(checker.DependsOn, []string{"produce", "context"}) || checker.Arguments["evidence"] != "{{context.output.value}}" {
+		t.Fatalf("checker dependencies or references were lost: %#v", checker)
+	}
+	consumer := findPlanStep(prepared, "consume")
+	if !reflect.DeepEqual(consumer.DependsOn, []string{gate.ID}) {
+		t.Fatalf("consumer not reconnected after gate: %#v", consumer)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared multi-dependency topology failed Guard: %v", err)
+	}
+	first := cloneContractPlanDeep(prepared)
+	if preparedAgain := compiler.PreparePlan(prepared); !reflect.DeepEqual(preparedAgain, first) {
+		t.Fatalf("multi-dependency PreparePlan is not idempotent:\nfirst=%#v\nsecond=%#v", first.Steps, preparedAgain.Steps)
+	}
+}
+
+func TestPlanCompilerDoesNotEraseCycleOrUnknownDependencyDiagnostics(t *testing.T) {
+	catalog := staticToolCatalog{
+		"first_tool":  {Name: "first_tool"},
+		"second_tool": {Name: "second_tool"},
+	}
+	tests := []struct {
+		name string
+		plan *AgentPlan
+		want string
+	}{
+		{
+			name: "cycle",
+			plan: &AgentPlan{Goal: "cycle", Steps: []AgentStep{
+				{ID: "first", Tool: "first_tool", DependsOn: []string{"second"}},
+				{ID: "second", Tool: "second_tool", DependsOn: []string{"first"}},
+			}},
+			want: "depends on unknown or later step second",
+		},
+		{
+			name: "unknown dependency from arguments",
+			plan: &AgentPlan{Goal: "unknown", Steps: []AgentStep{
+				{ID: "first", Tool: "first_tool", Arguments: map[string]interface{}{"input": "{{missing.output.value}}"}},
+			}},
+			want: "references unknown step missing in argument expression",
+		},
+		{
+			name: "unknown explicit dependency",
+			plan: &AgentPlan{Goal: "unknown", Steps: []AgentStep{
+				{ID: "first", Tool: "first_tool", DependsOn: []string{"missing"}},
+			}},
+			want: "depends on unknown or later step missing",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prepared := NewPlanCompiler(catalog).PreparePlan(tt.plan)
+			err := NewPlanGuard(catalog, nil).Validate(prepared)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Guard error = %v, want diagnostic containing %q; plan=%#v", err, tt.want, prepared.Steps)
+			}
+		})
+	}
+}
+
 func qualityGateForProduction(plan *AgentPlan, productionID string) AgentStep {
 	if plan == nil {
 		return AgentStep{}

@@ -112,6 +112,9 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 			return fmt.Errorf("agent step %s uses side-effect tool %s without approval policy", step.ID, step.Tool)
 		}
 		for _, dep := range step.DependsOn {
+			if dep == step.ID {
+				return fmt.Errorf("agent step %s cannot depend on itself", step.ID)
+			}
 			if !seen[dep] {
 				return fmt.Errorf("agent step %s depends on unknown or later step %s", step.ID, dep)
 			}

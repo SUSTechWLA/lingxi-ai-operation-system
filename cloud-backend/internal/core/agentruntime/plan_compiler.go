@@ -132,6 +132,7 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 	deduplicateCanonicalProfileSteps(plan)
 	repairInvalidOutputReferences(plan.Steps, c.manifestsByPlan(plan))
 	plan.Steps = c.injectQualityGates(plan.Steps)
+	stableTopologicalOrderPlanSteps(plan)
 	normalizePreparedPlanDependencies(plan)
 	c.expandPreparedPlanBudget(plan)
 	return plan
@@ -270,10 +271,10 @@ func normalizePreparedPlanDependencies(plan *AgentPlan) {
 	if plan == nil {
 		return
 	}
-	indexByID := make(map[string]int, len(plan.Steps))
-	for i, step := range plan.Steps {
+	knownStepIDs := make(map[string]bool, len(plan.Steps))
+	for _, step := range plan.Steps {
 		if step.ID != "" {
-			indexByID[step.ID] = i
+			knownStepIDs[step.ID] = true
 		}
 	}
 	for i := range plan.Steps {
@@ -281,22 +282,111 @@ func normalizePreparedPlanDependencies(plan *AgentPlan) {
 		seen := map[string]bool{}
 		depCandidates := make([]string, 0, len(step.DependsOn)+4)
 		depCandidates = append(depCandidates, step.DependsOn...)
-		depCandidates = append(depCandidates, referencedStepIDs(step.Arguments)...)
+		for _, referenceID := range referencedStepIDs(step.Arguments) {
+			if dependencyID, ok := resolvePlanReferenceDependency(referenceID, knownStepIDs); ok {
+				depCandidates = append(depCandidates, dependencyID)
+			}
+		}
 		deps := make([]string, 0, len(depCandidates))
 		for _, dep := range depCandidates {
 			dep = strings.TrimSpace(dep)
-			if dep == "" || dep == step.ID || seen[dep] {
-				continue
-			}
-			depIndex, ok := indexByID[dep]
-			if !ok || depIndex >= i {
+			if dep == "" || seen[dep] {
 				continue
 			}
 			seen[dep] = true
 			deps = append(deps, dep)
 		}
-		step.DependsOn = deps
+		if len(deps) == 0 {
+			step.DependsOn = nil
+		} else {
+			step.DependsOn = deps
+		}
 	}
+}
+
+// stableTopologicalOrderPlanSteps reorders a valid dependency graph using the
+// current plan order as a deterministic tie-break. Dependencies referenced in
+// arguments are real graph edges. Unknown dependencies, duplicate IDs, and
+// cycles leave the original order untouched so PlanGuard can report them
+// instead of normalization silently erasing the evidence.
+func stableTopologicalOrderPlanSteps(plan *AgentPlan) bool {
+	if plan == nil || len(plan.Steps) < 2 {
+		return true
+	}
+	steps := plan.Steps
+	indexByID := make(map[string]int, len(steps))
+	knownStepIDs := make(map[string]bool, len(steps))
+	for i, step := range steps {
+		if step.ID == "" {
+			return false
+		}
+		if _, exists := indexByID[step.ID]; exists {
+			return false
+		}
+		indexByID[step.ID] = i
+		knownStepIDs[step.ID] = true
+	}
+	indegree := make([]int, len(steps))
+	dependents := make([][]int, len(steps))
+	for stepIndex, step := range steps {
+		seenDependencies := map[string]bool{}
+		dependencies := append([]string(nil), step.DependsOn...)
+		for _, referenceID := range referencedStepIDs(step.Arguments) {
+			if dependencyID, ok := resolvePlanReferenceDependency(referenceID, knownStepIDs); ok {
+				dependencies = append(dependencies, dependencyID)
+			}
+		}
+		for _, dependency := range dependencies {
+			dependency = strings.TrimSpace(dependency)
+			if dependency == "" || seenDependencies[dependency] {
+				continue
+			}
+			seenDependencies[dependency] = true
+			dependencyIndex, exists := indexByID[dependency]
+			if !exists {
+				return false
+			}
+			indegree[stepIndex]++
+			dependents[dependencyIndex] = append(dependents[dependencyIndex], stepIndex)
+		}
+	}
+	orderedIndices := make([]int, 0, len(steps))
+	emitted := make([]bool, len(steps))
+	for len(orderedIndices) < len(steps) {
+		next := -1
+		for i := range steps {
+			if !emitted[i] && indegree[i] == 0 {
+				next = i
+				break
+			}
+		}
+		if next < 0 {
+			return false
+		}
+		emitted[next] = true
+		orderedIndices = append(orderedIndices, next)
+		for _, dependent := range dependents[next] {
+			indegree[dependent]--
+		}
+	}
+	ordered := make([]AgentStep, len(steps))
+	for i, originalIndex := range orderedIndices {
+		ordered[i] = steps[originalIndex]
+	}
+	plan.Steps = ordered
+	return true
+}
+
+func resolvePlanReferenceDependency(referenceID string, knownStepIDs map[string]bool) (string, bool) {
+	if knownStepIDs[referenceID] {
+		return referenceID, true
+	}
+	for _, suffix := range []string{"_review_before", "_review", "_exec"} {
+		if base := strings.TrimSuffix(referenceID, suffix); base != referenceID && knownStepIDs[base] {
+			return base, true
+		}
+	}
+	return "", false
 }
 
 func referencedStepIDs(value interface{}) []string {
@@ -564,7 +654,7 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 			if proposalField != "" {
 				scriptArgs["proposal"] = stepOutputRef(proposalAnchor, proposalField)
 			}
-		} else if knowledgeAnchor, _ := c.lastProducerStepForFields(plan, []string{"facts", "sources", "summary", "knowledge"}, []string{"knowledge_researcher", "news_search", "fact_checker"}); knowledgeAnchor != "" {
+		} else if knowledgeAnchor := c.lastKnowledgeProducerStep(plan); knowledgeAnchor != "" {
 			insertAfter = knowledgeAnchor
 			scriptDeps = dependencyListUnique(knowledgeAnchor, profileAnchor)
 		}
@@ -717,6 +807,19 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 	generationField := preferredOutputField(c.manifestFor("shot_generation_planner"), "shotGenerationPlans")
 	c.completeVideoOutputPlanFromAnchors(plan, scriptAnchor, scriptField, visualAnchor, "shotList", generationAnchor, generationField)
 	return true
+}
+
+func (c *PlanCompiler) lastKnowledgeProducerStep(plan *AgentPlan) string {
+	if plan == nil {
+		return ""
+	}
+	last := ""
+	for _, step := range plan.Steps {
+		if _, ok := knowledgeProducerForStep(step, c.manifestFor(step.Tool)); ok {
+			last = step.ID
+		}
+	}
+	return last
 }
 
 func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnchor string) {
@@ -1340,34 +1443,37 @@ func removeCinematicLegacyTalkingHeadSteps(plan *AgentPlan) {
 	if plan == nil || len(plan.Steps) == 0 {
 		return
 	}
+	removedStepIDs := make(map[string]bool)
 	out := plan.Steps[:0]
 	for _, step := range plan.Steps {
 		switch step.Tool {
 		case "visual_alignment_planner", "shot_splitter":
+			removedStepIDs[step.ID] = true
 			continue
 		default:
 			out = append(out, step)
 		}
 	}
 	plan.Steps = out
-	removeArgumentRefsToMissingSteps(plan)
+	removeReferencesToRemovedSteps(plan, removedStepIDs)
 }
 
-func removeArgumentRefsToMissingSteps(plan *AgentPlan) {
-	if plan == nil {
+func removeReferencesToRemovedSteps(plan *AgentPlan, removedStepIDs map[string]bool) {
+	if plan == nil || len(removedStepIDs) == 0 {
 		return
-	}
-	known := make(map[string]bool, len(plan.Steps))
-	for _, step := range plan.Steps {
-		if step.ID != "" {
-			known[step.ID] = true
-		}
 	}
 	for i := range plan.Steps {
 		step := &plan.Steps[i]
+		filteredDependencies := step.DependsOn[:0]
+		for _, dependency := range step.DependsOn {
+			if !removedStepIDs[dependency] {
+				filteredDependencies = append(filteredDependencies, dependency)
+			}
+		}
+		step.DependsOn = filteredDependencies
 		for key, value := range step.Arguments {
 			refStepID, _, ok := outputReference(value)
-			if ok && !known[refStepID] {
+			if ok && removedStepIDs[refStepID] {
 				delete(step.Arguments, key)
 			}
 		}
@@ -2371,18 +2477,21 @@ func removeDisabledAIGCSteps(plan *AgentPlan) {
 	if plan == nil || !aigcGenerationDisabled(plan) {
 		return
 	}
+	removedStepIDs := make(map[string]bool)
 	out := plan.Steps[:0]
 	for _, step := range plan.Steps {
 		if step.Tool == "keyframe_prompt_generator" {
+			removedStepIDs[step.ID] = true
 			continue
 		}
 		if step.Tool == "mcp_generation_runner" && stringArg(step.Arguments, "stage") != "ip_aroll_generation" {
+			removedStepIDs[step.ID] = true
 			continue
 		}
 		out = append(out, step)
 	}
 	plan.Steps = out
-	removeArgumentRefsToMissingSteps(plan)
+	removeReferencesToRemovedSteps(plan, removedStepIDs)
 }
 
 func requestedProjectID(plan *AgentPlan) string {
@@ -2536,7 +2645,12 @@ func knowledgeProducerForStep(step AgentStep, manifest *tool.ToolManifest) (know
 	if manifest == nil || len(manifest.Output) == 0 {
 		return knowledgeProducer{}, false
 	}
-	itemRefs := refsForOutputFields(step.ID, manifest, "facts", "evidence", "searchResults", "knowledge", "context", "summary", "results")
+	// A generic `summary` output is common to orchestration tools such as audio
+	// planners and MCP runners. Treating every summary as research context can
+	// create a false dependency from an upstream script step to its own
+	// downstream consumers. Knowledge producers must expose a knowledge-specific
+	// payload instead.
+	itemRefs := refsForOutputFields(step.ID, manifest, "facts", "evidence", "searchResults", "knowledge", "context", "results")
 	sourceRefs := refsForOutputFields(step.ID, manifest, "sources", "citations", "references")
 	evidenceRefs := refsForOutputFields(step.ID, manifest, "evidence", "searchResults", "results")
 	if len(itemRefs) == 0 && len(sourceRefs) == 0 && len(evidenceRefs) == 0 {
