@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -15,6 +17,36 @@ type ToolManifestRepository struct {
 	pool *pgxpool.Pool
 }
 
+var toolManifestColumns = []string{
+	"name", "description", "type", "version", "endpoint", "transport", "timeout_ms",
+	"input_schema", "output_schema", "parameters", "output", "examples", "sandbox", "capabilities", "tags",
+	"cost_level", "latency_level", "risk_level", "side_effect", "idempotent", "approval_policy", "artifact_policy",
+	"execution_plane", "requires_user_device", "artifact_location", "local_command", "local_requirements",
+	"provider", "provider_capabilities", "next_recommended_tools", "failure_modes", "skill_package_id", "prompt_ref", "resource_refs",
+	"boundary", "when_to_use", "when_not_to_use", "provider_binding", "created_at", "updated_at",
+}
+
+var toolManifestSelectColumns = strings.Join(toolManifestColumns, ", ")
+
+var toolManifestUpsertSQL = `INSERT INTO tool_manifests (` + toolManifestSelectColumns + `)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+	        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+	        $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+	        $31, $32, $33, $34, $35, $36, $37, $38, $39, $40)
+	ON CONFLICT (name) DO UPDATE SET
+	  description=$2, type=$3, version=$4, endpoint=$5, transport=$6, timeout_ms=$7,
+	  input_schema=$8, output_schema=$9, parameters=$10, output=$11, examples=$12,
+	  sandbox=$13, capabilities=$14, tags=$15, cost_level=$16, latency_level=$17,
+	  risk_level=$18, side_effect=$19, idempotent=$20, approval_policy=$21,
+	  artifact_policy=$22, execution_plane=$23, requires_user_device=$24,
+	  artifact_location=$25, local_command=$26, local_requirements=$27, provider=$28,
+	  provider_capabilities=$29, next_recommended_tools=$30, failure_modes=$31,
+	  skill_package_id=$32, prompt_ref=$33, resource_refs=$34, boundary=$35,
+	  when_to_use=$36, when_not_to_use=$37, provider_binding=$38, updated_at=$40`
+
+var toolManifestFindByNameSQL = `SELECT ` + toolManifestSelectColumns + ` FROM tool_manifests WHERE name=$1`
+var toolManifestFindAllSQL = `SELECT ` + toolManifestSelectColumns + ` FROM tool_manifests ORDER BY name`
+
 func NewToolManifestRepository(pool *pgxpool.Pool) *ToolManifestRepository {
 	return &ToolManifestRepository{pool: pool}
 }
@@ -26,46 +58,92 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 	}
 	m.UpdatedAt = now
 
-	inputSchema, _ := json.Marshal(m.InputSchema)
-	outputSchema, _ := json.Marshal(m.OutputSchema)
-	params, _ := json.Marshal(m.Parameters)
-	output, _ := json.Marshal(m.Output)
-	examples, _ := json.Marshal(m.Examples)
-	transport, _ := json.Marshal(m.Transport)
-	capabilities, _ := json.Marshal(m.Capabilities)
-	tags, _ := json.Marshal(m.Tags)
-	whenToUse, _ := json.Marshal(m.WhenToUse)
-	whenNotToUse, _ := json.Marshal(m.WhenNotToUse)
-	approvalPolicy, _ := json.Marshal(m.ApprovalPolicy)
-	artifactPolicy, _ := json.Marshal(m.ArtifactPolicy)
-	localRequirements, _ := json.Marshal(m.LocalRequirements)
-	providerBinding, _ := json.Marshal(m.ProviderBinding)
-	providerCapabilities, _ := json.Marshal(m.ProviderCapabilities)
-	nextRecommendedTools, _ := json.Marshal(m.NextRecommendedTools)
-	failureModes, _ := json.Marshal(m.FailureModes)
-	resourceRefs, _ := json.Marshal(m.ResourceRefs)
+	args, err := buildToolManifestUpsertArgs(m)
+	if err != nil {
+		return err
+	}
+	_, err = r.pool.Exec(ctx, toolManifestUpsertSQL, args...)
+	return err
+}
 
-	_, err := r.pool.Exec(ctx,
-		`INSERT INTO tool_manifests (name, description, type, version, endpoint, transport, timeout_ms,
-		 input_schema, output_schema, parameters, output, examples, sandbox, capabilities, tags, cost_level, latency_level,
-		 risk_level, side_effect, idempotent, approval_policy, artifact_policy,
-		 execution_plane, requires_user_device, artifact_location, local_command, local_requirements,
-		 provider, provider_capabilities, next_recommended_tools, failure_modes, skill_package_id, prompt_ref, resource_refs,
-		 boundary, when_to_use, when_not_to_use, provider_binding, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-		         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-		         $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-		         $31, $32, $33, $34, $35, $36, $37, $38, $39, $40)
-		 ON CONFLICT (name) DO UPDATE SET
-		   description=$2, type=$3, version=$4, endpoint=$5, transport=$6, timeout_ms=$7,
-		   input_schema=$8, output_schema=$9, parameters=$10, output=$11, examples=$12,
-		   sandbox=$13, capabilities=$14, tags=$15, cost_level=$16, latency_level=$17,
-		   risk_level=$18, side_effect=$19, idempotent=$20, approval_policy=$21,
-		   artifact_policy=$22, execution_plane=$23, requires_user_device=$24,
-		   artifact_location=$25, local_command=$26, local_requirements=$27, provider=$28,
-		   provider_capabilities=$29, next_recommended_tools=$30, failure_modes=$31,
-		   skill_package_id=$32, prompt_ref=$33, resource_refs=$34, boundary=$35,
-		   when_to_use=$36, when_not_to_use=$37, provider_binding=$38, updated_at=$40`,
+func buildToolManifestUpsertArgs(m *model.ToolManifestRecord) ([]interface{}, error) {
+	if m == nil {
+		return nil, fmt.Errorf("tool manifest record is nil")
+	}
+	inputSchema, err := marshalToolManifestJSON("input_schema", m.InputSchema)
+	if err != nil {
+		return nil, err
+	}
+	outputSchema, err := marshalToolManifestJSON("output_schema", m.OutputSchema)
+	if err != nil {
+		return nil, err
+	}
+	params, err := marshalToolManifestJSON("parameters", m.Parameters)
+	if err != nil {
+		return nil, err
+	}
+	output, err := marshalToolManifestJSON("output", m.Output)
+	if err != nil {
+		return nil, err
+	}
+	examples, err := marshalToolManifestJSON("examples", m.Examples)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := marshalToolManifestJSON("transport", m.Transport)
+	if err != nil {
+		return nil, err
+	}
+	capabilities, err := marshalToolManifestJSON("capabilities", m.Capabilities)
+	if err != nil {
+		return nil, err
+	}
+	tags, err := marshalToolManifestJSON("tags", m.Tags)
+	if err != nil {
+		return nil, err
+	}
+	whenToUse, err := marshalToolManifestJSON("when_to_use", m.WhenToUse)
+	if err != nil {
+		return nil, err
+	}
+	whenNotToUse, err := marshalToolManifestJSON("when_not_to_use", m.WhenNotToUse)
+	if err != nil {
+		return nil, err
+	}
+	approvalPolicy, err := marshalToolManifestJSON("approval_policy", m.ApprovalPolicy)
+	if err != nil {
+		return nil, err
+	}
+	artifactPolicy, err := marshalToolManifestJSON("artifact_policy", m.ArtifactPolicy)
+	if err != nil {
+		return nil, err
+	}
+	localRequirements, err := marshalToolManifestJSON("local_requirements", m.LocalRequirements)
+	if err != nil {
+		return nil, err
+	}
+	providerBinding, err := marshalToolManifestJSON("provider_binding", m.ProviderBinding)
+	if err != nil {
+		return nil, err
+	}
+	providerCapabilities, err := marshalToolManifestJSON("provider_capabilities", m.ProviderCapabilities)
+	if err != nil {
+		return nil, err
+	}
+	nextRecommendedTools, err := marshalToolManifestJSON("next_recommended_tools", m.NextRecommendedTools)
+	if err != nil {
+		return nil, err
+	}
+	failureModes, err := marshalToolManifestJSON("failure_modes", m.FailureModes)
+	if err != nil {
+		return nil, err
+	}
+	resourceRefs, err := marshalToolManifestJSON("resource_refs", m.ResourceRefs)
+	if err != nil {
+		return nil, err
+	}
+
+	return []interface{}{
 		m.Name, m.Description, m.Type, m.Version, m.Endpoint, transport, m.TimeoutMs,
 		inputSchema, outputSchema, params, output, examples, m.Sandbox,
 		capabilities, tags, m.CostLevel, m.LatencyLevel, m.RiskLevel,
@@ -74,38 +152,25 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 		m.Provider, providerCapabilities, nextRecommendedTools, failureModes, m.SkillPackageID, m.PromptRef, resourceRefs,
 		m.Boundary, whenToUse, whenNotToUse, providerBinding,
 		m.CreatedAt, m.UpdatedAt,
-	)
-	return err
+	}, nil
+}
+
+func marshalToolManifestJSON(field string, value interface{}) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode tool manifest %s: %w", field, err)
+	}
+	return encoded, nil
 }
 
 func (r *ToolManifestRepository) FindByName(ctx context.Context, name string) (*model.ToolManifestRecord, error) {
-	row := r.pool.QueryRow(ctx,
-		`SELECT name, description, type, version, endpoint, transport, timeout_ms,
-		        input_schema, output_schema, parameters, output, examples, sandbox, capabilities, tags,
-		        cost_level, latency_level, risk_level, side_effect, idempotent,
-		        approval_policy, artifact_policy, execution_plane, requires_user_device,
-		        artifact_location, local_command, local_requirements, provider, provider_capabilities,
-		        next_recommended_tools, failure_modes, skill_package_id, prompt_ref, resource_refs,
-		        boundary, when_to_use, when_not_to_use, provider_binding,
-		        created_at, updated_at
-		 FROM tool_manifests WHERE name=$1`, name,
-	)
+	row := r.pool.QueryRow(ctx, toolManifestFindByNameSQL, name)
 
 	return scanManifest(row)
 }
 
 func (r *ToolManifestRepository) FindAll(ctx context.Context) ([]*model.ToolManifestRecord, error) {
-	rows, err := r.pool.Query(ctx,
-		`SELECT name, description, type, version, endpoint, transport, timeout_ms,
-		        input_schema, output_schema, parameters, output, examples, sandbox, capabilities, tags,
-		        cost_level, latency_level, risk_level, side_effect, idempotent,
-		        approval_policy, artifact_policy, execution_plane, requires_user_device,
-		        artifact_location, local_command, local_requirements, provider, provider_capabilities,
-		        next_recommended_tools, failure_modes, skill_package_id, prompt_ref, resource_refs,
-		        boundary, when_to_use, when_not_to_use, provider_binding,
-		        created_at, updated_at
-		 FROM tool_manifests ORDER BY name`,
-	)
+	rows, err := r.pool.Query(ctx, toolManifestFindAllSQL)
 	if err != nil {
 		return nil, err
 	}

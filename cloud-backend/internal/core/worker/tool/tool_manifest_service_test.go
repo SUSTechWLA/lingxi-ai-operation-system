@@ -1,10 +1,15 @@
 package tool
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 )
 
@@ -52,7 +57,7 @@ func TestToolManifestRecordRoundTripPreservesCanonicalSchemas(t *testing.T) {
 		"result": {Type: "string", Description: "Result reference"},
 	}
 
-	record := manifestToRecord(&ToolManifest{
+	record, err := manifestToRecord(&ToolManifest{
 		Name:         "canonical_round_trip",
 		Description:  "Canonical schema round trip",
 		Type:         "builtin",
@@ -61,6 +66,9 @@ func TestToolManifestRecordRoundTripPreservesCanonicalSchemas(t *testing.T) {
 		Parameters:   legacyParameters,
 		Output:       legacyOutput,
 	})
+	if err != nil {
+		t.Fatalf("convert manifest: %v", err)
+	}
 	restored, err := manifestFromRecord(record)
 	if err != nil {
 		t.Fatalf("restore manifest: %v", err)
@@ -198,7 +206,7 @@ func TestManifestFromRecordPrefersCanonicalSchemasAndRetainsLegacyProjections(t 
 }
 
 func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
-	record := manifestToRecord(&ToolManifest{
+	record, err := manifestToRecord(&ToolManifest{
 		Name:               "video_script_generator",
 		Description:        "Generate a reviewable script",
 		Type:               "builtin_prompt_tool",
@@ -241,6 +249,9 @@ func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
 			DefaultReviewRequired: true,
 		},
 	})
+	if err != nil {
+		t.Fatalf("convert manifest: %v", err)
+	}
 
 	var capabilities []string
 	if err := json.Unmarshal(record.Capabilities, &capabilities); err != nil {
@@ -284,7 +295,7 @@ func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
 }
 
 func TestManifestToRecordDefaultsArtifactLocationToLocalOnly(t *testing.T) {
-	record := manifestToRecord(&ToolManifest{
+	record, err := manifestToRecord(&ToolManifest{
 		Name:        "proposal_generator",
 		Description: "Generate a proposal",
 		Type:        "builtin_prompt_tool",
@@ -293,6 +304,9 @@ func TestManifestToRecordDefaultsArtifactLocationToLocalOnly(t *testing.T) {
 			ArtifactKinds:   []string{"VIDEO_PROPOSAL"},
 		},
 	})
+	if err != nil {
+		t.Fatalf("convert manifest: %v", err)
+	}
 
 	if record.ArtifactLocation != ArtifactLocationLocal {
 		t.Fatalf("artifact location default = %q, want %q", record.ArtifactLocation, ArtifactLocationLocal)
@@ -306,5 +320,222 @@ func TestManifestToRecordDefaultsArtifactLocationToLocalOnly(t *testing.T) {
 	}
 	if policy.SyncFileToCloud {
 		t.Fatalf("local-only artifact policy must not sync files to cloud: %#v", policy)
+	}
+}
+
+func TestManifestToRecordRejectsUnserializableCanonicalSchema(t *testing.T) {
+	_, err := manifestToRecord(&ToolManifest{
+		Name:        "invalid_schema",
+		Description: "Invalid canonical schema",
+		Type:        "external",
+		InputSchema: map[string]interface{}{
+			"type":       "object",
+			"invalidKey": func() {},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "input_schema") {
+		t.Fatalf("expected explicit input_schema serialization error, got %v", err)
+	}
+}
+
+func TestRegisterExternalRejectsInvalidSchemaWithoutCallingRepository(t *testing.T) {
+	repo := &stubToolManifestRepo{}
+	registry := NewToolRegistry()
+	service := newTestToolManifestService(repo, &stubToolManifestCache{getErr: redis.Nil}, registry)
+
+	err := service.RegisterExternal(context.Background(), &ToolManifest{
+		Name:        "invalid_external",
+		Description: "Invalid external schema",
+		Type:        "external",
+		InputSchema: map[string]interface{}{"type": "object", "invalidKey": make(chan string)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "input_schema") {
+		t.Fatalf("expected explicit input_schema registration error, got %v", err)
+	}
+	if repo.upsertCalls != 0 {
+		t.Fatalf("repository called for invalid manifest: %d", repo.upsertCalls)
+	}
+	if registry.GetExternalManifest("invalid_external") != nil {
+		t.Fatal("invalid manifest was registered in memory")
+	}
+}
+
+func TestSyncBuiltinToolsReturnsObservableSchemaErrors(t *testing.T) {
+	repo := &stubToolManifestRepo{}
+	registry := NewToolRegistry()
+	registry.RegisterExternal(&ToolManifest{
+		Name:         "invalid_sync_tool",
+		Description:  "Invalid schema in sync",
+		Type:         "external",
+		OutputSchema: map[string]interface{}{"type": "object", "invalidKey": make(chan int)},
+	})
+	service := newTestToolManifestService(repo, &stubToolManifestCache{getErr: redis.Nil}, registry)
+
+	err := service.SyncBuiltinTools(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "invalid_sync_tool") || !strings.Contains(err.Error(), "output_schema") {
+		t.Fatalf("expected observable per-tool schema error, got %v", err)
+	}
+	if repo.upsertCalls != 0 {
+		t.Fatalf("repository called for invalid synced manifest: %d", repo.upsertCalls)
+	}
+}
+
+func TestListAllDerivesCanonicalSchemasForLegacyRepositoryRows(t *testing.T) {
+	legacy := legacyToolManifestRecord(t, "legacy_repo_tool")
+	repo := &stubToolManifestRepo{records: []*model.ToolManifestRecord{legacy}}
+	cache := &stubToolManifestCache{getErr: redis.Nil}
+	service := newTestToolManifestService(repo, cache, NewToolRegistry())
+
+	records, err := service.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("list manifests: %v", err)
+	}
+	if repo.findAllCalls != 1 {
+		t.Fatalf("repository find calls = %d, want 1", repo.findAllCalls)
+	}
+	assertRecordHasDerivedCanonicalSchemas(t, records[0])
+	if records[0].Description != legacy.Description || records[0].Boundary != legacy.Boundary {
+		t.Fatalf("normalization lost record metadata: %#v", records[0])
+	}
+}
+
+func TestListAllDerivesCanonicalSchemasForLegacyCacheRows(t *testing.T) {
+	legacy := legacyToolManifestRecord(t, "legacy_cache_tool")
+	cached, err := json.Marshal([]*model.ToolManifestRecord{legacy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &stubToolManifestRepo{}
+	cache := &stubToolManifestCache{data: cached}
+	service := newTestToolManifestService(repo, cache, NewToolRegistry())
+
+	records, err := service.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("list cached manifests: %v", err)
+	}
+	if repo.findAllCalls != 0 {
+		t.Fatalf("valid cache should not query repository: %d", repo.findAllCalls)
+	}
+	assertRecordHasDerivedCanonicalSchemas(t, records[0])
+}
+
+func TestListAllFallsBackToRepositoryWhenCachedRecordIsInvalid(t *testing.T) {
+	repoRecord := legacyToolManifestRecord(t, "repo_fallback_tool")
+	repo := &stubToolManifestRepo{records: []*model.ToolManifestRecord{repoRecord}}
+	cache := &stubToolManifestCache{
+		data: []byte(`[{"name":"invalid_cache_tool","description":"Invalid cached record","type":"external","input_schema":"not-an-object"}]`),
+	}
+	service := newTestToolManifestService(repo, cache, NewToolRegistry())
+
+	records, err := service.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("list manifests with invalid cache fallback: %v", err)
+	}
+	if repo.findAllCalls != 1 {
+		t.Fatalf("invalid cache did not fall back to repository: find calls=%d", repo.findAllCalls)
+	}
+	if len(records) != 1 || records[0].Name != "repo_fallback_tool" {
+		t.Fatalf("repository fallback records not returned: %#v", records)
+	}
+	assertRecordHasDerivedCanonicalSchemas(t, records[0])
+}
+
+type stubToolManifestRepo struct {
+	records      []*model.ToolManifestRecord
+	upsertCalls  int
+	findAllCalls int
+}
+
+func (r *stubToolManifestRepo) Upsert(context.Context, *model.ToolManifestRecord) error {
+	r.upsertCalls++
+	return nil
+}
+
+func (r *stubToolManifestRepo) FindByName(context.Context, string) (*model.ToolManifestRecord, error) {
+	return nil, nil
+}
+
+func (r *stubToolManifestRepo) FindAll(context.Context) ([]*model.ToolManifestRecord, error) {
+	r.findAllCalls++
+	return r.records, nil
+}
+
+func (r *stubToolManifestRepo) Delete(context.Context, string) error { return nil }
+
+type stubToolManifestCache struct {
+	data   []byte
+	getErr error
+}
+
+func newTestToolManifestService(repo *stubToolManifestRepo, cache toolManifestCache, registry *ToolRegistry) *ToolManifestService {
+	return &ToolManifestService{repo: repo, rdb: cache, registry: registry}
+}
+
+func (c *stubToolManifestCache) Get(context.Context, string) *redis.StringCmd {
+	if c.getErr != nil {
+		return redis.NewStringResult("", c.getErr)
+	}
+	return redis.NewStringResult(string(c.data), nil)
+}
+
+func (c *stubToolManifestCache) Set(_ context.Context, _ string, value interface{}, _ time.Duration) *redis.StatusCmd {
+	switch typed := value.(type) {
+	case []byte:
+		c.data = append([]byte(nil), typed...)
+	case string:
+		c.data = []byte(typed)
+	default:
+		return redis.NewStatusResult("", errors.New("unsupported cache value"))
+	}
+	return redis.NewStatusResult("OK", nil)
+}
+
+func (c *stubToolManifestCache) Del(context.Context, ...string) *redis.IntCmd {
+	c.data = nil
+	return redis.NewIntResult(1, nil)
+}
+
+func legacyToolManifestRecord(t *testing.T, name string) *model.ToolManifestRecord {
+	t.Helper()
+	parameters, err := json.Marshal(map[string]ParamDef{
+		"prompt": {Type: "string", Description: "Prompt", Required: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := json.Marshal(map[string]ParamDef{
+		"assetUrl": {Type: "string", Description: "Asset URL", Required: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &model.ToolManifestRecord{
+		Name:         name,
+		Description:  "Legacy manifest metadata",
+		Type:         "external",
+		Boundary:     BoundaryLegacy,
+		InputSchema:  json.RawMessage(`{}`),
+		OutputSchema: json.RawMessage(`{}`),
+		Parameters:   parameters,
+		Output:       output,
+	}
+}
+
+func assertRecordHasDerivedCanonicalSchemas(t *testing.T, record *model.ToolManifestRecord) {
+	t.Helper()
+	var inputSchema map[string]interface{}
+	if err := json.Unmarshal(record.InputSchema, &inputSchema); err != nil {
+		t.Fatalf("decode derived input schema: %v", err)
+	}
+	var outputSchema map[string]interface{}
+	if err := json.Unmarshal(record.OutputSchema, &outputSchema); err != nil {
+		t.Fatalf("decode derived output schema: %v", err)
+	}
+	if inputSchema["type"] != "object" || outputSchema["type"] != "object" {
+		t.Fatalf("canonical schemas were not derived: input=%#v output=%#v", inputSchema, outputSchema)
+	}
+	if !reflect.DeepEqual(inputSchema["required"], []interface{}{"prompt"}) ||
+		!reflect.DeepEqual(outputSchema["required"], []interface{}{"assetUrl"}) {
+		t.Fatalf("derived schema required arrays are wrong: input=%#v output=%#v", inputSchema, outputSchema)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -25,8 +26,14 @@ const (
 // All tool queries go through this service to ensure fast access and strong consistency.
 type ToolManifestService struct {
 	repo     repository.ToolManifestRepo
-	rdb      *redis.Client
+	rdb      toolManifestCache
 	registry *ToolRegistry
+}
+
+type toolManifestCache interface {
+	Get(ctx context.Context, key string) *redis.StringCmd
+	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	Del(ctx context.Context, keys ...string) *redis.IntCmd
 }
 
 func NewToolManifestService(repo repository.ToolManifestRepo, rdb *redis.Client, registry *ToolRegistry) *ToolManifestService {
@@ -41,22 +48,41 @@ func NewToolManifestService(repo repository.ToolManifestRepo, rdb *redis.Client,
 // Called once on startup. Idempotent — uses ON CONFLICT DO UPDATE.
 func (s *ToolManifestService) SyncBuiltinTools(ctx context.Context) error {
 	manifests := s.registry.ListManifests()
+	synced := 0
+	var syncErrors []error
 	for _, m := range manifests {
-		record := manifestToRecord(m)
-		if err := s.repo.Upsert(ctx, record); err != nil {
-			zap.L().Error("Failed to sync builtin tool", zap.String("name", m.Name), zap.Error(err))
+		record, err := manifestToRecord(m)
+		if err != nil {
+			wrapped := fmt.Errorf("encode tool %q: %w", m.Name, err)
+			zap.L().Error("Failed to encode builtin tool", zap.String("name", m.Name), zap.Error(err))
+			syncErrors = append(syncErrors, wrapped)
 			continue
 		}
+		if err := s.repo.Upsert(ctx, record); err != nil {
+			zap.L().Error("Failed to sync builtin tool", zap.String("name", m.Name), zap.Error(err))
+			syncErrors = append(syncErrors, fmt.Errorf("persist tool %q: %w", m.Name, err))
+			continue
+		}
+		synced++
 	}
-	zap.L().Info("Synced builtin tools to database", zap.Int("count", len(manifests)))
+	zap.L().Info("Synced builtin tools to database", zap.Int("count", synced), zap.Int("failed", len(syncErrors)))
 
 	// Invalidate cache after sync
-	return s.invalidateCache(ctx)
+	if err := s.invalidateCache(ctx); err != nil {
+		syncErrors = append(syncErrors, fmt.Errorf("invalidate tool manifest cache: %w", err))
+	}
+	if len(syncErrors) > 0 {
+		return fmt.Errorf("sync builtin tools: %w", errors.Join(syncErrors...))
+	}
+	return nil
 }
 
 // RegisterExternal persists an external tool to DB and registry, then invalidates cache.
 func (s *ToolManifestService) RegisterExternal(ctx context.Context, manifest *ToolManifest) error {
-	record := manifestToRecord(manifest)
+	record, err := manifestToRecord(manifest)
+	if err != nil {
+		return fmt.Errorf("failed to encode external tool manifest: %w", err)
+	}
 	record.Type = "external"
 	if err := s.repo.Upsert(ctx, record); err != nil {
 		return fmt.Errorf("failed to persist external tool: %w", err)
@@ -71,7 +97,10 @@ func (s *ToolManifestService) RegisterExternal(ctx context.Context, manifest *To
 // external bridge without rewriting its declared type. Skill capability prompt
 // tools use this path because their type is meaningful to the agent planner.
 func (s *ToolManifestService) RegisterManifest(ctx context.Context, manifest *ToolManifest) error {
-	record := manifestToRecord(manifest)
+	record, err := manifestToRecord(manifest)
+	if err != nil {
+		return fmt.Errorf("failed to encode tool manifest: %w", err)
+	}
 	if err := s.repo.Upsert(ctx, record); err != nil {
 		return fmt.Errorf("failed to persist tool manifest: %w", err)
 	}
@@ -100,10 +129,14 @@ func (s *ToolManifestService) ListAll(ctx context.Context) ([]*model.ToolManifes
 	if err == nil && len(cached) > 0 {
 		var manifests []*model.ToolManifestRecord
 		if err := json.Unmarshal(cached, &manifests); err == nil {
-			return manifests, nil
+			if err := normalizeToolManifestRecords(manifests); err == nil {
+				return manifests, nil
+			} else {
+				zap.L().Warn("Tool manifest cache contains invalid records, falling back to DB", zap.Error(err))
+			}
+		} else {
+			zap.L().Warn("Tool manifest cache corrupt, falling back to DB", zap.Error(err))
 		}
-		// Corrupt cache — proceed to DB
-		zap.L().Warn("Tool manifest cache corrupt, falling back to DB")
 	}
 
 	// 2. Query DB
@@ -111,14 +144,43 @@ func (s *ToolManifestService) ListAll(ctx context.Context) ([]*model.ToolManifes
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tool manifests: %w", err)
 	}
+	if err := normalizeToolManifestRecords(manifests); err != nil {
+		return nil, fmt.Errorf("normalize persisted tool manifests: %w", err)
+	}
 
 	// 3. Populate cache
-	data, _ := json.Marshal(manifests)
+	data, err := json.Marshal(manifests)
+	if err != nil {
+		return nil, fmt.Errorf("encode tool manifests for cache: %w", err)
+	}
 	if err := s.rdb.Set(ctx, toolCacheKey, data, toolCacheTTL).Err(); err != nil {
 		zap.L().Warn("Failed to cache tool manifests", zap.Error(err))
 	}
 
 	return manifests, nil
+}
+
+func normalizeToolManifestRecords(records []*model.ToolManifestRecord) error {
+	for i, record := range records {
+		if record == nil {
+			return fmt.Errorf("tool manifest record %d is nil", i)
+		}
+		manifest, err := manifestFromRecord(record)
+		if err != nil {
+			return fmt.Errorf("restore tool %q: %w", record.Name, err)
+		}
+		inputSchema, err := marshalCanonicalSchema(manifest.InputSchema, "input_schema")
+		if err != nil {
+			return fmt.Errorf("normalize tool %q: %w", record.Name, err)
+		}
+		outputSchema, err := marshalCanonicalSchema(manifest.OutputSchema, "output_schema")
+		if err != nil {
+			return fmt.Errorf("normalize tool %q: %w", record.Name, err)
+		}
+		record.InputSchema = inputSchema
+		record.OutputSchema = outputSchema
+	}
+	return nil
 }
 
 // FormatForPrompt returns a string description of all available tools suitable for
@@ -173,25 +235,10 @@ func (s *ToolManifestService) invalidateCache(ctx context.Context) error {
 }
 
 // manifestToRecord converts a ToolManifest to a model.ToolManifestRecord for DB storage.
-func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
-	inputSchema := marshalCanonicalSchema(m.InputSchema)
-	outputSchema := marshalCanonicalSchema(m.OutputSchema)
-	params, _ := json.Marshal(m.Parameters)
-	output, _ := json.Marshal(m.Output)
-	examples, _ := json.Marshal(m.Examples)
-	transport, _ := json.Marshal(m.Transport)
-	capabilities, _ := json.Marshal(m.Capabilities)
-	tags, _ := json.Marshal(m.Tags)
-	whenToUse, _ := json.Marshal(m.WhenToUse)
-	whenNotToUse, _ := json.Marshal(m.WhenNotToUse)
-	approvalPolicy, _ := json.Marshal(m.ApprovalPolicy)
-	localRequirements, _ := json.Marshal(m.LocalRequirements)
-	providerBinding, _ := json.Marshal(m.ProviderBinding)
-	providerCapabilities, _ := json.Marshal(m.ProviderCapabilities)
-	nextRecommendedTools, _ := json.Marshal(m.NextRecommendedTools)
-	failureModes, _ := json.Marshal(m.FailureModes)
-	resourceRefs, _ := json.Marshal(m.ResourceRefs)
-
+func manifestToRecord(m *ToolManifest) (*model.ToolManifestRecord, error) {
+	if m == nil {
+		return nil, fmt.Errorf("tool manifest is nil")
+	}
 	costLevel := m.CostLevel
 	if costLevel == "" {
 		costLevel = CostLow
@@ -219,7 +266,79 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 	if artifactPolicyValue.Storage == ArtifactLocationLocal {
 		artifactPolicyValue.SyncFileToCloud = false
 	}
-	artifactPolicy, _ := json.Marshal(artifactPolicyValue)
+
+	inputSchema, err := marshalCanonicalSchema(m.InputSchema, "input_schema")
+	if err != nil {
+		return nil, err
+	}
+	outputSchema, err := marshalCanonicalSchema(m.OutputSchema, "output_schema")
+	if err != nil {
+		return nil, err
+	}
+	params, err := marshalManifestJSON("parameters", m.Parameters)
+	if err != nil {
+		return nil, err
+	}
+	output, err := marshalManifestJSON("output", m.Output)
+	if err != nil {
+		return nil, err
+	}
+	examples, err := marshalManifestJSON("examples", m.Examples)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := marshalManifestJSON("transport", m.Transport)
+	if err != nil {
+		return nil, err
+	}
+	capabilities, err := marshalManifestJSON("capabilities", m.Capabilities)
+	if err != nil {
+		return nil, err
+	}
+	tags, err := marshalManifestJSON("tags", m.Tags)
+	if err != nil {
+		return nil, err
+	}
+	whenToUse, err := marshalManifestJSON("when_to_use", m.WhenToUse)
+	if err != nil {
+		return nil, err
+	}
+	whenNotToUse, err := marshalManifestJSON("when_not_to_use", m.WhenNotToUse)
+	if err != nil {
+		return nil, err
+	}
+	approvalPolicy, err := marshalManifestJSON("approval_policy", m.ApprovalPolicy)
+	if err != nil {
+		return nil, err
+	}
+	artifactPolicy, err := marshalManifestJSON("artifact_policy", artifactPolicyValue)
+	if err != nil {
+		return nil, err
+	}
+	localRequirements, err := marshalManifestJSON("local_requirements", m.LocalRequirements)
+	if err != nil {
+		return nil, err
+	}
+	providerBinding, err := marshalManifestJSON("provider_binding", m.ProviderBinding)
+	if err != nil {
+		return nil, err
+	}
+	providerCapabilities, err := marshalManifestJSON("provider_capabilities", m.ProviderCapabilities)
+	if err != nil {
+		return nil, err
+	}
+	nextRecommendedTools, err := marshalManifestJSON("next_recommended_tools", m.NextRecommendedTools)
+	if err != nil {
+		return nil, err
+	}
+	failureModes, err := marshalManifestJSON("failure_modes", m.FailureModes)
+	if err != nil {
+		return nil, err
+	}
+	resourceRefs, err := marshalManifestJSON("resource_refs", m.ResourceRefs)
+	if err != nil {
+		return nil, err
+	}
 
 	return &model.ToolManifestRecord{
 		Name:                 m.Name,
@@ -260,7 +379,7 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 		SkillPackageID:       m.SkillPackageID,
 		PromptRef:            m.PromptRef,
 		ResourceRefs:         resourceRefs,
-	}
+	}, nil
 }
 
 // manifestFromRecord restores a persisted manifest. Canonical JSON Schemas are
@@ -369,15 +488,19 @@ func manifestFromRecord(record *model.ToolManifestRecord) (*ToolManifest, error)
 	return manifest, nil
 }
 
-func marshalCanonicalSchema(schema map[string]interface{}) json.RawMessage {
+func marshalCanonicalSchema(schema map[string]interface{}, field string) (json.RawMessage, error) {
 	if len(schema) == 0 {
-		return json.RawMessage(`{}`)
+		return json.RawMessage(`{}`), nil
 	}
-	encoded, err := json.Marshal(schema)
+	return marshalManifestJSON(field, schema)
+}
+
+func marshalManifestJSON(field string, value interface{}) (json.RawMessage, error) {
+	encoded, err := json.Marshal(value)
 	if err != nil {
-		return json.RawMessage(`{}`)
+		return nil, fmt.Errorf("encode tool manifest %s: %w", field, err)
 	}
-	return encoded
+	return encoded, nil
 }
 
 func unmarshalCanonicalSchema(raw json.RawMessage, field string) (map[string]interface{}, error) {
