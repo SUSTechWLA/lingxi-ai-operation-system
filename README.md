@@ -209,6 +209,44 @@ BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh
 
 本地 Agent 支持标准 MCP provider 注册。provider 可以用 Python、Node、Go 或其他语言实现，只要暴露标准 `tools/list` 与 `tools/call` 能力即可；系统只保存 provider 配置，不绑定具体实现语言。
 
+### Agent/Tool/MCP 标准契约
+
+Agent 运行时按 Context、Tools、Constrain、Verify、Correct 五层分离感知、行动、安全边界、结果验证和失败修复。工具统一使用 canonical JSON Schema，再由 OpenAI、Anthropic 和 Gemini adapter 转成各自 API 格式；本地扩展按标准 MCP 生命周期动态发现，不为每个 provider 增加专用 runner 分支。完整规则见 [Agent、Tool 与 MCP 标准契约](docs/agent-tool-mcp-contract.md)。
+
+以下配置可直接作为 `PUT /api/local/mcp-providers` 的请求体。把绝对路径和占位符替换为本机值；`<MCP_AUTH_TOKEN>` 不是有效密钥，也不会被仓库保存为真实凭据。HTTP provider 是可选示例，注册后系统会自动执行 `initialize` 和 `tools/list`：
+
+```json
+{
+  "providers": [
+    {
+      "id": "custom_stdio",
+      "label": "Custom stdio MCP",
+      "transport": "stdio",
+      "command": "python3",
+      "args": ["/absolute/path/to/server.py"],
+      "workingDir": "/absolute/path/to/provider",
+      "toolPrefix": "custom.",
+      "approvalMode": "before_execute",
+      "enabled": true
+    },
+    {
+      "id": "custom_http",
+      "label": "Custom Streamable HTTP MCP",
+      "transport": "http",
+      "endpoint": "https://mcp.example.invalid/mcp",
+      "headers": {
+        "Authorization": "Bearer <MCP_AUTH_TOKEN>"
+      },
+      "toolPrefix": "remote.",
+      "approvalMode": "before_execute",
+      "enabled": false
+    }
+  ]
+}
+```
+
+Header secret 只写不回显：配置写入后，GET、状态和诊断接口不会返回 header value。所有 provider 工具会映射到统一 manifest，并通过通用 `LOCAL_MCP_TOOL_CALL` 执行；接入新 provider 无需新增 `LOCAL_VENDOR_*` 命令。
+
 即梦 JiMeng 扩展内置了 Python stdio MCP server，用来封装用户本机 Dreamina CLI。用户端提供显式授权的一键安装向导：
 
 1. 安装或更新 Dreamina CLI。
@@ -225,6 +263,8 @@ Dreamina OAuth、积分、任务记录和日志仍保留在用户自己的机器
 <summary><strong>开发者验证命令</strong></summary>
 
 ```bash
+python3 -m pip install 'mcp>=1.27,<2'
+python3 scripts/test_mcp_contracts.py
 cd local-backend && go test ./...
 cd ../cloud-backend && go test ./...
 cd ../frontend && npm run test:director && npm run test:settings && npm run lint && npm run build
@@ -255,6 +295,7 @@ Local agent:   http://localhost:18080/api/local/docs
 - [Project Introduction (English)](docs/PROJECT_INTRODUCTION_EN.md)
 - [中文 Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki)
 - [English Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki/English)
+- [Agent、Tool 与 MCP 标准契约](docs/agent-tool-mcp-contract.md)
 - [MCP Provider 接入](docs/mcp-providers.md)
 - [Closed Beta Runbook](docs/BETA_RUNBOOK.md)
 - [Release Status](docs/RELEASE_STATUS.md)
