@@ -129,9 +129,11 @@ jobs:
         working-directory: hyperframes-render-service
         run: npm run build
 
-      - name: Audit HyperFrames render service runtime dependencies
+      # The remaining Hono advisory is moderate and has no compatible upstream fix;
+      # high and critical runtime advisories must still fail the release pipeline.
+      - name: Audit HyperFrames runtime dependencies (high threshold)
         working-directory: hyperframes-render-service
-        run: npm audit --omit=dev --registry=https://registry.npmjs.org
+        run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
 
   test:
     name: test
