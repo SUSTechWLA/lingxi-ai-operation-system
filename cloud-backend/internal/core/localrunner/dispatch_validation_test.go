@@ -36,7 +36,7 @@ func TestValidateMCPDispatchBindingRequiresImmutableRunnerCatalogIdentity(t *tes
 	}
 }
 
-func TestValidateMCPDispatchBindingRejectsNestedToolOverride(t *testing.T) {
+func TestValidateMCPDispatchBindingAllowsAdvertisedArgumentsNamedLikeBindings(t *testing.T) {
 	req := DispatchLocalJobRequest{
 		UserID: "user-a", TargetRunnerID: "runner-a", CatalogRevision: strings.Repeat("a", 64),
 		MCPProviderID: "studio", MCPLogicalToolName: "studio.render", MCPRemoteToolName: "render",
@@ -45,16 +45,22 @@ func TestValidateMCPDispatchBindingRejectsNestedToolOverride(t *testing.T) {
 			"providerId": "studio",
 			"toolName":   "studio.render",
 			"arguments": map[string]interface{}{
-				"toolName": "studio.delete_everything",
+				"toolName":       "studio.delete_everything",
+				"providerId":     "content-provider",
+				"remoteToolName": "content-tool",
+				"mcpTool":        "content-mcp-tool",
+				"nested": map[string]interface{}{
+					"toolName": "nested-content-field",
+				},
 			},
 		},
 	}
-	if err := validateMCPDispatchBinding(&req); err == nil || !strings.Contains(err.Error(), "nested") {
-		t.Fatalf("nested override must be rejected, got %v", err)
+	if err := validateMCPDispatchBinding(&req); err != nil {
+		t.Fatalf("schema-owned arguments must not be interpreted as routing overrides: %v", err)
 	}
 }
 
-func TestValidateMCPDispatchBindingRejectsTypedNestedToolOverride(t *testing.T) {
+func TestValidateMCPDispatchBindingAllowsTypedArgumentsNamedLikeBindings(t *testing.T) {
 	req := DispatchLocalJobRequest{
 		UserID: "user-a", TargetRunnerID: "runner-a", CatalogRevision: strings.Repeat("a", 64),
 		MCPProviderID: "studio", MCPLogicalToolName: "studio.render", MCPRemoteToolName: "render",
@@ -63,8 +69,23 @@ func TestValidateMCPDispatchBindingRejectsTypedNestedToolOverride(t *testing.T) 
 			"arguments": map[string]string{"toolName": "studio.delete_everything"},
 		},
 	}
-	if err := validateMCPDispatchBinding(&req); err == nil || !strings.Contains(err.Error(), "nested") {
-		t.Fatalf("typed nested override must be rejected, got %v", err)
+	if err := validateMCPDispatchBinding(&req); err != nil {
+		t.Fatalf("typed schema-owned arguments must not be interpreted as routing overrides: %v", err)
+	}
+}
+
+func TestValidateMCPDispatchBindingStillRejectsTopLevelBindingOverride(t *testing.T) {
+	req := DispatchLocalJobRequest{
+		UserID: "user-a", TargetRunnerID: "runner-a", CatalogRevision: strings.Repeat("a", 64),
+		MCPProviderID: "studio", MCPLogicalToolName: "studio.render", MCPRemoteToolName: "render",
+		Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId": "attacker",
+			"arguments":  map[string]interface{}{"providerId": "legitimate-content"},
+		},
+	}
+	if err := validateMCPDispatchBinding(&req); err == nil || !strings.Contains(err.Error(), "immutable MCP binding") {
+		t.Fatalf("top-level cloud-owned binding override must be rejected, got %v", err)
 	}
 }
 

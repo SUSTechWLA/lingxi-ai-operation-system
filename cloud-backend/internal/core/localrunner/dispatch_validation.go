@@ -55,42 +55,10 @@ func validateMCPDispatchBinding(req *DispatchLocalJobRequest) error {
 		}
 		delete(payload, key)
 	}
-	for key, value := range payload {
-		if nestedMCPRoutingKey(value) {
-			return fmt.Errorf("nested MCP routing override is not allowed under payload.%s", key)
-		}
-	}
 	payload["providerId"] = req.MCPProviderID
 	payload["toolName"] = req.MCPLogicalToolName
 	req.Payload = payload
 	return nil
-}
-
-func nestedMCPRoutingKey(value interface{}) bool {
-	switch typed := value.(type) {
-	case map[string]interface{}:
-		for key, child := range typed {
-			if isMCPRoutingKey(key) || nestedMCPRoutingKey(child) {
-				return true
-			}
-		}
-	case []interface{}:
-		for _, child := range typed {
-			if nestedMCPRoutingKey(child) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func isMCPRoutingKey(key string) bool {
-	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "_", "")) {
-	case "providerid", "toolname", "mcptool", "remotetoolname":
-		return true
-	default:
-		return false
-	}
 }
 
 func catalogAdvertisesBinding(catalog MCPToolCatalog, providerID, logicalToolName, remoteToolName string) bool {
