@@ -122,7 +122,7 @@ func (s *Server) handleMCPProviders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		providers, err := normalizeMCPProviders(mergeMCPProviderHeaders(existing, req.Providers))
+		providers, err := normalizeMCPProviders(mergeMCPProviderSecrets(existing, req.Providers))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -281,6 +281,7 @@ func (s *Server) handleJiMengRegisterMCP(w http.ResponseWriter, r *http.Request)
 		ApprovalMode:  req.ApprovalMode,
 		Enabled:       true,
 	}
+	provider = mergeMCPProviderSecrets(providers, []localmcp.ProviderConfig{provider})[0]
 	normalized, err := normalizeMCPProviders([]localmcp.ProviderConfig{provider})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -431,40 +432,14 @@ func (s *Server) writeMCPProviders(providers []localmcp.ProviderConfig) error {
 	return writeMCPProviderJSON(s.mcpProvidersPath(), LocalMCPProviderSettingsResponse{Providers: normalized})
 }
 
-func writeMCPProviderJSON(path string, value interface{}) (returnErr error) {
-	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, ".mcp-providers-*.tmp")
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	defer func() {
-		if temp != nil {
-			_ = temp.Close()
-		}
-		if returnErr != nil {
-			_ = os.Remove(tempPath)
-		}
-	}()
-	if err := temp.Chmod(0o600); err != nil {
-		return err
-	}
-	enc := json.NewEncoder(temp)
+func writeMCPProviderJSON(path string, value interface{}) error {
+	var data bytes.Buffer
+	enc := json.NewEncoder(&data)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(value); err != nil {
 		return err
 	}
-	if err := temp.Sync(); err != nil {
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	temp = nil
-	if err := os.Rename(tempPath, path); err != nil {
-		return err
-	}
-	return nil
+	return atomicWritePrivateFile(path, data.Bytes())
 }
 
 func (s *Server) mcpProvidersPath() string {
@@ -492,6 +467,8 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 		provider.ApprovalMode = strings.ToLower(strings.TrimSpace(provider.ApprovalMode))
 		provider.Args = compactArgs(provider.Args)
 		provider.Env = compactEnv(provider.Env)
+		provider.HasEnv = false
+		provider.EnvKeys = nil
 		provider.Headers = compactHeaders(provider.Headers)
 		provider.HasHeaders = false
 		provider.HeaderKeys = nil
@@ -501,8 +478,11 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 		if provider.ID == "" {
 			return nil, errors.New("provider id is required")
 		}
+		if provider.ApprovalMode == "" {
+			provider.ApprovalMode = localmcp.ApprovalModeBeforeExecute
+		}
 		switch provider.ApprovalMode {
-		case "", localmcp.ApprovalModeNone, localmcp.ApprovalModeBeforeExecute, localmcp.ApprovalModeAlways:
+		case localmcp.ApprovalModeNone, localmcp.ApprovalModeBeforeExecute, localmcp.ApprovalModeAlways:
 		default:
 			return nil, fmt.Errorf(
 				"provider %q approvalMode %q is unsupported; allowed values are none, before_execute, and always",
@@ -545,15 +525,23 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 	return out, nil
 }
 
-func mergeMCPProviderHeaders(existing, incoming []localmcp.ProviderConfig) []localmcp.ProviderConfig {
-	existingHeaders := make(map[string]map[string]string, len(existing))
+func mergeMCPProviderSecrets(existing, incoming []localmcp.ProviderConfig) []localmcp.ProviderConfig {
+	type secrets struct {
+		env     map[string]string
+		headers map[string]string
+	}
+	existingSecrets := make(map[string]secrets, len(existing))
 	for _, provider := range existing {
-		existingHeaders[provider.ID] = provider.Headers
+		existingSecrets[strings.TrimSpace(provider.ID)] = secrets{env: provider.Env, headers: provider.Headers}
 	}
 	merged := append([]localmcp.ProviderConfig(nil), incoming...)
 	for index := range merged {
+		stored := existingSecrets[strings.TrimSpace(merged[index].ID)]
+		if merged[index].Env == nil {
+			merged[index].Env = stored.env
+		}
 		if merged[index].Headers == nil {
-			merged[index].Headers = existingHeaders[strings.TrimSpace(merged[index].ID)]
+			merged[index].Headers = stored.headers
 		}
 	}
 	return merged
@@ -568,6 +556,13 @@ func sanitizeMCPProviders(providers []localmcp.ProviderConfig) []localmcp.Provid
 }
 
 func sanitizeMCPProvider(provider localmcp.ProviderConfig) localmcp.ProviderConfig {
+	provider.HasEnv = len(provider.Env) > 0
+	provider.EnvKeys = make([]string, 0, len(provider.Env))
+	for key := range provider.Env {
+		provider.EnvKeys = append(provider.EnvKeys, key)
+	}
+	sort.Strings(provider.EnvKeys)
+	provider.Env = nil
 	provider.HasHeaders = len(provider.Headers) > 0
 	provider.HeaderKeys = make([]string, 0, len(provider.Headers))
 	for key := range provider.Headers {

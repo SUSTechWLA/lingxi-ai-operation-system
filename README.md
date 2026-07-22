@@ -245,7 +245,7 @@ Agent 运行时按 Context、Tools、Constrain、Verify、Correct 五层分离�
 }
 ```
 
-Header secret 只写不回显：配置写入后，GET、状态和诊断接口不会返回 header value。所有 provider 工具会映射到统一 manifest，并通过通用 `LOCAL_MCP_TOOL_CALL` 执行；接入新 provider 无需新增 `LOCAL_VENDOR_*` 命令。
+环境变量和 Header secret 只写不回显：配置写入后，GET、状态和诊断接口只返回 `hasEnv` / `envKeys` 与 `hasHeaders` / `headerKeys` 元数据，不返回 value。更新时省略 `env` 或 `headers` 会保留已存密钥，显式传入空对象才会清除。`approvalMode` 省略或留空时安全默认成 `before_execute`；只有显式设置 `none` 才会取消执行前审批。所有 provider 工具会映射到统一 manifest，并通过通用 `LOCAL_MCP_TOOL_CALL` 执行；接入新 provider 无需新增 `LOCAL_VENDOR_*` 命令。
 
 即梦 JiMeng 扩展内置了 Python stdio MCP server，用来封装用户本机 Dreamina CLI。用户端提供显式授权的一键安装向导：
 

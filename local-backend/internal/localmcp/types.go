@@ -16,6 +16,8 @@ type ProviderConfig struct {
 	Command       string            `json:"command,omitempty"`
 	Args          []string          `json:"args,omitempty"`
 	Env           map[string]string `json:"env,omitempty"`
+	HasEnv        bool              `json:"hasEnv,omitempty"`
+	EnvKeys       []string          `json:"envKeys,omitempty"`
 	Headers       map[string]string `json:"headers,omitempty"`
 	HasHeaders    bool              `json:"hasHeaders,omitempty"`
 	HeaderKeys    []string          `json:"headerKeys,omitempty"`

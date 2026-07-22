@@ -29,6 +29,7 @@ func TestMCPProviderToolsConvertToToolManifestWithPrefix(t *testing.T) {
 			Description:  "Generate video",
 			InputSchema:  inputSchema,
 			OutputSchema: outputSchema,
+			Annotations:  map[string]interface{}{"readOnlyHint": false, "destructiveHint": true},
 		},
 	})
 
@@ -65,6 +66,17 @@ func TestMCPProviderToolsConvertToToolManifestWithPrefix(t *testing.T) {
 	}
 	if !reflect.DeepEqual(m.ProviderCapabilities["inputSchema"], inputSchema) || !reflect.DeepEqual(m.ProviderCapabilities["outputSchema"], outputSchema) {
 		t.Fatalf("provider capability schemas were not preserved: %#v", m.ProviderCapabilities)
+	}
+	if !reflect.DeepEqual(m.ProviderCapabilities["annotations"], map[string]interface{}{"readOnlyHint": false, "destructiveHint": true}) {
+		t.Fatalf("MCP annotations were not preserved in manifest provider metadata: %#v", m.ProviderCapabilities["annotations"])
+	}
+	remoteAnnotations := map[string]interface{}{"readOnlyHint": false}
+	cloned := ManifestsFromMCPTools(MCPProviderConfig{ID: "clone", Enabled: true}, []MCPTool{{
+		Name: "clone", InputSchema: map[string]interface{}{"type": "object"}, Annotations: remoteAnnotations,
+	}})[0]
+	remoteAnnotations["readOnlyHint"] = true
+	if cloned.ProviderCapabilities["annotations"].(map[string]interface{})["readOnlyHint"] != false {
+		t.Fatalf("manifest annotation metadata aliases the MCP discovery payload")
 	}
 
 	m.InputSchema["type"] = "string"
@@ -133,5 +145,40 @@ func TestMCPProviderInvalidApprovalModeDoesNotDowngradeToNoApproval(t *testing.T
 	policy := manifests[0].ApprovalPolicy
 	if !policy.Required || policy.Mode != ApprovalAlways || !policy.BlocksDownstream {
 		t.Fatalf("invalid programmatic approval mode must fail closed behind review: %#v", policy)
+	}
+}
+
+func TestMCPProviderMissingApprovalModeDefaultsToBeforeExecute(t *testing.T) {
+	manifests := ManifestsFromMCPTools(MCPProviderConfig{
+		ID:        "safe-default",
+		Transport: "stdio",
+		Enabled:   true,
+	}, []MCPTool{{
+		Name:        "tool",
+		Description: "A tool whose provider omitted approvalMode.",
+		InputSchema: map[string]interface{}{"type": "object"},
+	}})
+	if len(manifests) != 1 {
+		t.Fatalf("manifests = %#v, want one guarded manifest", manifests)
+	}
+	policy := manifests[0].ApprovalPolicy
+	if !policy.Required || policy.Mode != ApprovalBeforeExecute || !policy.BlocksDownstream {
+		t.Fatalf("missing approval mode must default to before_execute: %#v", policy)
+	}
+	if manifests[0].ProviderCapabilities["approvalMode"] != ApprovalBeforeExecute {
+		t.Fatalf("normalized approval mode missing from provider capabilities: %#v", manifests[0].ProviderCapabilities)
+	}
+}
+
+func TestMCPProviderExplicitNoneIsTheOnlyNoApprovalMode(t *testing.T) {
+	manifests := ManifestsFromMCPTools(MCPProviderConfig{
+		ID: "explicit-none", Enabled: true, ApprovalMode: ApprovalNone,
+	}, []MCPTool{{Name: "read", InputSchema: map[string]interface{}{"type": "object"}}})
+	if len(manifests) != 1 {
+		t.Fatalf("manifests = %#v, want one manifest", manifests)
+	}
+	policy := manifests[0].ApprovalPolicy
+	if policy.Required || policy.Mode != ApprovalNone || policy.BlocksDownstream {
+		t.Fatalf("explicit none must remain the opt-out from approval: %#v", policy)
 	}
 }

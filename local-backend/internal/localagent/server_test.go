@@ -610,22 +610,22 @@ func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
 	if len(provider.Args) != 1 || provider.Args[0] != "/opt/mcp/echo_server.py" {
 		t.Fatalf("stdio args not preserved: %+v", provider.Args)
 	}
-	if provider.Env["ECHO_MODE"] != "test" {
-		t.Fatalf("stdio env not preserved: %+v", provider.Env)
+	if provider.Env != nil || !provider.HasEnv || len(provider.EnvKeys) != 1 || provider.EnvKeys[0] != "ECHO_MODE" {
+		t.Fatalf("provider response should expose only environment metadata: %+v", provider)
 	}
 	if provider.Headers != nil || !provider.HasHeaders || len(provider.HeaderKeys) != 1 || provider.HeaderKeys[0] != "Authorization" {
 		t.Fatalf("provider response should expose only header metadata: %+v", provider)
 	}
-	if strings.Contains(rec.Body.String(), "Bearer test-token") {
-		t.Fatalf("provider response leaked header secret: %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "Bearer test-token") || strings.Contains(rec.Body.String(), `"ECHO_MODE":"test"`) {
+		t.Fatalf("provider response leaked a configured secret: %s", rec.Body.String())
 	}
 	stored, err := server.ReadMCPProviders()
 	if err != nil {
 		t.Fatalf("read stored providers: %v", err)
 	}
 	storedProvider, ok := localMCPProviderByID(stored, "echo")
-	if !ok || storedProvider.Headers["Authorization"] != "Bearer test-token" {
-		t.Fatalf("provider headers were not persisted internally: %+v", storedProvider)
+	if !ok || storedProvider.Headers["Authorization"] != "Bearer test-token" || storedProvider.Env["ECHO_MODE"] != "test" {
+		t.Fatalf("provider secrets were not persisted internally: %+v", storedProvider)
 	}
 	info, err := os.Stat(configPath)
 	if err != nil {
@@ -698,7 +698,7 @@ func TestNormalizeMCPProvidersApprovalModes(t *testing.T) {
 		mode string
 		want string
 	}{
-		{name: "empty remains backward compatible", mode: "", want: ""},
+		{name: "empty defaults to review", mode: "", want: localmcp.ApprovalModeBeforeExecute},
 		{name: "none", mode: " NONE ", want: localmcp.ApprovalModeNone},
 		{name: "before execute", mode: "Before_Execute", want: localmcp.ApprovalModeBeforeExecute},
 		{name: "always", mode: " ALWAYS ", want: localmcp.ApprovalModeAlways},
@@ -720,7 +720,7 @@ func TestNormalizeMCPProvidersApprovalModes(t *testing.T) {
 	}
 }
 
-func TestLocalMCPProviderSettingsHeaderMergeDistinguishesAbsentAndEmpty(t *testing.T) {
+func TestLocalMCPProviderSettingsSecretMergeDistinguishesAbsentAndEmpty(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DataDir: root})
 
@@ -732,47 +732,64 @@ func TestLocalMCPProviderSettingsHeaderMergeDistinguishesAbsentAndEmpty(t *testi
 		if rec.Code != http.StatusOK {
 			t.Fatalf("save status = %d, body = %s", rec.Code, rec.Body.String())
 		}
-		if strings.Contains(rec.Body.String(), "Bearer private-token") {
-			t.Fatalf("PUT response leaked header secret: %s", rec.Body.String())
+		if strings.Contains(rec.Body.String(), "Bearer private-token") || strings.Contains(rec.Body.String(), "private-env-token") {
+			t.Fatalf("PUT response leaked provider secret: %s", rec.Body.String())
 		}
 		return rec
 	}
 
-	put(`{"providers":[{"id":"secure","transport":"stdio","command":"mcp-server","headers":{"Authorization":"Bearer private-token"},"enabled":true}]}`)
+	put(`{"providers":[{"id":"secure","transport":"stdio","command":"mcp-server","env":{"PRIVATE_TOKEN":"private-env-token"},"headers":{"Authorization":"Bearer private-token"},"enabled":true}]}`)
 	put(`{"providers":[{"id":"secure","label":"renamed","transport":"stdio","command":"mcp-server","enabled":true}]}`)
 	providers, err := server.ReadMCPProviders()
 	if err != nil {
 		t.Fatal(err)
 	}
 	provider, ok := localMCPProviderByID(providers, "secure")
-	if !ok || provider.Headers["Authorization"] != "Bearer private-token" {
-		t.Fatalf("absent headers must preserve existing values: %+v", provider)
+	if !ok || provider.Headers["Authorization"] != "Bearer private-token" || provider.Env["PRIVATE_TOKEN"] != "private-env-token" {
+		t.Fatalf("absent secret maps must preserve existing values: %+v", provider)
 	}
 
-	put(`{"providers":[{"id":"secure","label":"renamed","transport":"stdio","command":"mcp-server","headers":{},"enabled":true}]}`)
+	get := httptest.NewRequest(http.MethodGet, "/api/local/mcp-providers", nil)
+	getRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getRec, get)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body = %s", getRec.Code, getRec.Body.String())
+	}
+	put(getRec.Body.String())
 	providers, err = server.ReadMCPProviders()
 	if err != nil {
 		t.Fatal(err)
 	}
 	provider, ok = localMCPProviderByID(providers, "secure")
-	if !ok || len(provider.Headers) != 0 {
-		t.Fatalf("explicit empty headers must clear existing values: %+v", provider)
+	if !ok || provider.Headers["Authorization"] != "Bearer private-token" || provider.Env["PRIVATE_TOKEN"] != "private-env-token" {
+		t.Fatalf("round-tripping a sanitized GET payload must preserve stored secrets: %+v", provider)
+	}
+
+	put(`{"providers":[{"id":"secure","label":"renamed","transport":"stdio","command":"mcp-server","env":{},"headers":{},"enabled":true}]}`)
+	providers, err = server.ReadMCPProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, ok = localMCPProviderByID(providers, "secure")
+	if !ok || len(provider.Headers) != 0 || len(provider.Env) != 0 {
+		t.Fatalf("explicit empty secret maps must clear existing values: %+v", provider)
 	}
 }
 
-func TestLocalMCPProviderPublicEndpointsNeverExposeHeaderValues(t *testing.T) {
+func TestLocalMCPProviderPublicEndpointsNeverExposeSecretValues(t *testing.T) {
 	root := t.TempDir()
 	mcp := newMCPProtocolTestServer(t, func(_ string, _ map[string]interface{}) map[string]interface{} {
 		return map[string]interface{}{"structuredContent": map[string]interface{}{"available": true}}
 	}, "jimeng.check_status")
 	defer mcp.Close()
 	server := NewServer(Config{DataDir: root})
-	secret := "Bearer public-endpoint-secret"
+	headerSecret := "Bearer public-endpoint-secret"
+	envSecret := "public-env-secret-canary"
 
-	register := httptest.NewRequest(http.MethodPost, "/api/local/jimeng/setup/register-mcp", bytes.NewBufferString(`{"endpoint":"`+mcp.URL+`","headers":{"Authorization":"`+secret+`"}}`))
+	register := httptest.NewRequest(http.MethodPost, "/api/local/jimeng/setup/register-mcp", bytes.NewBufferString(`{"endpoint":"`+mcp.URL+`","env":{"DREAMINA_TOKEN":"`+envSecret+`"},"headers":{"Authorization":"`+headerSecret+`"}}`))
 	registerRec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(registerRec, register)
-	if registerRec.Code != http.StatusOK || strings.Contains(registerRec.Body.String(), secret) {
+	if registerRec.Code != http.StatusOK || strings.Contains(registerRec.Body.String(), headerSecret) || strings.Contains(registerRec.Body.String(), envSecret) {
 		t.Fatalf("register response status=%d leaked secret: %s", registerRec.Code, registerRec.Body.String())
 	}
 
@@ -783,11 +800,14 @@ func TestLocalMCPProviderPublicEndpointsNeverExposeHeaderValues(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET %s status=%d body=%s", path, rec.Code, rec.Body.String())
 		}
-		if strings.Contains(rec.Body.String(), secret) {
+		if strings.Contains(rec.Body.String(), headerSecret) || strings.Contains(rec.Body.String(), envSecret) {
 			t.Fatalf("GET %s leaked secret: %s", path, rec.Body.String())
 		}
 		if !strings.Contains(rec.Body.String(), `"hasHeaders":true`) || !strings.Contains(rec.Body.String(), `"Authorization"`) {
 			t.Fatalf("GET %s omitted safe header metadata: %s", path, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"hasEnv":true`) || !strings.Contains(rec.Body.String(), `"DREAMINA_TOKEN"`) {
+			t.Fatalf("GET %s omitted safe environment metadata: %s", path, rec.Body.String())
 		}
 	}
 }
@@ -1028,7 +1048,7 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
 		t.Fatalf("create config dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "config", "mcp-providers.json"), []byte(`{"providers":[{"id":"jimeng","label":"JiMeng MCP","transport":"stdio","command":"python3","args":["mcp/jimeng/server.py"],"env":{"DREAMINA_TOKEN":"secret-token"},"headers":{"Authorization":"Bearer mcp-header-token-should-redact","X-Workspace":"custom-header-secret-should-redact"},"enabled":true}]}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "config", "mcp-providers.json"), []byte(`{"providers":[{"id":"jimeng","label":"JiMeng MCP","transport":"stdio","command":"python3","args":["mcp/jimeng/server.py"],"env":{"DREAMINA_TOKEN":"secret-token","ACCOUNT_SESSION":"second-env-secret-should-redact"},"headers":{"Authorization":"Bearer mcp-header-token-should-redact","X-Workspace":"custom-header-secret-should-redact"},"enabled":true}]}`), 0o644); err != nil {
 		t.Fatalf("write mcp providers: %v", err)
 	}
 	artifactDir := filepath.Join(root, "artifacts", "vp-1", "video-1")
@@ -1169,9 +1189,15 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	if !ok || len(headerKeys) != 2 || headerKeys[0] != "Authorization" || headerKeys[1] != "X-Workspace" {
 		t.Fatalf("MCP provider diagnostics should preserve sorted headerKeys metadata: %#v", diagnosticProvider["headerKeys"])
 	}
-	env, ok := diagnosticProvider["env"].(map[string]interface{})
-	if !ok || env["DREAMINA_TOKEN"] != "[REDACTED]" {
-		t.Fatalf("MCP provider diagnostics should redact environment tokens: %#v", diagnosticProvider["env"])
+	if _, ok := diagnosticProvider["env"]; ok {
+		t.Fatalf("MCP provider diagnostics must omit environment values: %#v", diagnosticProvider)
+	}
+	if diagnosticProvider["hasEnv"] != true {
+		t.Fatalf("MCP provider diagnostics should preserve hasEnv metadata: %#v", diagnosticProvider)
+	}
+	envKeys, ok := diagnosticProvider["envKeys"].([]interface{})
+	if !ok || len(envKeys) != 2 || envKeys[0] != "ACCOUNT_SESSION" || envKeys[1] != "DREAMINA_TOKEN" {
+		t.Fatalf("MCP provider diagnostics should preserve sorted envKeys metadata: %#v", diagnosticProvider["envKeys"])
 	}
 	recentTaskIDs, ok := manifest["recentTaskIds"].([]interface{})
 	if !ok || len(recentTaskIDs) != 1 || recentTaskIDs[0] != "task-beta-123" {
@@ -1179,6 +1205,7 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	}
 	allEntries := strings.Join(mapValues(entries), "\n")
 	if strings.Contains(allEntries, "secret-token") ||
+		strings.Contains(allEntries, "second-env-secret-should-redact") ||
 		strings.Contains(allEntries, "sk-test-secret-should-redact") ||
 		strings.Contains(allEntries, "mcp-header-token-should-redact") ||
 		strings.Contains(allEntries, "custom-header-secret-should-redact") ||

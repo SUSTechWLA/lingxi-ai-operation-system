@@ -28,6 +28,7 @@ type MCPTool struct {
 	Description  string                 `json:"description,omitempty"`
 	InputSchema  map[string]interface{} `json:"inputSchema,omitempty"`
 	OutputSchema map[string]interface{} `json:"outputSchema,omitempty"`
+	Annotations  map[string]interface{} `json:"annotations,omitempty"`
 }
 
 func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolManifest {
@@ -52,6 +53,10 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 		inputSchema := cloneJSONSchema(remoteTool.InputSchema)
 		outputSchema := cloneJSONSchema(remoteTool.OutputSchema)
 		approvalPolicy := mcpProviderApprovalPolicy(provider.ApprovalMode)
+		approvalMode := strings.ToLower(strings.TrimSpace(provider.ApprovalMode))
+		if approvalMode == "" {
+			approvalMode = ApprovalBeforeExecute
+		}
 		manifests = append(manifests, &ToolManifest{
 			Name:               logicalName,
 			Description:        remoteTool.Description,
@@ -88,9 +93,10 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 				"enabled":       provider.Enabled,
 				"enabledTools":  append([]string(nil), provider.EnabledTools...),
 				"disabledTools": append([]string(nil), provider.DisabledTools...),
-				"approvalMode":  provider.ApprovalMode,
+				"approvalMode":  approvalMode,
 				"inputSchema":   cloneJSONSchema(remoteTool.InputSchema),
 				"outputSchema":  cloneJSONSchema(remoteTool.OutputSchema),
+				"annotations":   cloneJSONSchema(remoteTool.Annotations),
 			},
 		})
 	}
@@ -99,9 +105,9 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 
 func mcpProviderApprovalPolicy(mode string) ApprovalPolicy {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", ApprovalNone:
+	case ApprovalNone:
 		return ApprovalPolicy{Mode: ApprovalNone}
-	case ApprovalBeforeExecute:
+	case "", ApprovalBeforeExecute:
 		return ApprovalPolicy{
 			Required:         true,
 			Mode:             ApprovalBeforeExecute,

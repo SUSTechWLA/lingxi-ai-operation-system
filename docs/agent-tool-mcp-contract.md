@@ -130,10 +130,18 @@ passing through an older application layer. `tools/list` pagination must be
 consumed until `nextCursor` is empty.
 
 Provider configuration may contain environment variables and HTTP headers.
-Secret header values are write-only: callers can store or replace them, while
-GET, status, logs, and diagnostics expose at most header names or redacted
-metadata. Error messages must not echo command environments, authorization
-values, or prompt secrets.
+Environment and header values are write-only: callers can store, replace, or
+explicitly clear them, while GET, status, logs, and diagnostics expose at most
+sorted key names and configured/not-configured metadata. Omitting `env` or
+`headers` during an update preserves the stored values, so sending a sanitized
+GET response back to PUT cannot erase credentials; an explicit empty object
+clears that secret map. Error messages must not echo command environments,
+authorization values, or prompt secrets.
+
+Provider registration fails closed. When `approvalMode` is omitted or blank,
+the Local Agent normalizes it to `before_execute`. A provider may bypass that
+review gate only by explicitly setting `approvalMode` to `none`; invalid values
+are rejected and cannot overwrite the last valid configuration.
 
 ## Registration example
 

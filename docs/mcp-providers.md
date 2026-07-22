@@ -93,6 +93,8 @@ curl -X POST http://127.0.0.1:18080/api/local/jimeng/setup/register-mcp \
 
 本地 Agent 会自动生成 `python3 <repo>/mcp/jimeng/server.py` 的 provider 配置，并写入 `toolPrefix: "jimeng."`。
 
+Provider 的 `env` 与 `headers` value 只写不回显；公开设置、状态和诊断接口只返回是否已配置及排序后的 key 名称。更新时省略这两个字段会保留已有 secret，显式传入 `{}` 才会清除。`approvalMode` 省略或为空时会归一为 `before_execute`，只有显式 `none` 才表示无需执行前审批。
+
 ## 视频素材路由
 
 未来所有 CLI 模式的 AIGC 接入都必须走 MCP provider，不再给每个 CLI 新增本地工具命令。云端运行计划只指定 `providerId`、`mcpTool` 和 `externalGenerationRequests`；本地 runner 统一执行 `LOCAL_MCP_TOOL_CALL`。
