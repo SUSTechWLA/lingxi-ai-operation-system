@@ -5,18 +5,39 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+type scriptedConnection struct {
+	reads []jsonrpc.Message
+	index int
+}
+
+func (c *scriptedConnection) Read(context.Context) (jsonrpc.Message, error) {
+	if c.index >= len(c.reads) {
+		return nil, errors.New("no scripted message")
+	}
+	message := c.reads[c.index]
+	c.index++
+	return message, nil
+}
+
+func (*scriptedConnection) Write(context.Context, jsonrpc.Message) error { return nil }
+func (*scriptedConnection) Close() error                                 { return nil }
+func (*scriptedConnection) SessionID() string                            { return "test-session" }
 
 func TestClientUsesStandardHTTPHandshakePaginatesAndReusesSession(t *testing.T) {
 	var initialized atomic.Int32
@@ -262,6 +283,102 @@ func TestToolContentPreservesUnknownCompatibilityFields(t *testing.T) {
 	if roundTrip["futureStandardField"] == nil || content.Text != "ok" || content.Meta["vendor/id"] != "1" {
 		t.Fatalf("unknown fields or readable fields were lost: content=%#v json=%#v", content, roundTrip)
 	}
+}
+
+func TestCaptureConnectionPreservesUnknownWireFields(t *testing.T) {
+	capture := newWireCapture()
+	connection := &captureConnection{
+		base: &scriptedConnection{reads: []jsonrpc.Message{
+			&jsonrpc.Response{ID: mustJSONRPCID(t, "list-1"), Result: json.RawMessage(`{"tools":[{"name":"future","inputSchema":{"type":"object"},"annotations":{"futureHint":"hint"},"futureToolField":{"enabled":true}}]}`)},
+			&jsonrpc.Response{ID: mustJSONRPCID(t, "call-1"), Result: json.RawMessage(`{"content":[{"type":"text","text":"ok","futureContentField":"kept"}],"structuredContent":{"ok":true},"_meta":{"trace":"trace-1"},"futureResultField":{"enabled":true}}`)},
+		}},
+		capture: capture,
+	}
+	capture.beginListTools()
+	listCall := &jsonrpc.Request{ID: mustJSONRPCID(t, "list-1"), Method: "tools/list", Params: json.RawMessage(`{}`)}
+	if err := connection.Write(context.Background(), listCall); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Read(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rawTools, err := capture.decodeTools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rawTools) != 1 || rawTools[0].Raw["futureToolField"] == nil || rawTools[0].Annotations["futureHint"] != "hint" {
+		t.Fatalf("unknown tool wire fields were lost: %#v", rawTools)
+	}
+
+	capture.beginCallTool()
+	toolCall := &jsonrpc.Request{ID: mustJSONRPCID(t, "call-1"), Method: "tools/call", Params: json.RawMessage(`{"name":"future"}`)}
+	if err := connection.Write(context.Background(), toolCall); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Read(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rawResult, err := capture.decodeCallResult()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rawResult.Raw["futureResultField"] == nil || rawResult.Content[0].Raw["futureContentField"] != "kept" || rawResult.Meta["trace"] != "trace-1" {
+		t.Fatalf("unknown result wire fields were lost: %#v", rawResult)
+	}
+	capture.clear()
+	if tools, _ := capture.decodeTools(); len(tools) != 0 {
+		t.Fatalf("capture was not cleared: %#v", tools)
+	}
+}
+
+func TestWireCaptureCorrelatesConcurrentResponsesByRequestID(t *testing.T) {
+	capture := newWireCapture()
+	capture.beginListTools()
+	const count = 32
+	var wait sync.WaitGroup
+	for index := 0; index < count; index++ {
+		index := index
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			id, _ := jsonrpc.MakeID(fmt.Sprintf("page-%d", index))
+			capture.recordWrite(&jsonrpc.Request{ID: id, Method: "tools/list", Params: json.RawMessage(`{}`)})
+			capture.recordRead(&jsonrpc.Response{
+				ID: id,
+				Result: json.RawMessage(fmt.Sprintf(
+					`{"tools":[{"name":"tool-%d","inputSchema":{"type":"object"},"futurePage":%d}]}`,
+					index,
+					index,
+				)),
+			})
+		}()
+	}
+	wait.Wait()
+	tools, err := capture.decodeTools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != count {
+		t.Fatalf("captured tools = %d, want %d", len(tools), count)
+	}
+	seen := make(map[string]bool, count)
+	for _, tool := range tools {
+		seen[tool.Name] = tool.Raw["futurePage"] != nil
+	}
+	for index := 0; index < count; index++ {
+		if !seen[fmt.Sprintf("tool-%d", index)] {
+			t.Fatalf("missing correlated raw response for tool-%d: %#v", index, tools)
+		}
+	}
+}
+
+func mustJSONRPCID(t *testing.T, value string) jsonrpc.ID {
+	t.Helper()
+	id, err := jsonrpc.MakeID(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func TestDisabledProviderAndEmptyToolAreRejectedWithoutConnecting(t *testing.T) {

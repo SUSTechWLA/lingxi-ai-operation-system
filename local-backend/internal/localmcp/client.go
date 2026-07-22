@@ -25,14 +25,17 @@ type Client struct {
 	httpClient *http.Client
 	sdkClient  *mcp.Client
 
-	sessionMu sync.Mutex
-	session   *mcp.ClientSession
+	operationMu sync.Mutex
+	sessionMu   sync.Mutex
+	session     *mcp.ClientSession
+	capture     *wireCapture
 }
 
 func NewClient(cfg ProviderConfig, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	capture := newWireCapture()
 	return &Client{
 		cfg:        cfg,
 		httpClient: cloneHTTPClientWithHeaders(httpClient, cfg.Headers),
@@ -40,17 +43,21 @@ func NewClient(cfg ProviderConfig, httpClient *http.Client) *Client {
 			&mcp.Implementation{Name: clientImplementationName, Version: clientImplementationVersion},
 			&mcp.ClientOptions{Capabilities: &mcp.ClientCapabilities{}},
 		),
+		capture: capture,
 	}
 }
 
 func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
+	c.operationMu.Lock()
+	defer c.operationMu.Unlock()
+	c.capture.beginListTools()
 	callCtx, cancel := c.withProviderTimeout(ctx)
 	defer cancel()
 	session, err := c.ensureSession(callCtx)
 	if err != nil {
 		return nil, err
 	}
-	tools := make([]Tool, 0)
+	sdkTools := make([]Tool, 0)
 	for remoteTool, listErr := range session.Tools(callCtx, nil) {
 		if listErr != nil {
 			return nil, fmt.Errorf("mcp provider %q list tools: %w", c.cfg.ID, listErr)
@@ -59,15 +66,19 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 		if convertErr != nil {
 			return nil, fmt.Errorf("mcp provider %q decode tool %q: %w", c.cfg.ID, remoteTool.Name, convertErr)
 		}
-		converted.Name = c.logicalToolName(converted.Name)
-		if c.toolAllowed(converted.Name) {
-			tools = append(tools, converted)
-		}
+		sdkTools = append(sdkTools, converted)
 	}
-	return tools, nil
+	rawTools, rawErr := c.capture.decodeTools()
+	if rawErr != nil {
+		return nil, fmt.Errorf("mcp provider %q decode raw tools: %w", c.cfg.ID, rawErr)
+	}
+	return c.mergeAndFilterTools(sdkTools, rawTools), nil
 }
 
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]interface{}) (*ToolCallResult, error) {
+	c.operationMu.Lock()
+	defer c.operationMu.Unlock()
+	c.capture.beginCallTool()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, errors.New("tool name is required")
@@ -92,9 +103,15 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 	if err != nil {
 		return nil, fmt.Errorf("mcp provider %q call tool %q: %w", c.cfg.ID, name, err)
 	}
-	converted, err := convertToolCallResult(result)
-	if err != nil {
-		return nil, fmt.Errorf("mcp provider %q decode tool result %q: %w", c.cfg.ID, name, err)
+	converted, rawErr := c.capture.decodeCallResult()
+	if rawErr != nil {
+		return nil, fmt.Errorf("mcp provider %q decode raw tool result %q: %w", c.cfg.ID, name, rawErr)
+	}
+	if converted == nil {
+		converted, err = convertToolCallResult(result)
+		if err != nil {
+			return nil, fmt.Errorf("mcp provider %q decode tool result %q: %w", c.cfg.ID, name, err)
+		}
 	}
 	if converted.StructuredContent == nil {
 		converted.StructuredContent = map[string]interface{}{}
@@ -137,7 +154,7 @@ func (c *Client) newTransport() (mcp.Transport, error) {
 		if len(c.cfg.Env) > 0 {
 			cmd.Env = mergedEnvironment(os.Environ(), c.cfg.Env)
 		}
-		return &mcp.CommandTransport{Command: cmd}, nil
+		return &captureTransport{base: &mcp.CommandTransport{Command: cmd}, capture: c.capture}, nil
 	case "http":
 		endpoint := strings.TrimSpace(c.cfg.Endpoint)
 		if endpoint == "" {
@@ -146,21 +163,45 @@ func (c *Client) newTransport() (mcp.Transport, error) {
 		// Tool calls may be side-effecting. Do not replay POST requests after an
 		// ambiguous transport timeout; higher layers can make an explicit,
 		// policy-aware retry decision.
-		return &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: c.httpClient, MaxRetries: -1}, nil
+		return &captureTransport{base: &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: c.httpClient, MaxRetries: -1}, capture: c.capture}, nil
 	default:
 		return nil, fmt.Errorf("mcp provider %q has unsupported transport %q", c.cfg.ID, c.cfg.Transport)
 	}
 }
 
 func (c *Client) Close() error {
+	c.operationMu.Lock()
+	defer c.operationMu.Unlock()
 	c.sessionMu.Lock()
 	defer c.sessionMu.Unlock()
 	if c.session == nil {
+		c.capture.clear()
 		return nil
 	}
 	err := c.session.Close()
 	c.session = nil
+	c.capture.clear()
 	return err
+}
+
+func (c *Client) mergeAndFilterTools(sdkTools, rawTools []Tool) []Tool {
+	byName := make(map[string][]Tool, len(rawTools))
+	for _, rawTool := range rawTools {
+		byName[rawTool.Name] = append(byName[rawTool.Name], rawTool)
+	}
+	tools := make([]Tool, 0, len(sdkTools))
+	for _, sdkTool := range sdkTools {
+		tool := sdkTool
+		if candidates := byName[sdkTool.Name]; len(candidates) > 0 {
+			tool = candidates[0]
+			byName[sdkTool.Name] = candidates[1:]
+		}
+		tool.Name = c.logicalToolName(tool.Name)
+		if c.toolAllowed(tool.Name) {
+			tools = append(tools, tool)
+		}
+	}
+	return tools
 }
 
 func (c *Client) withProviderTimeout(ctx context.Context) (context.Context, context.CancelFunc) {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localmcp"
+	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localtool"
 )
 
 const (
@@ -176,11 +177,12 @@ func (s *Server) handleJiMengSetupStatus(w http.ResponseWriter, r *http.Request)
 	}
 	if resp.MCPProvider != nil {
 		checkCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		result, err := s.callJiMengMCPTool(checkCtx, "jimeng.check_status", map[string]interface{}{})
+		result, err := s.executeRegisteredMCPTool(checkCtx, jimengProviderID, "jimeng.check_status", map[string]interface{}{})
 		cancel()
 		if err == nil && result != nil {
-			resp.DreaminaAvailable = boolFromMap(result.StructuredContent, "available", "loggedIn")
-			resp.DreaminaVersion = stringFromMap(result.StructuredContent, "version", "dreaminaVersion")
+			structured, _ := result["structuredContent"].(map[string]interface{})
+			resp.DreaminaAvailable = boolFromMap(structured, "available", "loggedIn")
+			resp.DreaminaVersion = stringFromMap(structured, "version", "dreaminaVersion")
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -296,7 +298,7 @@ func (s *Server) handleJiMengLoginHeadless(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	result, err := s.callJiMengMCPTool(r.Context(), "jimeng.login_headless", map[string]interface{}{})
+	result, err := s.executeRegisteredMCPTool(r.Context(), jimengProviderID, "jimeng.login_headless", map[string]interface{}{})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -321,7 +323,7 @@ func (s *Server) handleJiMengCheckLogin(w http.ResponseWriter, r *http.Request) 
 	if req.Poll <= 0 {
 		req.Poll = 30
 	}
-	result, err := s.callJiMengMCPTool(r.Context(), "jimeng.check_login", map[string]interface{}{
+	result, err := s.executeRegisteredMCPTool(r.Context(), jimengProviderID, "jimeng.check_login", map[string]interface{}{
 		"device_code": req.DeviceCode,
 		"poll":        req.Poll,
 	})
@@ -358,21 +360,21 @@ func (s *Server) mcpProviderStatus(ctx context.Context) ([]LocalMCPProviderStatu
 	return statuses, nil
 }
 
-func (s *Server) callJiMengMCPTool(ctx context.Context, toolName string, args map[string]interface{}) (*localmcp.ToolCallResult, error) {
-	providers, err := s.readMCPProviders()
+func (s *Server) executeRegisteredMCPTool(ctx context.Context, providerID, toolName string, args map[string]interface{}) (map[string]interface{}, error) {
+	executor := localtool.NewMCPToolCallExecutor(s.readMCPProviders)
+	result, err := executor.Execute(ctx, localtool.Job{
+		Command:    localtool.CommandLocalMCPToolCall,
+		TimeoutSec: 120,
+		Payload: map[string]interface{}{
+			"providerId": providerID,
+			"toolName":   toolName,
+			"arguments":  args,
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
-	for _, provider := range providers {
-		if provider.ID == jimengProviderID && provider.Enabled {
-			callCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			defer cancel()
-			client := localmcp.NewClient(provider, nil)
-			defer client.Close()
-			return client.CallTool(callCtx, toolName, args)
-		}
-	}
-	return nil, errors.New("JiMeng MCP provider is not registered")
+	return result.Output, nil
 }
 
 func (s *Server) readMCPProviders() ([]localmcp.ProviderConfig, error) {

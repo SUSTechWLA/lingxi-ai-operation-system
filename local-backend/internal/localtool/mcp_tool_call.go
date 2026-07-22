@@ -81,6 +81,8 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 		"content":           callResult.Content,
 		"structuredContent": callResult.StructuredContent,
 		"isError":           callResult.IsError,
+		"meta":              callResult.Meta,
+		"raw":               callResult.Raw,
 		"error":             mcpErrorText(callResult),
 	}}, nil
 }
@@ -186,6 +188,8 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 		result["content"] = callResult.Content
 		result["structuredContent"] = callResult.StructuredContent
 		result["isError"] = callResult.IsError
+		result["meta"] = callResult.Meta
+		result["raw"] = callResult.Raw
 		if submitID := mcpStringFromMap(callResult.StructuredContent, "submit_id", "submitId", "job_id", "jobId", "task_id", "taskId"); submitID != "" {
 			result["submitId"] = submitID
 			result["providerJobId"] = submitID
@@ -204,6 +208,8 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 					"content":           callResult.Content,
 					"structuredContent": callResult.StructuredContent,
 					"isError":           callResult.IsError,
+					"meta":              callResult.Meta,
+					"raw":               callResult.Raw,
 					"error":             errorText,
 				}
 				remaining = append(remaining, deferred)
@@ -221,6 +227,8 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 				"content":           callResult.Content,
 				"structuredContent": callResult.StructuredContent,
 				"isError":           callResult.IsError,
+				"meta":              callResult.Meta,
+				"raw":               callResult.Raw,
 				"error":             errorText,
 			}
 			remaining = append(remaining, failed)
@@ -260,6 +268,8 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 						"content":           callResult.Content,
 						"structuredContent": structured,
 						"isError":           false,
+						"meta":              callResult.Meta,
+						"raw":               callResult.Raw,
 						"error":             errorText,
 					}
 					remaining = append(remaining, failed)
@@ -281,6 +291,8 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 					"content":           callResult.Content,
 					"structuredContent": structured,
 					"isError":           false,
+					"meta":              callResult.Meta,
+					"raw":               callResult.Raw,
 				}
 				remaining = append(remaining, pending)
 				packages = append(packages, e.shotAssetPackageFromMCPResult(providerID, request, structured, media))

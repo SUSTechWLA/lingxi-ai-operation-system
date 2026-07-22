@@ -1,54 +1,49 @@
 package localagent
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func newMCPProtocolTestServer(t *testing.T, toolHandler http.Handler) *httptest.Server {
+var defaultAgentMCPTestTools = []string{
+	"jimeng.check_status",
+	"jimeng.generate_video",
+	"jimeng.login_headless",
+	"jimeng.check_login",
+}
+
+type agentMCPBusinessFixture func(toolName string, arguments map[string]interface{}) map[string]interface{}
+
+func newMCPProtocolTestServer(t *testing.T, fixture agentMCPBusinessFixture, toolNames ...string) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		if r.Method == http.MethodDelete {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("read MCP request: %v", err)
-		}
-		var request map[string]interface{}
-		if err := json.Unmarshal(body, &request); err != nil {
-			t.Fatalf("decode MCP request: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		switch request["method"] {
-		case "initialize":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"jsonrpc": "2.0",
-				"id":      request["id"],
-				"result": map[string]interface{}{
-					"protocolVersion": "2025-11-25",
-					"capabilities":    map[string]interface{}{"tools": map[string]interface{}{}},
-					"serverInfo":      map[string]interface{}{"name": "agent-test", "version": "1.0.0"},
-				},
-			})
-		case "notifications/initialized":
-			w.WriteHeader(http.StatusAccepted)
-		default:
-			if _, hasID := request["id"]; !hasID {
-				w.WriteHeader(http.StatusAccepted)
-				return
+	if len(toolNames) == 0 {
+		toolNames = defaultAgentMCPTestTools
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "localagent-test", Version: "1.0.0"}, nil)
+	for _, toolName := range toolNames {
+		toolName := toolName
+		server.AddTool(&mcp.Tool{Name: toolName, InputSchema: map[string]any{"type": "object"}}, func(_ context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			arguments := map[string]interface{}{}
+			if len(request.Params.Arguments) > 0 {
+				if err := json.Unmarshal(request.Params.Arguments, &arguments); err != nil {
+					return nil, err
+				}
 			}
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			toolHandler.ServeHTTP(w, r)
-		}
-	}))
+			payload, err := json.Marshal(fixture(request.Params.Name, arguments))
+			if err != nil {
+				return nil, err
+			}
+			var result mcp.CallToolResult
+			if err := json.Unmarshal(payload, &result); err != nil {
+				return nil, err
+			}
+			return &result, nil
+		})
+	}
+	return httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil))
 }

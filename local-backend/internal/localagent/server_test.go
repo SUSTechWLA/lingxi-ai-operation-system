@@ -469,24 +469,10 @@ func TestReadMCPProvidersAddsBundledIPAvatarToExistingConfig(t *testing.T) {
 
 func TestLocalMCPProviderSettingsSaveAndStatus(t *testing.T) {
 	root := t.TempDir()
-	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode mcp request: %v", err)
-		}
-		if req["method"] != "tools/list" {
-			t.Fatalf("method = %v, want tools/list", req["method"])
-		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"tools": []map[string]interface{}{
-					{"name": "jimeng.generate_video", "description": "generate video"},
-				},
-			},
-		})
-	}))
+	mcp := newMCPProtocolTestServer(t, func(toolName string, _ map[string]interface{}) map[string]interface{} {
+		t.Fatalf("unexpected tool call during discovery: %s", toolName)
+		return nil
+	}, "jimeng.generate_video")
 	defer mcp.Close()
 
 	server := NewServer(Config{DataDir: root})
@@ -579,36 +565,17 @@ func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
 func TestJiMengSetupStatusReadsDreaminaStatusThroughMCP(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeAgentCommandRunner{}
-	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode mcp request: %v", err)
+	mcp := newMCPProtocolTestServer(t, func(toolName string, _ map[string]interface{}) map[string]interface{} {
+		if toolName != "jimeng.check_status" {
+			t.Fatalf("tool = %v, want jimeng.check_status", toolName)
 		}
-		resp := map[string]interface{}{"jsonrpc": "2.0", "id": req["id"]}
-		switch req["method"] {
-		case "tools/list":
-			resp["result"] = map[string]interface{}{
-				"tools": []map[string]interface{}{
-					{"name": "jimeng.check_status", "description": "check status"},
-					{"name": "jimeng.generate_video", "description": "generate video"},
-				},
-			}
-		case "tools/call":
-			params := req["params"].(map[string]interface{})
-			if params["name"] != "jimeng.check_status" {
-				t.Fatalf("tool = %v, want jimeng.check_status", params["name"])
-			}
-			resp["result"] = map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"available": true,
-					"version":   "dreamina-from-mcp",
-				},
-			}
-		default:
-			t.Fatalf("unexpected mcp method %v", req["method"])
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"available": true,
+				"version":   "dreamina-from-mcp",
+			},
 		}
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
+	}, "jimeng.check_status", "jimeng.generate_video")
 	defer mcp.Close()
 
 	server := NewServer(Config{DataDir: root, CommandRunner: runner})
@@ -747,27 +714,18 @@ func localMCPProviderByID(providers []localmcp.ProviderConfig, id string) (local
 
 func TestJiMengLoginHeadlessCallsRegisteredMCPProvider(t *testing.T) {
 	root := t.TempDir()
-	mcp := newMCPProtocolTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode mcp request: %v", err)
+	mcp := newMCPProtocolTestServer(t, func(toolName string, _ map[string]interface{}) map[string]interface{} {
+		if toolName != "jimeng.login_headless" {
+			t.Fatalf("tool = %v, want jimeng.login_headless", toolName)
 		}
-		params := req["params"].(map[string]interface{})
-		if params["name"] != "jimeng.login_headless" {
-			t.Fatalf("tool = %v, want jimeng.login_headless", params["name"])
-		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"verification_uri": "https://example.com/device",
-					"user_code":        "ABCD-EFGH",
-					"device_code":      "device-1",
-				},
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"verification_uri": "https://example.com/device",
+				"user_code":        "ABCD-EFGH",
+				"device_code":      "device-1",
 			},
-		})
-	}))
+		}
+	}, "jimeng.login_headless")
 	defer mcp.Close()
 
 	server := NewServer(Config{DataDir: root})
@@ -792,6 +750,9 @@ func TestJiMengLoginHeadlessCallsRegisteredMCPProvider(t *testing.T) {
 	structured := result["structuredContent"].(map[string]interface{})
 	if structured["user_code"] != "ABCD-EFGH" {
 		t.Fatalf("user_code = %#v", structured["user_code"])
+	}
+	if result["providerId"] != "jimeng" || result["toolName"] != "jimeng.login_headless" {
+		t.Fatalf("JiMeng endpoint did not use generic MCP output: %#v", result)
 	}
 }
 
