@@ -1,8 +1,20 @@
 package tool
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestMCPProviderToolsConvertToToolManifestWithPrefix(t *testing.T) {
+	inputSchema := nestedLLMToolTestSchema()
+	outputSchema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"videoUrl": map[string]interface{}{"type": "string", "format": "uri"},
+		},
+		"required":             []interface{}{"videoUrl"},
+		"additionalProperties": false,
+	}
 	manifests := ManifestsFromMCPTools(MCPProviderConfig{
 		ID:         "jimeng",
 		Label:      "JiMeng MCP",
@@ -12,21 +24,10 @@ func TestMCPProviderToolsConvertToToolManifestWithPrefix(t *testing.T) {
 		Timeout:    120,
 	}, []MCPTool{
 		{
-			Name:        "generate_video",
-			Description: "Generate video",
-			InputSchema: map[string]interface{}{
-				"type":     "object",
-				"required": []interface{}{"prompt"},
-				"properties": map[string]interface{}{
-					"prompt": map[string]interface{}{"type": "string", "description": "Provider-ready prompt"},
-				},
-			},
-			OutputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"videoUrl": map[string]interface{}{"type": "string"},
-				},
-			},
+			Name:         "generate_video",
+			Description:  "Generate video",
+			InputSchema:  inputSchema,
+			OutputSchema: outputSchema,
 		},
 	})
 
@@ -46,7 +47,7 @@ func TestMCPProviderToolsConvertToToolManifestWithPrefix(t *testing.T) {
 	if m.LocalCommand != "LOCAL_MCP_TOOL_CALL" {
 		t.Fatalf("localCommand = %q, want LOCAL_MCP_TOOL_CALL", m.LocalCommand)
 	}
-	if m.Parameters["prompt"].Type != "string" || !m.Parameters["prompt"].Required {
+	if m.Parameters["scenes"].Type != "array" || !m.Parameters["scenes"].Required {
 		t.Fatalf("input schema should convert to ParamDef: %#v", m.Parameters)
 	}
 	if m.Output["videoUrl"].Type != "string" {
@@ -54,6 +55,12 @@ func TestMCPProviderToolsConvertToToolManifestWithPrefix(t *testing.T) {
 	}
 	if m.ProviderCapabilities["inputSchema"] == nil || m.ProviderCapabilities["outputSchema"] == nil {
 		t.Fatalf("raw MCP schemas should be preserved in providerCapabilities: %#v", m.ProviderCapabilities)
+	}
+	if !reflect.DeepEqual(m.InputSchema, inputSchema) || !reflect.DeepEqual(m.OutputSchema, outputSchema) {
+		t.Fatalf("canonical MCP schemas were not preserved: input=%#v output=%#v", m.InputSchema, m.OutputSchema)
+	}
+	if !reflect.DeepEqual(m.ProviderCapabilities["inputSchema"], inputSchema) || !reflect.DeepEqual(m.ProviderCapabilities["outputSchema"], outputSchema) {
+		t.Fatalf("provider capability schemas were not preserved: %#v", m.ProviderCapabilities)
 	}
 }
 

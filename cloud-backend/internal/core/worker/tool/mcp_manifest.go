@@ -56,6 +56,8 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 			Boundary:           BoundaryMCPProvider,
 			Transport:          &ToolTransport{Type: transport, Endpoint: provider.Endpoint},
 			Timeout:            provider.Timeout,
+			InputSchema:        remoteTool.InputSchema,
+			OutputSchema:       remoteTool.OutputSchema,
 			Parameters:         jsonSchemaToParamDefs(remoteTool.InputSchema),
 			Output:             jsonSchemaToParamDefs(remoteTool.OutputSchema),
 			Capabilities:       capabilities,
