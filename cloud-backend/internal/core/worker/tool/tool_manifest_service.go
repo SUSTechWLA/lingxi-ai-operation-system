@@ -285,14 +285,14 @@ func manifestFromRecord(record *model.ToolManifestRecord) (*ToolManifest, error)
 		return nil, err
 	}
 	if len(inputSchema) == 0 && len(parameters) > 0 {
-		inputSchema = legacyProjectionToSchema(parameters, true)
+		inputSchema = legacyProjectionToSchema(parameters)
 	}
 	outputSchema, err := unmarshalCanonicalSchema(record.OutputSchema, "output_schema")
 	if err != nil {
 		return nil, err
 	}
 	if len(outputSchema) == 0 && len(output) > 0 {
-		outputSchema = legacyProjectionToSchema(output, false)
+		outputSchema = legacyProjectionToSchema(output)
 	}
 
 	manifest := &ToolManifest{
@@ -403,7 +403,7 @@ func unmarshalRecordJSON(raw json.RawMessage, target interface{}, field string) 
 	return nil
 }
 
-func legacyProjectionToSchema(projection map[string]ParamDef, includeRequired bool) map[string]interface{} {
+func legacyProjectionToSchema(projection map[string]ParamDef) map[string]interface{} {
 	properties := make(map[string]interface{}, len(projection))
 	requiredNames := make([]string, 0, len(projection))
 	for name, parameter := range projection {
@@ -425,7 +425,7 @@ func legacyProjectionToSchema(projection map[string]ParamDef, includeRequired bo
 			property["enum"] = values
 		}
 		properties[name] = property
-		if includeRequired && parameter.Required {
+		if parameter.Required {
 			requiredNames = append(requiredNames, name)
 		}
 	}
@@ -433,6 +433,7 @@ func legacyProjectionToSchema(projection map[string]ParamDef, includeRequired bo
 	schema := map[string]interface{}{
 		"type":                 "object",
 		"properties":           properties,
+		"required":             []interface{}{},
 		"additionalProperties": false,
 	}
 	if len(requiredNames) > 0 {

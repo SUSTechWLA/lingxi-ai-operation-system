@@ -122,8 +122,47 @@ func TestManifestFromRecordDerivesCanonicalSchemasForLegacyRows(t *testing.T) {
 	if restored.OutputSchema["type"] != "object" || restored.OutputSchema["additionalProperties"] != false {
 		t.Fatalf("legacy output was not converted to a closed object schema: %#v", restored.OutputSchema)
 	}
+	outputProperties, ok := restored.OutputSchema["properties"].(map[string]interface{})
+	if !ok || outputProperties["url"].(map[string]interface{})["type"] != "string" ||
+		outputProperties["url"].(map[string]interface{})["description"] != "Generated asset URL" {
+		t.Fatalf("legacy output properties were not preserved: %#v", restored.OutputSchema["properties"])
+	}
+	outputRequired, ok := restored.OutputSchema["required"].([]interface{})
+	if !ok || len(outputRequired) != 0 {
+		t.Fatalf("legacy output without required fields must expose an empty required array: %#v", restored.OutputSchema["required"])
+	}
 	if !reflect.DeepEqual(restored.Parameters["prompt"].Enum, []string{"short", "long"}) || restored.Parameters["seed"].Default == nil {
 		t.Fatalf("legacy parameter projection was not retained: %#v", restored.Parameters)
+	}
+}
+
+func TestManifestFromRecordPromotesRequiredLegacyOutputFields(t *testing.T) {
+	output := json.RawMessage(`{
+		"assetUrl":{"type":"string","description":"Generated asset URL","required":true},
+		"duration":{"type":"number","description":"Duration in seconds","required":false}
+	}`)
+
+	restored, err := manifestFromRecord(&model.ToolManifestRecord{
+		Name:         "legacy_required_output",
+		Description:  "Legacy output required flags",
+		Type:         "builtin",
+		OutputSchema: json.RawMessage(`{}`),
+		Output:       output,
+	})
+	if err != nil {
+		t.Fatalf("restore legacy manifest: %v", err)
+	}
+
+	if restored.OutputSchema["type"] != "object" || restored.OutputSchema["additionalProperties"] != false {
+		t.Fatalf("legacy output was not converted to a closed object schema: %#v", restored.OutputSchema)
+	}
+	properties, ok := restored.OutputSchema["properties"].(map[string]interface{})
+	if !ok || len(properties) != 2 || properties["duration"].(map[string]interface{})["type"] != "number" {
+		t.Fatalf("legacy output properties were not preserved: %#v", restored.OutputSchema["properties"])
+	}
+	required, ok := restored.OutputSchema["required"].([]interface{})
+	if !ok || !reflect.DeepEqual(required, []interface{}{"assetUrl"}) {
+		t.Fatalf("legacy output required flags were not promoted: %#v", restored.OutputSchema["required"])
 	}
 }
 
