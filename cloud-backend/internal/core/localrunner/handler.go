@@ -354,12 +354,20 @@ func (h *Handler) validateRunnerFromRequest(c *gin.Context) error {
 func (h *Handler) validateJobFromRequest(c *gin.Context) error {
 	jobID := c.Param("jobId")
 	userID, _ := auth.UserIDFromContext(c.Request.Context())
+	deviceID, _ := auth.DeviceIDFromContext(c.Request.Context())
 	runnerID := c.GetHeader("X-Runner-ID")
 	if runnerID == "" {
 		runnerID = c.GetHeader("X-Runner-Id")
 	}
 	if runnerID == "" {
 		return fmt.Errorf("X-Runner-ID header required")
+	}
+	sessionID := c.GetHeader("X-Runner-Session-ID")
+	if sessionID == "" {
+		sessionID = c.GetHeader("X-Runner-Session-Id")
+	}
+	if err := h.service.ValidateRunnerAccess(c.Request.Context(), userID, deviceID, runnerID, sessionID); err != nil {
+		return err
 	}
 	return h.service.ValidateJobAccess(c.Request.Context(), userID, runnerID, jobID)
 }

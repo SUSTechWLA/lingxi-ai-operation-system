@@ -260,11 +260,17 @@ func (c *Client) transport() string {
 }
 
 func (c *Client) remoteToolName(name string) string {
+	return RemoteToolName(c.cfg, name)
+}
+
+// RemoteToolName resolves the server-side name for a logical, user-visible
+// tool name without exposing provider transport configuration.
+func RemoteToolName(cfg ProviderConfig, name string) string {
 	name = strings.TrimSpace(name)
-	if mapped, ok := c.cfg.ToolNameMap[name]; ok && strings.TrimSpace(mapped) != "" {
+	if mapped, ok := cfg.ToolNameMap[name]; ok && strings.TrimSpace(mapped) != "" {
 		return strings.TrimSpace(mapped)
 	}
-	prefix := strings.TrimSpace(c.cfg.ToolPrefix)
+	prefix := strings.TrimSpace(cfg.ToolPrefix)
 	if prefix != "" && strings.HasPrefix(name, prefix) {
 		return strings.TrimPrefix(name, prefix)
 	}
@@ -286,14 +292,21 @@ func (c *Client) logicalToolName(name string) string {
 }
 
 func (c *Client) toolAllowed(logicalName string) bool {
+	return ToolAllowed(c.cfg, logicalName)
+}
+
+// ToolAllowed applies the configured enabled/disabled allowlists to a logical
+// tool name. It is shared by execution and safe catalog discovery.
+func ToolAllowed(cfg ProviderConfig, logicalName string) bool {
 	logicalName = strings.TrimSpace(logicalName)
 	if logicalName == "" {
 		return false
 	}
-	if len(c.cfg.EnabledTools) > 0 && !c.toolNameInList(logicalName, c.cfg.EnabledTools) {
+	client := Client{cfg: cfg}
+	if len(cfg.EnabledTools) > 0 && !client.toolNameInList(logicalName, cfg.EnabledTools) {
 		return false
 	}
-	return !c.toolNameInList(logicalName, c.cfg.DisabledTools)
+	return !client.toolNameInList(logicalName, cfg.DisabledTools)
 }
 
 func (c *Client) toolNameInList(logicalName string, list []string) bool {

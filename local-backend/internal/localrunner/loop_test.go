@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +70,67 @@ func TestLoopRegistersOnlyExecutableCapabilities(t *testing.T) {
 	}
 }
 
+func TestLoopRegistersMCPToolCatalogAndHeartbeatsOnlyRevisionChanges(t *testing.T) {
+	client := &fakeClient{
+		register: RegisterRunnerResponse{RunnerID: "runner_001", SessionID: "session_001", HeartbeatIntervalSec: 15, PollIntervalSec: 3},
+	}
+	reg := localtool.NewRegistry()
+	reg.Register(localtool.ExecutorFunc(func(context.Context, localtool.Job) (*localtool.Result, error) {
+		return &localtool.Result{Output: map[string]interface{}{}}, nil
+	}), localtool.CommandLocalMCPToolCall)
+	source := &fakeCatalogSource{catalog: MCPToolCatalog{
+		Revision: strings.Repeat("a", 64),
+		Tools: []MCPToolAdvertisement{{
+			ProviderID: "studio", LogicalToolName: "studio.render", RemoteToolName: "render",
+			InputSchema: map[string]interface{}{"type": "object"},
+		}},
+	}}
+	loop := NewLoop(client, reg, LoopOptions{
+		PollInterval: time.Millisecond, MCPToolCatalogSource: source, MCPCatalogRefreshInterval: time.Nanosecond,
+	})
+
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	mcpCapability := findCapability(client.registerReq.Capabilities, localtool.CommandLocalMCPToolCall)
+	if mcpCapability == nil || mcpCapability.CatalogRevision != source.catalog.Revision || len(mcpCapability.MCPTools) != 1 {
+		t.Fatalf("register catalog missing: %#v", client.registerReq.Capabilities)
+	}
+	if len(client.heartbeats) != 1 || client.heartbeats[0].Capabilities != nil {
+		t.Fatalf("unchanged revision should not resend capabilities: %#v", client.heartbeats)
+	}
+
+	source.catalog = MCPToolCatalog{Revision: strings.Repeat("b", 64), Tools: []MCPToolAdvertisement{}}
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(client.heartbeats) != 2 || client.heartbeats[1].Capabilities == nil {
+		t.Fatalf("changed revision must replace capabilities: %#v", client.heartbeats)
+	}
+	cleared := findCapability(*client.heartbeats[1].Capabilities, localtool.CommandLocalMCPToolCall)
+	if cleared == nil || cleared.CatalogRevision != source.catalog.Revision || len(cleared.MCPTools) != 0 {
+		t.Fatalf("empty catalog should explicitly clear advertised tools: %#v", client.heartbeats[1])
+	}
+}
+
+func findCapability(capabilities []Capability, command string) *Capability {
+	for index := range capabilities {
+		if capabilities[index].Command == command {
+			return &capabilities[index]
+		}
+	}
+	return nil
+}
+
+type fakeCatalogSource struct {
+	catalog     MCPToolCatalog
+	diagnostics []MCPProviderDiagnostic
+}
+
+func (f *fakeCatalogSource) Discover(context.Context) (MCPToolCatalog, []MCPProviderDiagnostic) {
+	return f.catalog, f.diagnostics
+}
+
 func TestLoopFailsUnsupportedCommand(t *testing.T) {
 	client := &fakeClient{
 		register: RegisterRunnerResponse{RunnerID: "runner_001", SessionID: "session_001", HeartbeatIntervalSec: 15, PollIntervalSec: 3},
@@ -127,6 +189,7 @@ type fakeClient struct {
 	register       RegisterRunnerResponse
 	claim          *localtool.Job
 	registerReq    RegisterRunnerRequest
+	heartbeats     []HeartbeatRequest
 	completedJobID string
 	completed      CompleteJobRequest
 	failedJobID    string
@@ -140,7 +203,8 @@ func (f *fakeClient) Register(_ context.Context, req RegisterRunnerRequest) (*Re
 	return &f.register, nil
 }
 
-func (f *fakeClient) Heartbeat(context.Context, string, HeartbeatRequest) error {
+func (f *fakeClient) Heartbeat(_ context.Context, _ string, req HeartbeatRequest) error {
+	f.heartbeats = append(f.heartbeats, req)
 	return nil
 }
 

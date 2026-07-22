@@ -49,6 +49,7 @@ func TestServiceDispatchClaimCompleteAndFailJobPostgres(t *testing.T) {
 	})
 
 	firstJob, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
+		UserID:         "test-user-localrunner-service",
 		ProjectID:      projectPrefix + "-complete",
 		TaskID:         projectPrefix + "-task",
 		NodeID:         projectPrefix + "-node",
@@ -79,6 +80,7 @@ func TestServiceDispatchClaimCompleteAndFailJobPostgres(t *testing.T) {
 	}
 
 	retried, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
+		UserID:         "test-user-localrunner-service",
 		ProjectID:      projectPrefix + "-complete",
 		TaskID:         projectPrefix + "-task",
 		NodeID:         projectPrefix + "-node",
@@ -97,6 +99,7 @@ func TestServiceDispatchClaimCompleteAndFailJobPostgres(t *testing.T) {
 	}
 
 	duplicate, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
+		UserID:         "test-user-localrunner-service",
 		ProjectID:      projectPrefix + "-complete",
 		TaskID:         projectPrefix + "-task",
 		NodeID:         projectPrefix + "-node",
@@ -121,6 +124,7 @@ func TestServiceDispatchClaimCompleteAndFailJobPostgres(t *testing.T) {
 	}
 
 	secondJob, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
+		UserID:    "test-user-localrunner-service",
 		ProjectID: projectPrefix + "-fail",
 		Command:   CommandHyperFramesLint,
 		Payload:   map[string]interface{}{"outputName": "failed.mp4"},
@@ -141,6 +145,159 @@ func TestServiceDispatchClaimCompleteAndFailJobPostgres(t *testing.T) {
 	}
 	if failed.Status != JobFailed || failed.ErrorMessage != "render failed" || failed.Retryable {
 		t.Fatalf("unexpected failed job: %#v", failed)
+	}
+}
+
+func TestServiceScopesJobsAndMCPCatalogsByUserTargetAndRevisionPostgres(t *testing.T) {
+	dsn := os.Getenv("LOCALRUNNER_TEST_DATABASE_URL")
+	if strings.TrimSpace(dsn) == "" {
+		t.Skip("set LOCALRUNNER_TEST_DATABASE_URL to run postgres integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	service := NewService(pool)
+	prefix := "lr-scope-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	userA, userB := prefix+"-user-a", prefix+"-user-b"
+
+	tools := []MCPToolAdvertisement{{
+		ProviderID: "studio", LogicalToolName: "studio.render", RemoteToolName: "render",
+		InputSchema: map[string]interface{}{"type": "object"},
+	}}
+	revision := MCPToolCatalogRevision(tools)
+	capabilities := []RunnerCapability{
+		{ToolName: "lint", Command: CommandHyperFramesLint, Available: true},
+		{ToolName: "mcp", Command: CommandLocalMCPToolCall, Available: true, CatalogRevision: revision, MCPTools: tools},
+	}
+	register := func(userID, deviceID string) *RegisterRunnerResponse {
+		runner, registerErr := service.RegisterRunner(ctx, RegisterRunnerRequest{
+			DeviceID: deviceID, UserID: userID, RunnerVersion: "test", WorkspaceRoot: "local://test", Capabilities: capabilities,
+		})
+		if registerErr != nil {
+			t.Fatalf("register runner %s/%s: %v", userID, deviceID, registerErr)
+		}
+		return runner
+	}
+	runnerA1 := register(userA, prefix+"-device-a1")
+	runnerA2 := register(userA, prefix+"-device-a2")
+	runnerB := register(userB, prefix+"-device-b")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM local_jobs WHERE project_id LIKE $1`, prefix+"%")
+		_, _ = pool.Exec(context.Background(), `DELETE FROM local_runners WHERE id=ANY($1)`, []string{runnerA1.RunnerID, runnerA2.RunnerID, runnerB.RunnerID})
+	})
+
+	nonMCP, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
+		UserID: userA, ProjectID: prefix + "-user-scope", Command: CommandHyperFramesLint,
+	})
+	if err != nil {
+		t.Fatalf("dispatch user-scoped job: %v", err)
+	}
+	if claimed, err := service.ClaimJob(ctx, runnerB.RunnerID); err != nil || claimed != nil {
+		t.Fatalf("user B must not claim user A job: job=%#v err=%v", claimed, err)
+	}
+	claimed, err := service.ClaimJob(ctx, runnerA2.RunnerID)
+	if err != nil || claimed == nil || claimed.ID != nonMCP.ID {
+		t.Fatalf("user A runner should claim user A job: job=%#v err=%v", claimed, err)
+	}
+	if _, err := service.CompleteJob(ctx, nonMCP.ID, CompleteJobRequest{}); err != nil {
+		t.Fatalf("complete user-scoped job: %v", err)
+	}
+
+	targeted, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
+		UserID: userA, TargetRunnerID: runnerA1.RunnerID, ProjectID: prefix + "-target-scope", Command: CommandHyperFramesLint,
+	})
+	if err != nil {
+		t.Fatalf("dispatch target-scoped job: %v", err)
+	}
+	if claimed, err := service.ClaimJob(ctx, runnerA2.RunnerID); err != nil || claimed != nil {
+		t.Fatalf("sibling device must not claim targeted job: job=%#v err=%v", claimed, err)
+	}
+	claimed, err = service.ClaimJob(ctx, runnerA1.RunnerID)
+	if err != nil || claimed == nil || claimed.ID != targeted.ID {
+		t.Fatalf("target runner should claim job: job=%#v err=%v", claimed, err)
+	}
+	if _, err := service.CompleteJob(ctx, targeted.ID, CompleteJobRequest{}); err != nil {
+		t.Fatalf("complete targeted job: %v", err)
+	}
+	if _, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
+		UserID: userA, TargetRunnerID: runnerB.RunnerID, ProjectID: prefix + "-foreign-target", Command: CommandHyperFramesLint,
+	}); err == nil {
+		t.Fatal("dispatch must reject a target runner owned by another user")
+	}
+
+	mcpRequest := DispatchLocalJobRequest{
+		UserID: userA, TargetRunnerID: runnerA1.RunnerID, CatalogRevision: revision,
+		MCPProviderID: "studio", MCPLogicalToolName: "studio.render", MCPRemoteToolName: "render",
+		ProjectID: prefix + "-mcp", Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{"arguments": map[string]interface{}{"shot": "s1"}},
+	}
+	stale := mcpRequest
+	stale.CatalogRevision = strings.Repeat("0", 64)
+	if _, err := service.DispatchLocalJob(ctx, stale); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("stale revision must be rejected, got %v", err)
+	}
+	unadvertised := mcpRequest
+	unadvertised.MCPRemoteToolName = "delete"
+	if _, err := service.DispatchLocalJob(ctx, unadvertised); err == nil || !strings.Contains(err.Error(), "does not advertise") {
+		t.Fatalf("unadvertised tool must be rejected, got %v", err)
+	}
+	mcpJob, err := service.DispatchLocalJob(ctx, mcpRequest)
+	if err != nil {
+		t.Fatalf("dispatch valid MCP job: %v", err)
+	}
+	if claimed, err := service.ClaimJob(ctx, runnerA2.RunnerID); err != nil || claimed != nil {
+		t.Fatalf("non-target sibling must not claim MCP job: job=%#v err=%v", claimed, err)
+	}
+	claimed, err = service.ClaimJob(ctx, runnerA1.RunnerID)
+	if err != nil || claimed == nil || claimed.ID != mcpJob.ID || claimed.MCPRemoteToolName != "render" {
+		t.Fatalf("bound target must claim MCP job: job=%#v err=%v", claimed, err)
+	}
+
+	if err := service.ValidateJobAccess(ctx, userB, runnerA1.RunnerID, mcpJob.ID); err == nil {
+		t.Fatal("user B must not access user A job")
+	}
+	if err := service.ValidateJobAccess(ctx, userA, runnerA2.RunnerID, mcpJob.ID); err == nil {
+		t.Fatal("sibling runner must not mutate claimed target job")
+	}
+
+	before, err := service.GetOnlineRunnerMCPToolCatalog(ctx, userA, prefix+"-device-a1", runnerA1.RunnerID)
+	if err != nil || before == nil || before.Revision != revision {
+		t.Fatalf("read initial catalog: catalog=%#v err=%v", before, err)
+	}
+	if err := service.Heartbeat(ctx, runnerA1.RunnerID, HeartbeatRequest{Status: "online"}); err != nil {
+		t.Fatalf("nil heartbeat: %v", err)
+	}
+	afterNil, err := service.GetOnlineRunnerMCPToolCatalog(ctx, userA, prefix+"-device-a1", runnerA1.RunnerID)
+	if err != nil || afterNil == nil || afterNil.Revision != revision {
+		t.Fatalf("nil heartbeat must preserve catalog: catalog=%#v err=%v", afterNil, err)
+	}
+	updatedTools := []MCPToolAdvertisement{{
+		ProviderID: "studio", LogicalToolName: "studio.inspect", RemoteToolName: "inspect",
+		InputSchema: map[string]interface{}{"type": "object"},
+	}}
+	updatedRevision := MCPToolCatalogRevision(updatedTools)
+	updatedCapabilities := []RunnerCapability{
+		{ToolName: "lint", Command: CommandHyperFramesLint, Available: true},
+		{ToolName: "mcp", Command: CommandLocalMCPToolCall, Available: true, CatalogRevision: updatedRevision, MCPTools: updatedTools},
+	}
+	if err := service.Heartbeat(ctx, runnerA1.RunnerID, HeartbeatRequest{Status: "online", Capabilities: &updatedCapabilities}); err != nil {
+		t.Fatalf("update heartbeat: %v", err)
+	}
+	afterUpdate, err := service.GetOnlineRunnerMCPToolCatalog(ctx, userA, prefix+"-device-a1", runnerA1.RunnerID)
+	if err != nil || afterUpdate == nil || afterUpdate.Revision != updatedRevision || afterUpdate.Tools[0].RemoteToolName != "inspect" {
+		t.Fatalf("non-empty heartbeat must replace catalog: catalog=%#v err=%v", afterUpdate, err)
+	}
+	empty := []RunnerCapability{}
+	if err := service.Heartbeat(ctx, runnerA1.RunnerID, HeartbeatRequest{Status: "online", Capabilities: &empty}); err != nil {
+		t.Fatalf("clear heartbeat: %v", err)
+	}
+	afterClear, err := service.GetOnlineRunnerMCPToolCatalog(ctx, userA, prefix+"-device-a1", runnerA1.RunnerID)
+	if err != nil || afterClear != nil {
+		t.Fatalf("empty heartbeat must clear catalog: catalog=%#v err=%v", afterClear, err)
 	}
 }
 

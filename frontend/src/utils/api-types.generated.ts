@@ -215,7 +215,7 @@ export interface CandidateRestoreRequest {
 /**  */
 // ClaimJobResponse
 export interface ClaimJobResponse {
-  job: { artifactPolicy?: { location: string; syncFileToCloud: boolean; syncMetadataToCloud: boolean }; attempt?: number; command: string; createdAt?: string; currentStep?: string; diagnostics?: Record<string, unknown>; error?: Record<string, unknown>; errorMessage?: string; idempotencyKey?: string; jobId: string; leaseExpiresAt?: string | null; message?: string; nodeId?: string; output?: Record<string, unknown>; payload: Record<string, unknown>; progress?: number; projectId: string; retryable?: boolean; runnerId?: string; status?: string; taskId?: string; timeoutSec?: number; toolName?: string; updatedAt?: string } | null;
+  job: { artifactPolicy?: { location: string; syncFileToCloud: boolean; syncMetadataToCloud: boolean }; attempt?: number; catalogRevision?: string; command: string; createdAt?: string; currentStep?: string; diagnostics?: Record<string, unknown>; error?: Record<string, unknown>; errorMessage?: string; idempotencyKey?: string; jobId: string; leaseExpiresAt?: string | null; mcpLogicalToolName?: string; mcpProviderId?: string; mcpRemoteToolName?: string; message?: string; nodeId?: string; output?: Record<string, unknown>; payload: Record<string, unknown>; progress?: number; projectId: string; retryable?: boolean; runnerId?: string; status?: string; targetRunnerId?: string; taskId?: string; timeoutSec?: number; toolName?: string; updatedAt?: string; userId?: string } | null;
 }
 
 /**  */
@@ -372,6 +372,7 @@ export interface HealthResponse {
 /**  */
 // HeartbeatRequest
 export interface HeartbeatRequest {
+  capabilities?: ({ available: boolean; catalogRevision?: string; command: string; mcpTools?: ({ annotations?: { destructiveHint?: boolean | null; idempotentHint?: boolean | null; openWorldHint?: boolean | null; readOnlyHint?: boolean | null; title?: string }; approvalMode?: string; description?: string; inputSchema: Record<string, unknown>; logicalToolName: string; outputSchema?: Record<string, unknown>; providerId: string; remoteToolName: string; timeoutSec?: number })[]; toolName: string; version?: string })[] | null;
   cpuLoad: number;
   diskFreeMb: number;
   lastError: string | null;
@@ -564,7 +565,7 @@ export interface RegisterProjectMaterialRequest {
 /**  */
 // RegisterRunnerRequest
 export interface RegisterRunnerRequest {
-  capabilities: { available: boolean; command: string; toolName: string; version?: string }[];
+  capabilities: ({ available: boolean; catalogRevision?: string; command: string; mcpTools?: ({ annotations?: { destructiveHint?: boolean | null; idempotentHint?: boolean | null; openWorldHint?: boolean | null; readOnlyHint?: boolean | null; title?: string }; approvalMode?: string; description?: string; inputSchema: Record<string, unknown>; logicalToolName: string; outputSchema?: Record<string, unknown>; providerId: string; remoteToolName: string; timeoutSec?: number })[]; toolName: string; version?: string })[];
   deviceId: string;
   platform: { arch?: string; hostname?: string; os?: string };
   runnerVersion: string;

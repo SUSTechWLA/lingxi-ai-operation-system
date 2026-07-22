@@ -80,6 +80,32 @@ func TestHandlerRegisterRunnerUsesAuthenticatedUserAndDevice(t *testing.T) {
 	}
 }
 
+func TestHandlerHeartbeatPreservesCapabilitiesNilAndExplicitEmpty(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{}
+	router := gin.New()
+	NewHandler(service, nil).RegisterRoutes(router)
+
+	for _, body := range []string{
+		`{"sessionId":"session_001","status":"online"}`,
+		`{"sessionId":"session_001","status":"online","capabilities":[]}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-runners/runner_001/heartbeat", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	if len(service.heartbeats) != 2 || service.heartbeats[0].Capabilities != nil {
+		t.Fatalf("omitted capabilities must remain nil: %#v", service.heartbeats)
+	}
+	if service.heartbeats[1].Capabilities == nil || len(*service.heartbeats[1].Capabilities) != 0 {
+		t.Fatalf("explicit empty capabilities must remain a clear operation: %#v", service.heartbeats)
+	}
+}
+
 func TestHandlerClaimJobReturnsSemanticLocalJob(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := &fakeRunnerService{
@@ -270,6 +296,7 @@ type fakeRunnerService struct {
 	completeJobID string
 	completeReq   CompleteJobRequest
 	job           *LocalJob
+	heartbeats    []HeartbeatRequest
 }
 
 func (f *fakeRunnerService) RegisterRunner(_ context.Context, req RegisterRunnerRequest) (*RegisterRunnerResponse, error) {
@@ -282,7 +309,8 @@ func (f *fakeRunnerService) RegisterRunner(_ context.Context, req RegisterRunner
 	}, nil
 }
 
-func (f *fakeRunnerService) Heartbeat(_ context.Context, _ string, _ HeartbeatRequest) error {
+func (f *fakeRunnerService) Heartbeat(_ context.Context, _ string, req HeartbeatRequest) error {
+	f.heartbeats = append(f.heartbeats, req)
 	return nil
 }
 

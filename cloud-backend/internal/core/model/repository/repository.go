@@ -686,6 +686,14 @@ func NewTaskFromMap(input map[string]interface{}) *model.Task {
 		Input:     input,
 		CreatedAt: now,
 	}
+	if userID, ok := input["userId"].(string); ok {
+		task.UserID = strings.TrimSpace(userID)
+	}
+	if task.UserID == "" {
+		if userID, ok := input["user_id"].(string); ok {
+			task.UserID = strings.TrimSpace(userID)
+		}
+	}
 	return task
 }
 

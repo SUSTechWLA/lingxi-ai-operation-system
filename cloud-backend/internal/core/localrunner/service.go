@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,6 +38,14 @@ func NewService(pool *pgxpool.Pool) *Service {
 
 // RegisterRunner creates a cloud-side session for a local execution runner.
 func (s *Service) RegisterRunner(ctx context.Context, req RegisterRunnerRequest) (*RegisterRunnerResponse, error) {
+	req.UserID = strings.TrimSpace(req.UserID)
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	if req.UserID == "" || req.DeviceID == "" {
+		return nil, fmt.Errorf("authenticated userId and deviceId are required")
+	}
+	if err := ValidateRunnerCapabilities(req.Capabilities); err != nil {
+		return nil, fmt.Errorf("invalid runner capabilities: %w", err)
+	}
 	now := time.Now()
 	runnerID := "runner_" + uuid.NewString()[:8]
 	sessionID := "runner_session_" + uuid.NewString()[:12]
@@ -44,10 +53,16 @@ func (s *Service) RegisterRunner(ctx context.Context, req RegisterRunnerRequest)
 	if name == "" {
 		name = req.DeviceID
 	}
-	platform, _ := json.Marshal(req.Platform)
-	capabilities, _ := json.Marshal(req.Capabilities)
+	platform, err := json.Marshal(req.Platform)
+	if err != nil {
+		return nil, fmt.Errorf("encode runner platform: %w", err)
+	}
+	capabilities, err := json.Marshal(req.Capabilities)
+	if err != nil {
+		return nil, fmt.Errorf("encode runner capabilities: %w", err)
+	}
 
-	_, err := s.pool.Exec(ctx,
+	_, err = s.pool.Exec(ctx,
 		`INSERT INTO local_runners
 		 (id, device_id, user_id, name, runner_version, platform, workspace_root, capabilities,
 		  session_id, status, last_heartbeat, created_at, updated_at)
@@ -77,13 +92,27 @@ func (s *Service) Heartbeat(ctx context.Context, runnerID string, req HeartbeatR
 	if req.LastError != nil {
 		lastError = *req.LastError
 	}
+	var capabilitiesJSON *string
+	if req.Capabilities != nil {
+		if err := ValidateRunnerCapabilities(*req.Capabilities); err != nil {
+			return fmt.Errorf("invalid runner capabilities: %w", err)
+		}
+		wire, err := json.Marshal(*req.Capabilities)
+		if err != nil {
+			return fmt.Errorf("encode runner capabilities: %w", err)
+		}
+		encoded := string(wire)
+		capabilitiesJSON = &encoded
+	}
 	_, err := s.pool.Exec(ctx,
 		`UPDATE local_runners
 		 SET last_heartbeat=$2, status=$3, running_jobs=$4, disk_free_mb=$5,
-		     cpu_load=$6, memory_usage_mb=$7, last_error=$8, updated_at=NOW()
+		     cpu_load=$6, memory_usage_mb=$7, last_error=$8,
+		     capabilities=CASE WHEN $9::text IS NULL THEN capabilities ELSE $9::jsonb END,
+		     updated_at=NOW()
 		 WHERE id=$1`,
 		runnerID, time.Now(), string(status), req.RunningJobs, req.DiskFreeMb,
-		req.CPULoad, req.MemoryUsageMb, lastError,
+		req.CPULoad, req.MemoryUsageMb, lastError, capabilitiesJSON,
 	)
 	return err
 }
@@ -113,11 +142,33 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 	if projectID == "" {
 		projectID = "default"
 	}
+	userID, err := s.resolveDispatchUserID(ctx, req.TaskID, req.UserID)
+	if err != nil {
+		return nil, err
+	}
+	req.UserID = userID
 	payload := req.Payload
 	if payload == nil {
 		payload = map[string]interface{}{}
 	}
-	payloadJSON, _ := json.Marshal(payload)
+	req.Payload = payload
+	if command == CommandLocalMCPToolCall {
+		if err := validateMCPDispatchBinding(&req); err != nil {
+			return nil, err
+		}
+		if err := s.validateMCPDispatchTarget(ctx, req); err != nil {
+			return nil, err
+		}
+		payload = req.Payload
+	} else if strings.TrimSpace(req.TargetRunnerID) != "" {
+		if err := s.validateCommandDispatchTarget(ctx, req.UserID, req.TargetRunnerID, command); err != nil {
+			return nil, err
+		}
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode local job payload: %w", err)
+	}
 	timeoutSec := req.TimeoutSec
 	if timeoutSec <= 0 {
 		timeoutSec = 1800
@@ -130,7 +181,10 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 			SyncFileToCloud:     false,
 		}
 	}
-	artifactPolicyJSON, _ := json.Marshal(artifactPolicy)
+	artifactPolicyJSON, err := json.Marshal(artifactPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("encode local artifact policy: %w", err)
+	}
 	idempotencyKey := req.IdempotencyKey
 	if idempotencyKey == "" && req.TaskID != "" && req.NodeID != "" {
 		idempotencyKey = req.TaskID + "-" + req.NodeID
@@ -141,11 +195,19 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 	row := s.pool.QueryRow(ctx,
 		`WITH upserted AS (
 		  INSERT INTO local_jobs
-		   (id, project_id, task_id, node_id, tool_name, command, payload, status, progress,
-		    timeout_sec, artifact_policy, idempotency_key, created_at, updated_at)
-		  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,$9,$10::jsonb,$11,$12,$13)
+		   (id, user_id, target_runner_id, catalog_revision, mcp_provider_id,
+		    mcp_logical_tool_name, mcp_remote_tool_name, project_id, task_id, node_id,
+		    tool_name, command, payload, status, progress, timeout_sec, artifact_policy,
+		    idempotency_key, created_at, updated_at)
+		  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,0,$15,$16::jsonb,$17,$18,$19)
 		  ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''
 		  DO UPDATE SET
+		   user_id=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.user_id ELSE local_jobs.user_id END,
+		   target_runner_id=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.target_runner_id ELSE local_jobs.target_runner_id END,
+		   catalog_revision=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.catalog_revision ELSE local_jobs.catalog_revision END,
+		   mcp_provider_id=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.mcp_provider_id ELSE local_jobs.mcp_provider_id END,
+		   mcp_logical_tool_name=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.mcp_logical_tool_name ELSE local_jobs.mcp_logical_tool_name END,
+		   mcp_remote_tool_name=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.mcp_remote_tool_name ELSE local_jobs.mcp_remote_tool_name END,
 		   payload=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.payload ELSE local_jobs.payload END,
 		   status=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN 'PENDING' ELSE local_jobs.status END,
 		   progress=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN 0 ELSE local_jobs.progress END,
@@ -162,16 +224,87 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 		   completed_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.completed_at END,
 		   attempt=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN local_jobs.attempt+1 ELSE local_jobs.attempt END,
 		   updated_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.updated_at ELSE local_jobs.updated_at END
+		  WHERE COALESCE(local_jobs.user_id,'')=COALESCE(EXCLUDED.user_id,'')
 		  RETURNING *
 		 ) `+localJobSelectPrefix()+` FROM upserted`,
-		jobID, projectID, req.TaskID, req.NodeID, req.ToolName, command, string(payloadJSON),
-		string(JobPending), timeoutSec, string(artifactPolicyJSON), idempotencyKey, now, now,
+		jobID, req.UserID, nullableString(req.TargetRunnerID), nullableString(req.CatalogRevision), nullableString(req.MCPProviderID),
+		nullableString(req.MCPLogicalToolName), nullableString(req.MCPRemoteToolName), projectID, req.TaskID, req.NodeID,
+		req.ToolName, command, string(payloadJSON), string(JobPending), timeoutSec, string(artifactPolicyJSON),
+		idempotencyKey, now, now,
 	)
 	job, err := scanJob(row)
 	if err != nil {
 		return nil, fmt.Errorf("create job: %w", err)
 	}
 	return job, nil
+}
+
+func (s *Service) resolveDispatchUserID(ctx context.Context, taskID, requestedUserID string) (string, error) {
+	requestedUserID = strings.TrimSpace(requestedUserID)
+	if strings.TrimSpace(taskID) == "" {
+		return requestedUserID, nil
+	}
+	var taskUserID *string
+	err := s.pool.QueryRow(ctx, `SELECT user_id FROM ai_task WHERE id=$1`, taskID).Scan(&taskUserID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return requestedUserID, nil
+		}
+		return "", fmt.Errorf("resolve local job task owner: %w", err)
+	}
+	if taskUserID == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(*taskUserID), nil
+}
+
+func (s *Service) validateMCPDispatchTarget(ctx context.Context, req DispatchLocalJobRequest) error {
+	catalog, err := s.GetOnlineRunnerMCPToolCatalog(ctx, req.UserID, "", req.TargetRunnerID)
+	if err != nil {
+		return err
+	}
+	if catalog == nil {
+		return fmt.Errorf("target MCP runner is not online or does not belong to the task user")
+	}
+	if catalog.Revision != req.CatalogRevision {
+		return fmt.Errorf("target MCP runner catalog revision is stale")
+	}
+	if !catalogAdvertisesBinding(MCPToolCatalog{Revision: catalog.Revision, Tools: catalog.Tools}, req.MCPProviderID, req.MCPLogicalToolName, req.MCPRemoteToolName) {
+		return fmt.Errorf("target MCP runner does not advertise the bound provider/tool")
+	}
+	return nil
+}
+
+func (s *Service) validateCommandDispatchTarget(ctx context.Context, userID, runnerID, command string) error {
+	var count int
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*)
+		 FROM local_runners lr
+		 WHERE lr.id=$1
+		   AND COALESCE(lr.user_id,'')=$2
+		   AND lr.status='ONLINE'
+		   AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
+		   AND EXISTS (
+		     SELECT 1 FROM jsonb_array_elements(COALESCE(lr.capabilities,'[]'::jsonb)) cap
+		     WHERE cap->>'command'=$3
+		       AND COALESCE((cap->>'available')::boolean, false)=true
+		   )`,
+		strings.TrimSpace(runnerID), strings.TrimSpace(userID), NormalizeCommand(command),
+	).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("validate local job target runner: %w", err)
+	}
+	if count == 0 {
+		return fmt.Errorf("target runner is not online, not owned by the task user, or does not support the command")
+	}
+	return nil
+}
+
+func nullableString(value string) interface{} {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
 }
 
 // ClaimJob claims the oldest pending job for a runner.
@@ -187,6 +320,8 @@ func (s *Service) ClaimJob(ctx context.Context, runnerID string) (*LocalJob, err
 		   SELECT lj.id
 		   FROM local_jobs lj
 		   WHERE lj.status='PENDING'
+		     AND COALESCE(lj.user_id,'')=COALESCE((SELECT user_id FROM local_runners WHERE id=$1),'')
+		     AND (lj.target_runner_id IS NULL OR lj.target_runner_id='' OR lj.target_runner_id=$1)
 		     AND NOT EXISTS (
 		       SELECT 1
 		       FROM agent_runs ar
@@ -211,6 +346,19 @@ func (s *Service) ClaimJob(ctx context.Context, runnerID string) (*LocalJob, err
 		         AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
 		         AND cap->>'command' = lj.command
 		         AND COALESCE((cap->>'available')::boolean, false) = true
+		         AND (
+		           lj.command <> '`+CommandLocalMCPToolCall+`'
+		           OR (
+		             cap->>'catalogRevision'=lj.catalog_revision
+		             AND EXISTS (
+		               SELECT 1
+		               FROM jsonb_array_elements(COALESCE(cap->'mcpTools','[]'::jsonb)) advertised
+		               WHERE advertised->>'providerId'=lj.mcp_provider_id
+		                 AND advertised->>'logicalToolName'=lj.mcp_logical_tool_name
+		                 AND advertised->>'remoteToolName'=lj.mcp_remote_tool_name
+		             )
+		           )
+		         )
 		     )
 		   ORDER BY lj.created_at
 		   LIMIT 1
@@ -307,12 +455,60 @@ func (s *Service) GetJob(ctx context.Context, jobID string) (*LocalJob, error) {
 	return scanJob(row)
 }
 
+// GetOnlineRunnerMCPToolCatalog returns the most recently seen online MCP
+// catalog scoped to one user and, optionally, one device and runner. Provider
+// transports and credentials are not part of the persisted advertisement DTO.
+func (s *Service) GetOnlineRunnerMCPToolCatalog(ctx context.Context, userID, deviceID, runnerID string) (*RunnerMCPToolCatalog, error) {
+	var id, dbUserID, dbDeviceID string
+	var capabilitiesJSON []byte
+	var lastHeartbeat time.Time
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, COALESCE(user_id,''), COALESCE(device_id,''), capabilities, last_heartbeat
+		 FROM local_runners
+		 WHERE COALESCE(user_id,'')=$1
+		   AND ($2='' OR device_id=$2)
+		   AND ($3='' OR id=$3)
+		   AND status='ONLINE'
+		   AND last_heartbeat > NOW() - INTERVAL '90 seconds'
+		   AND EXISTS (
+		     SELECT 1 FROM jsonb_array_elements(COALESCE(capabilities,'[]'::jsonb)) cap
+		     WHERE cap->>'command'=$4
+		       AND COALESCE((cap->>'available')::boolean, false)=true
+		       AND COALESCE(cap->>'catalogRevision','')<>''
+		   )
+		 ORDER BY last_heartbeat DESC
+		 LIMIT 1`,
+		strings.TrimSpace(userID), strings.TrimSpace(deviceID), strings.TrimSpace(runnerID), CommandLocalMCPToolCall,
+	).Scan(&id, &dbUserID, &dbDeviceID, &capabilitiesJSON, &lastHeartbeat)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read online runner MCP catalog: %w", err)
+	}
+	var capabilities []RunnerCapability
+	if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
+		return nil, fmt.Errorf("decode online runner MCP catalog: %w", err)
+	}
+	if err := ValidateRunnerCapabilities(capabilities); err != nil {
+		return nil, fmt.Errorf("stored runner MCP catalog is invalid: %w", err)
+	}
+	catalog, ok := MCPToolCatalogFromCapabilities(capabilities)
+	if !ok {
+		return nil, nil
+	}
+	return &RunnerMCPToolCatalog{
+		RunnerID: id, DeviceID: dbDeviceID, UserID: dbUserID,
+		Revision: catalog.Revision, Tools: catalog.Tools, LastHeartbeat: lastHeartbeat,
+	}, nil
+}
+
 // ValidateRunnerAccess verifies that a runner exists, belongs to the given user and device,
 // has a matching session ID, and is not revoked.
 func (s *Service) ValidateRunnerAccess(ctx context.Context, userID, deviceID, runnerID, sessionID string) error {
 	var dbUserID, dbDeviceID, dbSessionID, dbStatus string
 	err := s.pool.QueryRow(ctx,
-		`SELECT user_id, device_id, session_id, status FROM local_runners WHERE id=$1`, runnerID,
+		`SELECT COALESCE(user_id,''), COALESCE(device_id,''), COALESCE(session_id,''), status FROM local_runners WHERE id=$1`, runnerID,
 	).Scan(&dbUserID, &dbDeviceID, &dbSessionID, &dbStatus)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -323,13 +519,13 @@ func (s *Service) ValidateRunnerAccess(ctx context.Context, userID, deviceID, ru
 	if dbStatus == string(RunnerRevoked) {
 		return fmt.Errorf("%w: runner is revoked", ErrRunnerAccessDenied)
 	}
-	if dbUserID != "" && dbUserID != userID {
+	if dbUserID != userID {
 		return fmt.Errorf("%w: runner belongs to user %s, not %s", ErrRunnerAccessDenied, dbUserID, userID)
 	}
-	if deviceID != "" && dbDeviceID != "" && dbDeviceID != deviceID {
+	if dbDeviceID != deviceID {
 		return fmt.Errorf("%w: runner device mismatch", ErrRunnerAccessDenied)
 	}
-	if sessionID != "" && dbSessionID != "" && dbSessionID != sessionID {
+	if dbSessionID != sessionID {
 		return fmt.Errorf("%w: runner session mismatch", ErrRunnerAccessDenied)
 	}
 	return nil
@@ -338,15 +534,18 @@ func (s *Service) ValidateRunnerAccess(ctx context.Context, userID, deviceID, ru
 // ValidateJobAccess verifies that a job exists, belongs to the given user,
 // and is claimed by the given runner (if already claimed).
 func (s *Service) ValidateJobAccess(ctx context.Context, userID, runnerID, jobID string) error {
-	var dbRunnerID, dbStatus string
+	var dbRunnerID, dbUserID, dbStatus string
 	err := s.pool.QueryRow(ctx,
-		`SELECT runner_id, status FROM local_jobs WHERE id=$1`, jobID,
-	).Scan(&dbRunnerID, &dbStatus)
+		`SELECT COALESCE(runner_id,''), COALESCE(user_id,''), status FROM local_jobs WHERE id=$1`, jobID,
+	).Scan(&dbRunnerID, &dbUserID, &dbStatus)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return fmt.Errorf("job not found: %s", jobID)
 		}
 		return fmt.Errorf("validate job: %w", err)
+	}
+	if dbUserID != strings.TrimSpace(userID) {
+		return fmt.Errorf("%w: job belongs to a different user", ErrJobAccessDenied)
 	}
 	// Once a job is claimed, only the claiming runner can complete/fail it
 	if dbRunnerID != "" && dbRunnerID != runnerID {
@@ -360,7 +559,8 @@ func (s *Service) ValidateJobAccess(ctx context.Context, userID, runnerID, jobID
 }
 
 func localJobSelectPrefix() string {
-	return `SELECT id, runner_id, project_id, task_id, node_id, tool_name, command, payload,
+	return `SELECT id, runner_id, user_id, target_runner_id, catalog_revision, mcp_provider_id,
+	        mcp_logical_tool_name, mcp_remote_tool_name, project_id, task_id, node_id, tool_name, command, payload,
 	        status, progress, current_step, message, output, error_message, error_json,
 	        diagnostics, retryable, timeout_sec, artifact_policy, idempotency_key, attempt,
 	        lease_expires_at, created_at, updated_at`
@@ -372,11 +572,13 @@ type rowScanner interface {
 
 func scanJob(row rowScanner) (*LocalJob, error) {
 	var job LocalJob
-	var runnerID, taskID, nodeID, toolName, payload, currentStep, message, output, errorMessage, idempotencyKey *string
+	var runnerID, userID, targetRunnerID, catalogRevision, mcpProviderID, mcpLogicalToolName, mcpRemoteToolName *string
+	var taskID, nodeID, toolName, payload, currentStep, message, output, errorMessage, idempotencyKey *string
 	var status string
 	var errorJSON, diagnosticsJSON, artifactPolicyJSON []byte
 	err := row.Scan(
-		&job.ID, &runnerID, &job.ProjectID, &taskID, &nodeID, &toolName, &job.Command, &payload,
+		&job.ID, &runnerID, &userID, &targetRunnerID, &catalogRevision, &mcpProviderID,
+		&mcpLogicalToolName, &mcpRemoteToolName, &job.ProjectID, &taskID, &nodeID, &toolName, &job.Command, &payload,
 		&status, &job.Progress, &currentStep, &message, &output, &errorMessage, &errorJSON,
 		&diagnosticsJSON, &job.Retryable, &job.TimeoutSec, &artifactPolicyJSON, &idempotencyKey,
 		&job.Attempt, &job.LeaseExpiresAt, &job.CreatedAt, &job.UpdatedAt,
@@ -387,6 +589,24 @@ func scanJob(row rowScanner) (*LocalJob, error) {
 	job.Status = JobStatus(status)
 	if runnerID != nil {
 		job.RunnerID = *runnerID
+	}
+	if userID != nil {
+		job.UserID = *userID
+	}
+	if targetRunnerID != nil {
+		job.TargetRunnerID = *targetRunnerID
+	}
+	if catalogRevision != nil {
+		job.CatalogRevision = *catalogRevision
+	}
+	if mcpProviderID != nil {
+		job.MCPProviderID = *mcpProviderID
+	}
+	if mcpLogicalToolName != nil {
+		job.MCPLogicalToolName = *mcpLogicalToolName
+	}
+	if mcpRemoteToolName != nil {
+		job.MCPRemoteToolName = *mcpRemoteToolName
 	}
 	if taskID != nil {
 		job.TaskID = *taskID

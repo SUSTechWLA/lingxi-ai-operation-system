@@ -20,25 +20,37 @@ type CloudClient interface {
 }
 
 type LoopOptions struct {
-	DeviceID      string
-	RunnerVersion string
-	WorkspaceRoot string
-	DataDir       string
-	PollInterval  time.Duration
+	DeviceID                  string
+	RunnerVersion             string
+	WorkspaceRoot             string
+	DataDir                   string
+	PollInterval              time.Duration
+	MCPToolCatalogSource      MCPToolCatalogSource
+	MCPCatalogRefreshInterval time.Duration
+}
+
+type MCPToolCatalogSource interface {
+	Discover(context.Context) (MCPToolCatalog, []MCPProviderDiagnostic)
 }
 
 type Loop struct {
-	client         CloudClient
-	registry       *localtool.Registry
-	options        LoopOptions
-	runnerID       string
-	sessionID      string
-	pendingReports *PendingReportStore
+	client              CloudClient
+	registry            *localtool.Registry
+	options             LoopOptions
+	runnerID            string
+	sessionID           string
+	pendingReports      *PendingReportStore
+	capabilities        []Capability
+	catalogRevision     string
+	catalogDiscoveredAt time.Time
 }
 
 func NewLoop(client CloudClient, registry *localtool.Registry, options LoopOptions) *Loop {
 	if options.PollInterval <= 0 {
 		options.PollInterval = 3 * time.Second
+	}
+	if options.MCPCatalogRefreshInterval <= 0 {
+		options.MCPCatalogRefreshInterval = 30 * time.Second
 	}
 	return &Loop{
 		client:         client,
@@ -84,10 +96,14 @@ func (l *Loop) RunOnce(ctx context.Context) error {
 	if err := l.ensureRegistered(ctx); err != nil {
 		return err
 	}
-	if err := l.client.Heartbeat(ctx, l.runnerID, HeartbeatRequest{
+	heartbeat := HeartbeatRequest{
 		SessionID: l.sessionID,
 		Status:    "online",
-	}); err != nil {
+	}
+	if capabilities := l.refreshMCPToolCatalog(ctx); capabilities != nil {
+		heartbeat.Capabilities = &capabilities
+	}
+	if err := l.client.Heartbeat(ctx, l.runnerID, heartbeat); err != nil {
 		log.Printf("heartbeat error: %v", err)
 		// Heartbeat failures are non-fatal; don't break the loop.
 	}
@@ -107,12 +123,20 @@ func (l *Loop) ensureRegistered(ctx context.Context) error {
 		return nil
 	}
 	probe := Probe(ctx, l.options.WorkspaceRoot)
+	l.capabilities = l.executableCapabilities(probe)
+	if l.options.MCPToolCatalogSource != nil {
+		catalog, diagnostics := l.options.MCPToolCatalogSource.Discover(ctx)
+		l.logMCPDiagnostics(diagnostics)
+		l.capabilities = withMCPToolCatalog(l.capabilities, catalog)
+		l.catalogRevision = catalog.Revision
+		l.catalogDiscoveredAt = time.Now()
+	}
 	resp, err := l.client.Register(ctx, RegisterRunnerRequest{
 		DeviceID:      l.options.DeviceID,
 		RunnerVersion: l.options.RunnerVersion,
 		Platform:      probe.Platform,
 		WorkspaceRoot: l.options.WorkspaceRoot,
-		Capabilities:  l.executableCapabilities(probe),
+		Capabilities:  l.capabilities,
 	})
 	if err != nil {
 		return err
@@ -123,6 +147,43 @@ func (l *Loop) ensureRegistered(ctx context.Context) error {
 		l.options.PollInterval = time.Duration(resp.PollIntervalSec) * time.Second
 	}
 	return nil
+}
+
+func (l *Loop) refreshMCPToolCatalog(ctx context.Context) []Capability {
+	if l.options.MCPToolCatalogSource == nil {
+		return nil
+	}
+	if !l.catalogDiscoveredAt.IsZero() && time.Since(l.catalogDiscoveredAt) < l.options.MCPCatalogRefreshInterval {
+		return nil
+	}
+	catalog, diagnostics := l.options.MCPToolCatalogSource.Discover(ctx)
+	l.catalogDiscoveredAt = time.Now()
+	l.logMCPDiagnostics(diagnostics)
+	if catalog.Revision == l.catalogRevision {
+		return nil
+	}
+	l.catalogRevision = catalog.Revision
+	l.capabilities = withMCPToolCatalog(l.capabilities, catalog)
+	return append([]Capability(nil), l.capabilities...)
+}
+
+func withMCPToolCatalog(capabilities []Capability, catalog MCPToolCatalog) []Capability {
+	result := append([]Capability(nil), capabilities...)
+	for index := range result {
+		if localtool.NormalizeCommand(result[index].Command) != localtool.CommandLocalMCPToolCall {
+			continue
+		}
+		result[index].CatalogRevision = catalog.Revision
+		result[index].MCPTools = append([]MCPToolAdvertisement(nil), catalog.Tools...)
+		break
+	}
+	return result
+}
+
+func (l *Loop) logMCPDiagnostics(diagnostics []MCPProviderDiagnostic) {
+	for _, diagnostic := range diagnostics {
+		log.Printf("MCP catalog diagnostic provider=%q code=%s: %s", diagnostic.ProviderID, diagnostic.Code, diagnostic.Message)
+	}
 }
 
 func (l *Loop) executableCapabilities(probe ProbeResult) []Capability {

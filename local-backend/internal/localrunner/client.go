@@ -57,19 +57,22 @@ type PlatformInfo struct {
 }
 
 type Capability struct {
-	ToolName  string `json:"toolName"`
-	Command   string `json:"command"`
-	Available bool   `json:"available"`
-	Version   string `json:"version,omitempty"`
+	ToolName        string                 `json:"toolName"`
+	Command         string                 `json:"command"`
+	Available       bool                   `json:"available"`
+	Version         string                 `json:"version,omitempty"`
+	CatalogRevision string                 `json:"catalogRevision,omitempty"`
+	MCPTools        []MCPToolAdvertisement `json:"mcpTools,omitempty"`
 }
 
 type HeartbeatRequest struct {
-	SessionID     string  `json:"sessionId"`
-	Status        string  `json:"status"`
-	RunningJobs   int     `json:"runningJobs"`
-	DiskFreeMb    int64   `json:"diskFreeMb"`
-	CPULoad       float64 `json:"cpuLoad"`
-	MemoryUsageMb int64   `json:"memoryUsageMb"`
+	SessionID     string        `json:"sessionId"`
+	Status        string        `json:"status"`
+	RunningJobs   int           `json:"runningJobs"`
+	DiskFreeMb    int64         `json:"diskFreeMb"`
+	CPULoad       float64       `json:"cpuLoad"`
+	MemoryUsageMb int64         `json:"memoryUsageMb"`
+	Capabilities  *[]Capability `json:"capabilities,omitempty"`
 }
 
 type ClaimJobResponse struct {

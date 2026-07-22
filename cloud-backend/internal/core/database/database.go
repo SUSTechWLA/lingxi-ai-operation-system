@@ -509,6 +509,12 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		CREATE TABLE IF NOT EXISTS local_jobs (
 		    id VARCHAR(64) PRIMARY KEY,
 		    runner_id VARCHAR(64),
+		    user_id VARCHAR(64),
+		    target_runner_id VARCHAR(64),
+		    catalog_revision VARCHAR(64),
+		    mcp_provider_id VARCHAR(128),
+		    mcp_logical_tool_name VARCHAR(128),
+		    mcp_remote_tool_name VARCHAR(128),
 		    project_id VARCHAR(64) NOT NULL,
 		    task_id VARCHAR(64),
 		    node_id VARCHAR(64),
@@ -535,6 +541,12 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    updated_at TIMESTAMPTZ DEFAULT NOW()
 		);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS task_id VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS user_id VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS target_runner_id VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS catalog_revision VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS mcp_provider_id VARCHAR(128);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS mcp_logical_tool_name VARCHAR(128);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS mcp_remote_tool_name VARCHAR(128);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS node_id VARCHAR(64);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS tool_name VARCHAR(255);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS message TEXT DEFAULT '';
@@ -547,7 +559,16 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS attempt INT DEFAULT 1;
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+		UPDATE local_jobs lj
+		SET user_id=task.user_id
+		FROM ai_task task
+		WHERE lj.task_id=task.id
+		  AND (lj.user_id IS NULL OR lj.user_id='')
+		  AND task.user_id IS NOT NULL
+		  AND task.user_id<>'';
 		CREATE INDEX IF NOT EXISTS idx_local_jobs_status ON local_jobs(status);
+		CREATE INDEX IF NOT EXISTS idx_local_jobs_user_status ON local_jobs(user_id, status);
+		CREATE INDEX IF NOT EXISTS idx_local_jobs_target_status ON local_jobs(target_runner_id, status);
 		CREATE INDEX IF NOT EXISTS idx_local_jobs_node ON local_jobs(node_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_local_jobs_idempotency ON local_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key <> '';
 
