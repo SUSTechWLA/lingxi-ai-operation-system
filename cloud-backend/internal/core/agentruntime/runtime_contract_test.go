@@ -333,6 +333,132 @@ func TestPlanCompilerDoesNotEraseCycleOrUnknownDependencyDiagnostics(t *testing.
 	}
 }
 
+func TestPlanCompilerNestedKnownReferencesDriveStableTopologyAndRemainIdempotent(t *testing.T) {
+	catalog := staticToolCatalog{
+		"consumer_tool": {Name: "consumer_tool", Parameters: map[string]tool.ParamDef{"payload": {Type: "object"}}},
+		"provider_a":    {Name: "provider_a", Output: map[string]tool.ParamDef{"value": {Type: "string"}}},
+		"provider_b":    {Name: "provider_b", Output: map[string]tool.ParamDef{"value": {Type: "string"}}},
+	}
+	plan := &AgentPlan{Goal: "nested known references", Steps: []AgentStep{
+		{
+			ID: "consume", Tool: "consumer_tool",
+			Arguments: map[string]interface{}{
+				"payload": map[string]interface{}{
+					"layers": []map[string]interface{}{
+						{"value": "{{provide_a.output.value}}"},
+						{"nested": []interface{}{map[string]interface{}{"value": "{{provide_b.output.value}}"}}},
+					},
+				},
+			},
+		},
+		{ID: "provide_a", Tool: "provider_a"},
+		{ID: "provide_b", Tool: "provider_b"},
+	}}
+	compiler := NewPlanCompiler(catalog)
+	prepared := compiler.PreparePlan(plan)
+	gotOrder := make([]string, 0, len(prepared.Steps))
+	for _, step := range prepared.Steps {
+		gotOrder = append(gotOrder, step.ID)
+	}
+	if want := []string{"provide_a", "provide_b", "consume"}; !reflect.DeepEqual(gotOrder, want) {
+		t.Fatalf("nested reference topology = %#v, want %#v", gotOrder, want)
+	}
+	consumer := findPlanStep(prepared, "consume")
+	if !reflect.DeepEqual(consumer.DependsOn, []string{"provide_a", "provide_b"}) {
+		t.Fatalf("nested reference dependencies = %#v, want both providers", consumer.DependsOn)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("nested known reference plan failed Guard: %v", err)
+	}
+	first := cloneContractPlanDeep(prepared)
+	if preparedAgain := compiler.PreparePlan(prepared); !reflect.DeepEqual(preparedAgain, first) {
+		t.Fatalf("nested reference PreparePlan is not idempotent:\nfirst=%#v\nsecond=%#v", first.Steps, preparedAgain.Steps)
+	}
+}
+
+func TestPlanGuardRejectsNestedUnknownOrSelfReferenceInsideTypedArray(t *testing.T) {
+	catalog := staticToolCatalog{
+		"consumer_tool": {
+			Name:       "consumer_tool",
+			Parameters: map[string]tool.ParamDef{"payload": {Type: "object"}},
+			Output:     map[string]tool.ParamDef{"value": {Type: "string"}},
+		},
+	}
+	tests := []struct {
+		name      string
+		reference string
+		want      string
+	}{
+		{name: "unknown", reference: "{{missing.output.value}}", want: "references unknown step missing in argument expression"},
+		{name: "self", reference: "{{consume.output.value}}", want: "cannot depend on itself"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := NewPlanCompiler(catalog).PreparePlan(&AgentPlan{Goal: "nested invalid", Steps: []AgentStep{
+				{
+					ID: "consume", Tool: "consumer_tool",
+					Arguments: map[string]interface{}{
+						"payload": map[string]interface{}{
+							"layers": []map[string]interface{}{{
+								"items": []interface{}{map[string]interface{}{"value": tt.reference}},
+							}},
+						},
+					},
+				},
+			}})
+			err := NewPlanGuard(catalog, nil).Validate(plan)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("nested %s reference Guard error = %v, want diagnostic containing %q", tt.name, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRemoveReferencesToRemovedStepsPrunesNestedObjectsAndArraysPrecisely(t *testing.T) {
+	plan := &AgentPlan{Goal: "nested removed", Steps: []AgentStep{
+		{ID: "keep", Tool: "provider_a", Arguments: map[string]interface{}{}},
+		{
+			ID: "consume", Tool: "consumer_tool", DependsOn: []string{"gone", "keep"},
+			Arguments: map[string]interface{}{
+				"payload": map[string]interface{}{
+					"drop": "{{gone.output.value}}",
+					"layers": []interface{}{
+						"literal",
+						"{{gone.output.value}}",
+						map[string]interface{}{
+							"drop":    "{{gone.output.value}}",
+							"keep":    "{{keep.output.value}}",
+							"unknown": "{{missing.output.value}}",
+						},
+					},
+				},
+			},
+		},
+	}}
+	removeReferencesToRemovedSteps(plan, map[string]bool{"gone": true})
+	consumer := findPlanStep(plan, "consume")
+	if !reflect.DeepEqual(consumer.DependsOn, []string{"keep"}) {
+		t.Fatalf("removed-step dependencies = %#v, want only keep", consumer.DependsOn)
+	}
+	payload := consumer.Arguments["payload"].(map[string]interface{})
+	if _, exists := payload["drop"]; exists {
+		t.Fatalf("nested removed map reference survived: %#v", payload)
+	}
+	layers := payload["layers"].([]interface{})
+	if len(layers) != 2 || layers[0] != "literal" {
+		t.Fatalf("nested removed array reference was not pruned precisely: %#v", layers)
+	}
+	nested := layers[1].(map[string]interface{})
+	if _, exists := nested["drop"]; exists || nested["keep"] != "{{keep.output.value}}" || nested["unknown"] != "{{missing.output.value}}" {
+		t.Fatalf("nested removed reference cleanup damaged legal references: %#v", nested)
+	}
+	first := cloneContractPlanDeep(plan)
+	removeReferencesToRemovedSteps(plan, map[string]bool{"gone": true})
+	if !reflect.DeepEqual(plan, first) {
+		t.Fatalf("nested removed reference cleanup is not idempotent:\nfirst=%#v\nsecond=%#v", first.Steps, plan.Steps)
+	}
+}
+
 func qualityGateForProduction(plan *AgentPlan, productionID string) AgentStep {
 	if plan == nil {
 		return AgentStep{}

@@ -392,34 +392,13 @@ func resolvePlanReferenceDependency(referenceID string, knownStepIDs map[string]
 func referencedStepIDs(value interface{}) []string {
 	seen := map[string]bool{}
 	refs := make([]string, 0)
-	var walk func(interface{})
-	walk = func(current interface{}) {
-		switch typed := current.(type) {
-		case string:
-			refStepID, _, ok := outputReference(typed)
-			if ok && refStepID != "" && !seen[refStepID] {
-				seen[refStepID] = true
-				refs = append(refs, refStepID)
-			}
-		case []interface{}:
-			for _, item := range typed {
-				walk(item)
-			}
-		case []string:
-			for _, item := range typed {
-				walk(item)
-			}
-		case map[string]interface{}:
-			for _, item := range typed {
-				walk(item)
-			}
-		case map[string]string:
-			for _, item := range typed {
-				walk(item)
-			}
+	for _, reference := range argumentReferences(value) {
+		if reference.StepID == "" || seen[reference.StepID] {
+			continue
 		}
+		seen[reference.StepID] = true
+		refs = append(refs, reference.StepID)
 	}
-	walk(value)
 	return refs
 }
 
@@ -1472,10 +1451,12 @@ func removeReferencesToRemovedSteps(plan *AgentPlan, removedStepIDs map[string]b
 		}
 		step.DependsOn = filteredDependencies
 		for key, value := range step.Arguments {
-			refStepID, _, ok := outputReference(value)
-			if ok && removedStepIDs[refStepID] {
+			pruned, keep := pruneRemovedStepReferences(value, removedStepIDs)
+			if !keep {
 				delete(step.Arguments, key)
+				continue
 			}
+			step.Arguments[key] = pruned
 		}
 	}
 }

@@ -956,22 +956,18 @@ func validateReferenceExpressions(
 	stepMap map[string]AgentStep,
 	stepManifests map[string]*tool.ToolManifest,
 ) error {
-	for _, value := range step.Arguments {
-		s, ok := value.(string)
-		if !ok {
-			continue
-		}
-		matches := referencePattern.FindStringSubmatch(s)
-		if matches == nil {
-			continue
-		}
-		refStepID := matches[1]
-		refField := matches[2]
+	for _, reference := range argumentReferences(step.Arguments) {
+		refStepID := reference.StepID
+		refField := reference.Field
+		expression := reference.Expression
 
 		// Check the referenced step exists.
 		refStep, exists := stepMap[refStepID]
 		if !exists {
-			return fmt.Errorf("agent step %s references unknown step %s in argument expression %s", step.ID, refStepID, s)
+			return fmt.Errorf("agent step %s references unknown step %s in argument expression %s", step.ID, refStepID, expression)
+		}
+		if refStepID == step.ID {
+			return fmt.Errorf("agent step %s cannot reference its own output in argument expression %s", step.ID, expression)
 		}
 
 		// Check the referenced step is an upstream dependency.
@@ -982,7 +978,7 @@ func validateReferenceExpressions(
 				break
 			}
 		}
-		if !isUpstream && refStepID != step.ID {
+		if !isUpstream {
 			return fmt.Errorf("agent step %s references step %s which is not declared as a dependency", step.ID, refStepID)
 		}
 
