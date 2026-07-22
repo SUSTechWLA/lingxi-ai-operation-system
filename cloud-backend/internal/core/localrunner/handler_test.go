@@ -421,6 +421,9 @@ func TestHandlerValidatesDynamicMCPOutputFromBoundRunnerCatalog(t *testing.T) {
 			if rec.Code != http.StatusUnprocessableEntity || service.completeJobID != "" || service.failJobID != "local_job_dynamic" || sink.successNodeID != "" {
 				t.Fatalf("dynamic MCP failure was not fail-closed: status=%d body=%s service=%#v sink=%#v", rec.Code, rec.Body.String(), service, sink)
 			}
+			if name == "mcp_is_error" && service.failReq.Error["code"] != "MCP_TOOL_ERROR" {
+				t.Fatalf("dynamic MCP isError used wrong failure code: %#v", service.failReq.Error)
+			}
 		})
 	}
 }

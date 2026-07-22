@@ -244,7 +244,8 @@ func (h *Handler) completeJob(c *gin.Context) {
 	}
 	req.Output = normalizeCompleteJobOutput(jobContext, req.Output)
 	if isMCPErrorCompletion(jobContext, req.Output) {
-		h.failInvalidCompletion(c, identity, jobContext, fmt.Errorf("MCP tool returned isError=true"))
+		validationErr := tool.ValidateLocalJobOutput(&tool.ToolManifest{Boundary: tool.BoundaryMCPProvider}, req.Output)
+		h.failInvalidCompletion(c, identity, jobContext, validationErr)
 		return
 	}
 	manifest, manifestErr := h.manifestForLocalJob(c.Request.Context(), jobContext)
