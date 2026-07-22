@@ -52,6 +52,13 @@ type ScopedLocalJobManifestResolver interface {
 	ResolveMCPJobManifest(ctx context.Context, job *LocalJob) (*tool.ToolManifest, error)
 }
 
+// StaleMCPJobRetirer atomically retires MCP jobs whose immutable catalog
+// binding is no longer advertised by the authenticated target runner. The
+// returned terminal jobs include any pending callback replay work.
+type StaleMCPJobRetirer interface {
+	RetireStaleMCPJobs(ctx context.Context, identity JobMutationIdentity) ([]*LocalJob, error)
+}
+
 // ArtifactSyncCallback is invoked after a local job completes successfully,
 // allowing the caller to materialize artifact records from the job output.
 type ArtifactSyncCallback func(ctx context.Context, job *LocalJob, output map[string]interface{}) error
@@ -140,6 +147,10 @@ func (h *Handler) heartbeat(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if err := h.retireStaleMCPJobs(c.Request.Context(), h.runnerIdentityFromRequest(c)); err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -148,12 +159,33 @@ func (h *Handler) claimJob(c *gin.Context) {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}
+	if err := h.retireStaleMCPJobs(c.Request.Context(), h.runnerIdentityFromRequest(c)); err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
 	job, err := h.service.ClaimJob(c.Request.Context(), c.Param("runnerId"))
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	c.JSON(http.StatusOK, ClaimJobResponse{Job: job})
+}
+
+func (h *Handler) retireStaleMCPJobs(ctx context.Context, identity JobMutationIdentity) error {
+	retirer, ok := h.service.(StaleMCPJobRetirer)
+	if !ok {
+		return nil
+	}
+	jobs, err := retirer.RetireStaleMCPJobs(ctx, identity)
+	if err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		if err := h.deliverTerminalCallbacks(ctx, identity, job); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *Handler) reportProgress(c *gin.Context) {
@@ -561,21 +593,28 @@ func writeJobMutationError(c *gin.Context, err error) {
 // validateRunnerFromRequest checks that the runner ID from the URL matches
 // the authenticated user and the X-Runner-ID / X-Runner-Session-ID headers.
 func (h *Handler) validateRunnerFromRequest(c *gin.Context) error {
-	runnerID := c.Param("runnerId")
-	userID, _ := auth.UserIDFromContext(c.Request.Context())
-	deviceID, _ := auth.DeviceIDFromContext(c.Request.Context())
+	identity := h.runnerIdentityFromRequest(c)
+	runnerID := identity.RunnerID
 	headerRunnerID := c.GetHeader("X-Runner-ID")
-	sessionID := c.GetHeader("X-Runner-Session-ID")
-	if sessionID == "" {
-		sessionID = c.GetHeader("X-Runner-Session-Id")
-	}
 
 	// If X-Runner-ID is present, it must match the URL param
 	if headerRunnerID != "" && headerRunnerID != runnerID {
 		return ErrRunnerAccessDenied
 	}
 
-	return h.service.ValidateRunnerAccess(c.Request.Context(), userID, deviceID, runnerID, sessionID)
+	return h.service.ValidateRunnerAccess(c.Request.Context(), identity.UserID, identity.DeviceID, runnerID, identity.SessionID)
+}
+
+func (h *Handler) runnerIdentityFromRequest(c *gin.Context) JobMutationIdentity {
+	userID, _ := auth.UserIDFromContext(c.Request.Context())
+	deviceID, _ := auth.DeviceIDFromContext(c.Request.Context())
+	sessionID := c.GetHeader("X-Runner-Session-ID")
+	if sessionID == "" {
+		sessionID = c.GetHeader("X-Runner-Session-Id")
+	}
+	return JobMutationIdentity{
+		UserID: userID, DeviceID: deviceID, RunnerID: c.Param("runnerId"), SessionID: sessionID,
+	}
 }
 
 // validateJobFromRequest checks that the requesting runner (from X-Runner-ID header)

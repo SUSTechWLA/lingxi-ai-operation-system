@@ -180,6 +180,72 @@ func TestHandlerHeartbeatPreservesCapabilitiesNilAndExplicitEmpty(t *testing.T) 
 	}
 }
 
+func TestHandlerHeartbeatReliablyDeliversRetiredStaleMCPFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stale := &LocalJob{
+		ID: "local_job_stale", UserID: "user-a", RunnerID: "runner_001", TargetRunnerID: "runner_001",
+		NodeID: "node_stale", Command: CommandLocalMCPToolCall, Status: JobFailed,
+		ErrorMessage:        "MCP_CATALOG_STALE: target runner catalog changed; replan required",
+		Error:               map[string]interface{}{"code": "MCP_CATALOG_STALE"},
+		ResultCallbackState: CallbackPending, FollowupCallbackState: CallbackPending,
+	}
+	service := &fakeRunnerService{staleJobs: []*LocalJob{stale}}
+	sink := &fakeNodeResultSink{failureErrors: []error{errors.New("temporary DAG failure sink error")}}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+
+	heartbeat := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-runners/runner_001/heartbeat", bytes.NewBufferString(`{
+			"sessionId":"runner_session_001","status":"online","capabilities":[]
+		}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
+		req.Header.Set("X-Runner-Session-ID", "runner_session_001")
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+	if res := heartbeat(); res.Code != http.StatusInternalServerError {
+		t.Fatalf("first callback failure status=%d body=%s", res.Code, res.Body.String())
+	}
+	if stale.Status != JobFailed || stale.ResultCallbackState != CallbackPending || service.retireCalls != 1 {
+		t.Fatalf("stale terminal event was not retained for retry: job=%#v calls=%d", stale, service.retireCalls)
+	}
+	if res := heartbeat(); res.Code != http.StatusOK {
+		t.Fatalf("stale callback replay status=%d body=%s", res.Code, res.Body.String())
+	}
+	if sink.failureCalls != 2 || !strings.Contains(sink.failureError, "MCP_CATALOG_STALE") ||
+		stale.ResultCallbackState != CallbackDelivered || stale.FollowupCallbackState != CallbackDelivered {
+		t.Fatalf("stale failure was not durably delivered: sink=%#v job=%#v", sink, stale)
+	}
+}
+
+func TestHandlerClaimRetiresStaleMCPJobsBeforeReturningNextJob(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stale := &LocalJob{
+		ID: "local_job_stale", RunnerID: "runner_001", TargetRunnerID: "runner_001", NodeID: "node_stale",
+		Command: CommandLocalMCPToolCall, Status: JobFailed, ErrorMessage: "MCP_CATALOG_STALE: replan required",
+		ResultCallbackState: CallbackPending, FollowupCallbackState: CallbackPending,
+	}
+	service := &fakeRunnerService{
+		job:       &LocalJob{ID: "local_job_next", Status: JobClaimed},
+		staleJobs: []*LocalJob{stale},
+	}
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/local-runners/runner_001/jobs/claim", nil)
+	req.Header.Set("X-Runner-ID", "runner_001")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || service.claimRunnerID != "runner_001" || service.retireCalls != 1 {
+		t.Fatalf("claim did not retire stale work first: status=%d service=%#v", res.Code, service)
+	}
+	if sink.failureCalls != 1 || stale.ResultCallbackState != CallbackDelivered {
+		t.Fatalf("stale failure was not delivered before next claim: sink=%#v job=%#v", sink, stale)
+	}
+}
+
 func TestHandlerClaimJobReturnsSemanticLocalJob(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := &fakeRunnerService{
@@ -689,6 +755,9 @@ type fakeRunnerService struct {
 	markErr                   error
 	scopedManifest            *tool.ToolManifest
 	scopedManifestErr         error
+	staleJobs                 []*LocalJob
+	retireCalls               int
+	retireErr                 error
 }
 
 func (f *fakeRunnerService) ResolveMCPJobManifest(_ context.Context, _ *LocalJob) (*tool.ToolManifest, error) {
@@ -708,6 +777,20 @@ func (f *fakeRunnerService) RegisterRunner(_ context.Context, req RegisterRunner
 func (f *fakeRunnerService) Heartbeat(_ context.Context, _ string, req HeartbeatRequest) error {
 	f.heartbeats = append(f.heartbeats, req)
 	return nil
+}
+
+func (f *fakeRunnerService) RetireStaleMCPJobs(_ context.Context, _ JobMutationIdentity) ([]*LocalJob, error) {
+	f.retireCalls++
+	if f.retireErr != nil {
+		return nil, f.retireErr
+	}
+	jobs := make([]*LocalJob, 0, len(f.staleJobs))
+	for _, job := range f.staleJobs {
+		if job != nil && (job.ResultCallbackState != CallbackDelivered || job.FollowupCallbackState != CallbackDelivered) {
+			jobs = append(jobs, job)
+		}
+	}
+	return jobs, nil
 }
 
 func (f *fakeRunnerService) ClaimJob(_ context.Context, runnerID string) (*LocalJob, error) {
@@ -753,12 +836,13 @@ func (f *fakeRunnerService) FailJob(_ context.Context, _ JobMutationIdentity, jo
 func (f *fakeRunnerService) ClaimTerminalCallback(_ context.Context, _ JobMutationIdentity, jobID string, phase CallbackPhase) (*TerminalCallbackClaim, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.job == nil {
+	job := f.jobByIDLocked(jobID)
+	if job == nil {
 		return nil, ErrJobAccessDenied
 	}
-	state := &f.job.ResultCallbackState
+	state := &job.ResultCallbackState
 	if phase == CallbackPhaseFollowup {
-		state = &f.job.FollowupCallbackState
+		state = &job.FollowupCallbackState
 	}
 	switch *state {
 	case CallbackDelivered:
@@ -771,30 +855,41 @@ func (f *fakeRunnerService) ClaimTerminalCallback(_ context.Context, _ JobMutati
 	}
 }
 
-func (f *fakeRunnerService) AcknowledgeTerminalCallback(_ context.Context, _ string, phase CallbackPhase, _ string) error {
+func (f *fakeRunnerService) AcknowledgeTerminalCallback(_ context.Context, jobID string, phase CallbackPhase, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.markErr != nil || f.job == nil {
+	job := f.jobByIDLocked(jobID)
+	if f.markErr != nil || job == nil {
 		return f.markErr
 	}
 	if phase == CallbackPhaseResult {
-		f.job.ResultCallbackState = CallbackDelivered
+		job.ResultCallbackState = CallbackDelivered
 	} else {
-		f.job.FollowupCallbackState = CallbackDelivered
+		job.FollowupCallbackState = CallbackDelivered
 	}
 	return nil
 }
 
-func (f *fakeRunnerService) ReleaseTerminalCallback(_ context.Context, _ string, phase CallbackPhase, _ string) error {
+func (f *fakeRunnerService) ReleaseTerminalCallback(_ context.Context, jobID string, phase CallbackPhase, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.job == nil {
+	job := f.jobByIDLocked(jobID)
+	if job == nil {
 		return nil
 	}
 	if phase == CallbackPhaseResult {
-		f.job.ResultCallbackState = CallbackPending
+		job.ResultCallbackState = CallbackPending
 	} else {
-		f.job.FollowupCallbackState = CallbackPending
+		job.FollowupCallbackState = CallbackPending
+	}
+	return nil
+}
+
+func (f *fakeRunnerService) jobByIDLocked(jobID string) *LocalJob {
+	for _, job := range append(append([]*LocalJob(nil), f.staleJobs...), f.job) {
+		if job != nil && job.ID == jobID {
+			return job
+		}
 	}
 	return nil
 }

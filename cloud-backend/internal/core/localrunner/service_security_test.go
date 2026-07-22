@@ -1,11 +1,20 @@
 package localrunner
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
+
+var _ StaleMCPJobRetirer = (*Service)(nil)
+
+type staleMCPRetirementContract interface {
+	RetireStaleMCPJobs(context.Context, JobMutationIdentity) ([]*LocalJob, error)
+}
+
+var _ staleMCPRetirementContract = (*Service)(nil)
 
 func TestDispatchOwnerResolutionSQLUsesDurableTaskWorkflowAndProjectOwners(t *testing.T) {
 	query := strings.ToLower(resolveDispatchOwnerSQL)
@@ -97,6 +106,69 @@ func TestLeaseMaintenanceCoversClaimedAndRunningJobs(t *testing.T) {
 	reap := strings.ToLower(reapExpiredLeasesSQL)
 	if !strings.Contains(reap, "status in ('claimed','running')") || !strings.Contains(reap, "runner_id=null") {
 		t.Fatalf("lease reaper must invalidate claimed and running jobs: %s", reap)
+	}
+}
+
+func TestStaleMCPRetirementSQLAtomicallyScopesRunnerAndCatalogBinding(t *testing.T) {
+	query := strings.ToLower(strings.ReplaceAll(retireStaleMCPJobsSQL, " ", ""))
+	for _, required := range []string{
+		"update local_jobs lj", "lj.status='pending'", "lj.command='local_mcp_tool_call'",
+		"coalesce(lj.user_id,'')=$1", "coalesce(lj.target_runner_id,'')=$3", "runner_id=$3",
+		"lr.id=$3", "coalesce(lr.user_id,'')=$1", "coalesce(lr.device_id,'')=$2",
+		"coalesce(lr.session_id,'')=$4", "lr.status='online'", "lr.last_heartbeat",
+		"cap->>'catalogrevision'=lj.catalog_revision", "advertised->>'providerid'=lj.mcp_provider_id",
+		"advertised->>'logicaltoolname'=lj.mcp_logical_tool_name", "advertised->>'remotetoolname'=lj.mcp_remote_tool_name",
+		"status='failed'", "'mcp_catalog_stale'", "result_callback_state='pending'", "followup_callback_state='pending'",
+	} {
+		if !strings.Contains(query, strings.ReplaceAll(required, " ", "")) {
+			t.Fatalf("stale MCP retirement SQL missing %q: %s", required, retireStaleMCPJobsSQL)
+		}
+	}
+	if strings.Contains(query, "statusin('claimed','running')") {
+		t.Fatalf("catalog changes must never retire claimed or running work: %s", retireStaleMCPJobsSQL)
+	}
+}
+
+func TestPendingStaleMCPCallbackSQLIsTenantAndSessionScoped(t *testing.T) {
+	query := strings.ToLower(strings.ReplaceAll(pendingStaleMCPCallbacksSQL, " ", ""))
+	for _, required := range []string{
+		"lj.status='failed'", "coalesce(lj.user_id,'')=$1", "coalesce(lj.runner_id,'')=$3",
+		"coalesce(lj.target_runner_id,'')=$3", "lj.error_json->>'code'='mcp_catalog_stale'",
+		"result_callback_state='pending'", "followup_callback_state='pending'",
+		"lr.id=$3", "coalesce(lr.user_id,'')=$1", "coalesce(lr.device_id,'')=$2", "coalesce(lr.session_id,'')=$4",
+		"lr.status='online'", "lr.last_heartbeat",
+	} {
+		if !strings.Contains(query, strings.ReplaceAll(required, " ", "")) {
+			t.Fatalf("stale MCP callback SQL missing %q: %s", required, pendingStaleMCPCallbacksSQL)
+		}
+	}
+}
+
+func TestRetiredMCPJobCountUsesRowsAffected(t *testing.T) {
+	if got := retiredMCPJobCount(pgconn.NewCommandTag("UPDATE 0")); got != 0 {
+		t.Fatalf("zero-row retirement count=%d", got)
+	}
+	if got := retiredMCPJobCount(pgconn.NewCommandTag("UPDATE 3")); got != 3 {
+		t.Fatalf("retirement count=%d want 3", got)
+	}
+}
+
+func TestMCPIdempotencyIdentityIncludesFullCatalogRevision(t *testing.T) {
+	base := "task-a-node-a"
+	revisionA := strings.Repeat("a", 64)
+	revisionB := strings.Repeat("b", 64)
+	keyA := mcpDispatchIdempotencyKey(base, revisionA)
+	if keyA == base || keyA != mcpDispatchIdempotencyKey(base, revisionA) {
+		t.Fatalf("same MCP plan must have a stable revision-scoped identity: %q", keyA)
+	}
+	if keyA == mcpDispatchIdempotencyKey(base, revisionB) {
+		t.Fatalf("new catalog revision was swallowed by old identity: %q", keyA)
+	}
+	if len(keyA) > 128 {
+		t.Fatalf("MCP idempotency identity exceeds database column: %d", len(keyA))
+	}
+	if got := mcpDispatchIdempotencyKey("", revisionA); got != "" {
+		t.Fatalf("empty idempotency key must remain empty, got %q", got)
 	}
 }
 

@@ -2,6 +2,7 @@ package localrunner
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -158,6 +159,84 @@ const reapExpiredLeasesSQL = `UPDATE local_jobs
    AND lease_expires_at IS NOT NULL
    AND lease_expires_at < NOW()`
 
+const retireStaleMCPJobsSQL = `UPDATE local_jobs lj
+ SET status='FAILED', runner_id=$3,
+     error_message='MCP_CATALOG_STALE: target runner catalog changed; replan required',
+     error_json=jsonb_build_object(
+       'code','MCP_CATALOG_STALE',
+       'message','MCP_CATALOG_STALE: target runner catalog changed; replan required',
+       'catalogRevision',COALESCE(lj.catalog_revision,'')
+     ),
+     diagnostics=jsonb_build_object('retiredByRunnerId',$3),
+     retryable=true, result_callback_state='PENDING', followup_callback_state='PENDING',
+     lease_expires_at=NULL, completed_at=NOW(), updated_at=NOW()
+ WHERE lj.status='PENDING'
+   AND lj.command='` + CommandLocalMCPToolCall + `'
+   AND COALESCE(lj.user_id,'')=$1
+   AND COALESCE(lj.target_runner_id,'')=$3
+   AND EXISTS (
+     SELECT 1 FROM local_runners lr
+     WHERE lr.id=$3
+       AND COALESCE(lr.user_id,'')=$1
+       AND COALESCE(lr.device_id,'')=$2
+       AND COALESCE(lr.session_id,'')=$4
+       AND lr.status='ONLINE'
+       AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
+   )
+   AND NOT EXISTS (
+     SELECT 1
+     FROM local_runners lr
+     CROSS JOIN LATERAL jsonb_array_elements(COALESCE(lr.capabilities,'[]'::jsonb)) cap
+     WHERE lr.id=$3
+       AND COALESCE(lr.user_id,'')=$1
+       AND COALESCE(lr.device_id,'')=$2
+       AND COALESCE(lr.session_id,'')=$4
+       AND lr.status='ONLINE'
+       AND cap->>'command'='` + CommandLocalMCPToolCall + `'
+       AND COALESCE((cap->>'available')::boolean,false)=true
+       AND cap->>'catalogRevision'=lj.catalog_revision
+       AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(COALESCE(cap->'mcpTools','[]'::jsonb)) advertised
+         WHERE advertised->>'providerId'=lj.mcp_provider_id
+           AND advertised->>'logicalToolName'=lj.mcp_logical_tool_name
+           AND advertised->>'remoteToolName'=lj.mcp_remote_tool_name
+       )
+   )`
+
+const pendingStaleMCPCallbacksSQL = ` FROM local_jobs lj
+ WHERE lj.status='FAILED'
+   AND lj.command='` + CommandLocalMCPToolCall + `'
+   AND COALESCE(lj.user_id,'')=$1
+   AND COALESCE(lj.runner_id,'')=$3
+   AND COALESCE(lj.target_runner_id,'')=$3
+   AND lj.error_json->>'code'='MCP_CATALOG_STALE'
+   AND (lj.result_callback_state='PENDING' OR lj.followup_callback_state='PENDING')
+   AND EXISTS (
+     SELECT 1 FROM local_runners lr
+     WHERE lr.id=$3
+       AND COALESCE(lr.user_id,'')=$1
+       AND COALESCE(lr.device_id,'')=$2
+       AND COALESCE(lr.session_id,'')=$4
+       AND lr.status='ONLINE'
+       AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
+   )
+ ORDER BY lj.completed_at, lj.id
+ LIMIT 100
+ FOR UPDATE OF lj SKIP LOCKED`
+
+func retiredMCPJobCount(result pgconn.CommandTag) int64 {
+	return result.RowsAffected()
+}
+
+func mcpDispatchIdempotencyKey(base, catalogRevision string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(base + "\x00" + strings.TrimSpace(catalogRevision)))
+	return fmt.Sprintf("mcp:%x", sum[:])
+}
+
 func NewService(pool *pgxpool.Pool) *Service {
 	return &Service{pool: pool}
 }
@@ -254,6 +333,63 @@ func (s *Service) Heartbeat(ctx context.Context, runnerID string, req HeartbeatR
 	return nil
 }
 
+// RetireStaleMCPJobs atomically fails only unclaimed MCP jobs whose immutable
+// catalog binding is no longer advertised by the exact authenticated target
+// runner. It also returns previously retired jobs with pending callbacks so a
+// transient DAG/follow-up failure is replayed on the next heartbeat or claim.
+func (s *Service) RetireStaleMCPJobs(ctx context.Context, identity JobMutationIdentity) ([]*LocalJob, error) {
+	identity.UserID = strings.TrimSpace(identity.UserID)
+	identity.DeviceID = strings.TrimSpace(identity.DeviceID)
+	identity.RunnerID = strings.TrimSpace(identity.RunnerID)
+	identity.SessionID = strings.TrimSpace(identity.SessionID)
+	if identity.UserID == "" || identity.DeviceID == "" || identity.RunnerID == "" || identity.SessionID == "" {
+		return nil, fmt.Errorf("%w: authenticated user, device, runner, and session are required for stale MCP retirement", ErrRunnerAccessDenied)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin stale MCP retirement: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	result, err := tx.Exec(ctx, retireStaleMCPJobsSQL,
+		identity.UserID, identity.DeviceID, identity.RunnerID, identity.SessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("retire stale MCP jobs: %w", err)
+	}
+	retiredCount := retiredMCPJobCount(result)
+
+	rows, err := tx.Query(ctx, localJobSelectPrefix()+pendingStaleMCPCallbacksSQL,
+		identity.UserID, identity.DeviceID, identity.RunnerID, identity.SessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list pending stale MCP callbacks: %w", err)
+	}
+	jobs := make([]*LocalJob, 0)
+	for rows.Next() {
+		job, scanErr := scanJob(rows)
+		if scanErr != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan pending stale MCP callback: %w", scanErr)
+		}
+		jobs = append(jobs, job)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return nil, fmt.Errorf("iterate pending stale MCP callbacks: %w", rowsErr)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit stale MCP retirement: %w", err)
+	}
+	if retiredCount > 0 {
+		zap.L().Warn("retired stale MCP catalog jobs",
+			zap.String("runnerId", identity.RunnerID), zap.Int64("count", retiredCount))
+	}
+	return jobs, nil
+}
+
 // CreateJob creates a new local job for a project.
 func (s *Service) CreateJob(ctx context.Context, projectID, command, payload string) (*LocalJob, error) {
 	var parsed map[string]interface{}
@@ -325,6 +461,9 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 	idempotencyKey := req.IdempotencyKey
 	if idempotencyKey == "" && req.TaskID != "" && req.NodeID != "" {
 		idempotencyKey = req.TaskID + "-" + req.NodeID
+	}
+	if command == CommandLocalMCPToolCall {
+		idempotencyKey = mcpDispatchIdempotencyKey(idempotencyKey, req.CatalogRevision)
 	}
 
 	now := time.Now()

@@ -283,6 +283,13 @@ func TestServiceScopesJobsAndMCPCatalogsByUserTargetAndRevisionPostgres(t *testi
 	if err := service.ValidateJobAccess(ctx, userA, runnerA2.RunnerID, mcpJob.ID); err == nil {
 		t.Fatal("sibling runner must not mutate claimed target job")
 	}
+	pendingStaleRequest := mcpRequest
+	pendingStaleRequest.NodeID = prefix + "-stale-node"
+	pendingStaleRequest.IdempotencyKey = prefix + "-same-logical-plan"
+	pendingStaleJob, err := service.DispatchLocalJob(ctx, pendingStaleRequest)
+	if err != nil || pendingStaleJob.Status != JobPending {
+		t.Fatalf("dispatch pending MCP job for catalog transition: job=%#v err=%v", pendingStaleJob, err)
+	}
 
 	before, err := service.GetOnlineRunnerMCPToolCatalog(ctx, userA, prefix+"-device-a1", runnerA1.RunnerID)
 	if err != nil || before == nil || before.Revision != revision {
@@ -306,6 +313,25 @@ func TestServiceScopesJobsAndMCPCatalogsByUserTargetAndRevisionPostgres(t *testi
 	}
 	if err := service.Heartbeat(ctx, runnerA1.RunnerID, HeartbeatRequest{SessionID: runnerA1.SessionID, Status: "online", Capabilities: &updatedCapabilities}); err != nil {
 		t.Fatalf("update heartbeat: %v", err)
+	}
+	retired, err := service.RetireStaleMCPJobs(ctx, JobMutationIdentity{
+		UserID: userA, DeviceID: prefix + "-device-a1", RunnerID: runnerA1.RunnerID, SessionID: runnerA1.SessionID,
+	})
+	if err != nil || len(retired) != 1 || retired[0].ID != pendingStaleJob.ID || retired[0].Status != JobFailed ||
+		retired[0].Error["code"] != "MCP_CATALOG_STALE" || retired[0].ResultCallbackState != CallbackPending {
+		t.Fatalf("stale pending MCP job was not retired for callback delivery: jobs=%#v err=%v", retired, err)
+	}
+	claimedOriginal, err := service.GetJob(ctx, mcpJob.ID)
+	if err != nil || claimedOriginal.Status != JobClaimed {
+		t.Fatalf("catalog retirement must not mutate claimed work: job=%#v err=%v", claimedOriginal, err)
+	}
+	newRevisionRequest := pendingStaleRequest
+	newRevisionRequest.CatalogRevision = updatedRevision
+	newRevisionRequest.MCPLogicalToolName = "studio.inspect"
+	newRevisionRequest.MCPRemoteToolName = "inspect"
+	newRevisionJob, err := service.DispatchLocalJob(ctx, newRevisionRequest)
+	if err != nil || newRevisionJob.ID == pendingStaleJob.ID || newRevisionJob.Status != JobPending {
+		t.Fatalf("new catalog revision was swallowed by stale pending identity: old=%#v new=%#v err=%v", pendingStaleJob, newRevisionJob, err)
 	}
 	afterUpdate, err := service.GetOnlineRunnerMCPToolCatalog(ctx, userA, prefix+"-device-a1", runnerA1.RunnerID)
 	if err != nil || afterUpdate == nil || afterUpdate.Revision != updatedRevision || afterUpdate.Tools[0].RemoteToolName != "inspect" {
