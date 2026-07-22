@@ -102,6 +102,26 @@ func (r *HybridToolRetriever) Retrieve(ctx context.Context, req ToolRetrieveRequ
 		if score <= 0 {
 			continue
 		}
+		inputSchema, err := canonicalToolSchema(manifest.InputSchema, manifest.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s input schema: %w", manifest.Name, err)
+		}
+		outputSchema, err := canonicalToolSchema(manifest.OutputSchema, manifest.Output)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s output schema: %w", manifest.Name, err)
+		}
+		legacyParameters, err := cloneLegacyParamDefs(manifest.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s legacy parameters: %w", manifest.Name, err)
+		}
+		legacyOutput, err := cloneLegacyParamDefs(manifest.Output)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s legacy output: %w", manifest.Name, err)
+		}
+		providerCapabilities, err := cloneJSONMap(manifest.ProviderCapabilities)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s provider capabilities: %w", manifest.Name, err)
+		}
 		candidates = append(candidates, ToolCandidate{
 			Name:                 manifest.Name,
 			Description:          manifest.Description,
@@ -109,11 +129,11 @@ func (r *HybridToolRetriever) Retrieve(ctx context.Context, req ToolRetrieveRequ
 			Tags:                 append([]string(nil), manifest.Tags...),
 			Reason:               strings.Join(reasonParts, "; "),
 			Score:                score,
-			InputSchema:          canonicalToolSchema(manifest.InputSchema, manifest.Parameters),
-			OutputSchema:         canonicalToolSchema(manifest.OutputSchema, manifest.Output),
-			LegacyParameters:     cloneLegacyParamDefs(manifest.Parameters),
-			LegacyOutput:         cloneLegacyParamDefs(manifest.Output),
-			ProviderCapabilities: cloneJSONMap(manifest.ProviderCapabilities),
+			InputSchema:          inputSchema,
+			OutputSchema:         outputSchema,
+			LegacyParameters:     legacyParameters,
+			LegacyOutput:         legacyOutput,
+			ProviderCapabilities: providerCapabilities,
 			CostLevel:            manifest.CostLevel,
 			RiskLevel:            manifest.RiskLevel,
 			Type:                 manifest.Type,

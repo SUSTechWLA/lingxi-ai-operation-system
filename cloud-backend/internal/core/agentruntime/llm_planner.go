@@ -90,7 +90,11 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 		return nil, fmt.Errorf("no tools matched domain %q", domain)
 	}
 
-	raw, err := p.client.Complete(ctx, plannerSystemPrompt(), plannerUserPrompt(req, domain, candidates))
+	userPrompt, err := plannerUserPrompt(req, domain, candidates)
+	if err != nil {
+		return nil, fmt.Errorf("build planner prompt: %w", err)
+	}
+	raw, err := p.client.Complete(ctx, plannerSystemPrompt(), userPrompt)
 	if err != nil {
 		return nil, err
 	}
@@ -184,13 +188,20 @@ func (p *LLMPlanner) repairPlanWithManifests(ctx context.Context, originalPlan *
 		return nil, fmt.Errorf("marshal original plan for repair: %w", err)
 	}
 
+	compactManifests, err := compactToolManifests(manifests)
+	if err != nil {
+		return nil, fmt.Errorf("build repair tool prompt: %w", err)
+	}
 	userPayload := map[string]interface{}{
 		"guardError":     guardError,
 		"originalPlan":   json.RawMessage(planJSON),
-		"candidateTools": compactToolManifests(manifests),
+		"candidateTools": compactManifests,
 	}
 
-	encoded, _ := json.MarshalIndent(userPayload, "", "  ")
+	encoded, err := json.MarshalIndent(userPayload, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal repair prompt: %w", err)
+	}
 	userPrompt := "你生成的 AgentPlan 未通过系统校验。请只输出修复后的 AgentPlan JSON。不要解释，不要 Markdown。\n" + string(encoded)
 
 	systemPrompt := strings.TrimSpace(`
@@ -418,15 +429,23 @@ func plannerSystemPrompt() string {
 `)
 }
 
-func plannerUserPrompt(req StartRunRequest, domain string, candidates []ToolCandidate) string {
+func plannerUserPrompt(req StartRunRequest, domain string, candidates []ToolCandidate) (string, error) {
+	plannerContext, err := sanitizedPlannerContext(req.Context)
+	if err != nil {
+		return "", err
+	}
+	compactCandidates, err := compactToolCandidates(candidates)
+	if err != nil {
+		return "", err
+	}
 	payload := map[string]interface{}{
 		"userRequest": map[string]interface{}{
 			"message": req.Message,
 			"domain":  domain,
-			"context": req.Context,
+			"context": plannerContext,
 			"mode":    req.Mode,
 		},
-		"candidateTools": compactToolCandidates(candidates),
+		"candidateTools": compactCandidates,
 		"requiredSchema": map[string]interface{}{
 			"goal":   "string",
 			"domain": "string",
@@ -450,22 +469,45 @@ func plannerUserPrompt(req StartRunRequest, domain string, candidates []ToolCand
 			"默认 plan once，maxReplans 不超过 1",
 		},
 	}
-	encoded, _ := json.MarshalIndent(payload, "", "  ")
-	return "请严格返回 AgentPlan JSON，不能返回 DAGRequest。\n" + string(encoded)
+	encoded, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal planner payload: %w", err)
+	}
+	return "请严格返回 AgentPlan JSON，不能返回 DAGRequest。\n" + string(encoded), nil
 }
 
-func compactToolCandidates(candidates []ToolCandidate) []map[string]interface{} {
+func compactToolCandidates(candidates []ToolCandidate) ([]map[string]interface{}, error) {
 	out := make([]map[string]interface{}, 0, len(candidates))
 	for _, candidate := range candidates {
+		inputSchema, err := cloneJSONMap(candidate.InputSchema)
+		if err != nil {
+			return nil, fmt.Errorf("candidate %s input schema: %w", candidate.Name, err)
+		}
+		outputSchema, err := cloneJSONMap(candidate.OutputSchema)
+		if err != nil {
+			return nil, fmt.Errorf("candidate %s output schema: %w", candidate.Name, err)
+		}
+		legacyParameters, err := cloneLegacyParamDefs(candidate.LegacyParameters)
+		if err != nil {
+			return nil, fmt.Errorf("candidate %s legacy parameters: %w", candidate.Name, err)
+		}
+		legacyOutput, err := cloneLegacyParamDefs(candidate.LegacyOutput)
+		if err != nil {
+			return nil, fmt.Errorf("candidate %s legacy output: %w", candidate.Name, err)
+		}
+		providerCapabilities, err := cloneJSONMap(candidate.ProviderCapabilities)
+		if err != nil {
+			return nil, fmt.Errorf("candidate %s provider capabilities: %w", candidate.Name, err)
+		}
 		entry := map[string]interface{}{
 			"name":                 candidate.Name,
 			"description":          candidate.Description,
 			"type":                 candidate.Type,
-			"inputSchema":          cloneJSONMap(candidate.InputSchema),
-			"outputSchema":         cloneJSONMap(candidate.OutputSchema),
-			"parameters":           cloneLegacyParamDefs(candidate.LegacyParameters),
-			"output":               cloneLegacyParamDefs(candidate.LegacyOutput),
-			"providerCapabilities": cloneJSONMap(candidate.ProviderCapabilities),
+			"inputSchema":          inputSchema,
+			"outputSchema":         outputSchema,
+			"parameters":           legacyParameters,
+			"output":               legacyOutput,
+			"providerCapabilities": providerCapabilities,
 			"capabilities":         append([]string(nil), candidate.Capabilities...),
 			"tags":                 append([]string(nil), candidate.Tags...),
 			"costLevel":            candidate.CostLevel,
@@ -496,16 +538,40 @@ func compactToolCandidates(candidates []ToolCandidate) []map[string]interface{} 
 				entry["humanReview"] = candidate.Manifest.HumanReview
 			}
 		}
-		out = append(out, cloneJSONMap(entry))
+		clonedEntry, err := cloneJSONMap(entry)
+		if err != nil {
+			return nil, fmt.Errorf("candidate %s prompt metadata: %w", candidate.Name, err)
+		}
+		out = append(out, clonedEntry)
 	}
-	return out
+	return out, nil
 }
 
-func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface{} {
+func compactToolManifests(manifests []*tool.ToolManifest) ([]map[string]interface{}, error) {
 	out := make([]map[string]interface{}, 0, len(manifests))
 	for _, manifest := range manifests {
 		if manifest == nil {
 			continue
+		}
+		inputSchema, err := canonicalToolSchema(manifest.InputSchema, manifest.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s input schema: %w", manifest.Name, err)
+		}
+		outputSchema, err := canonicalToolSchema(manifest.OutputSchema, manifest.Output)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s output schema: %w", manifest.Name, err)
+		}
+		legacyParameters, err := cloneLegacyParamDefs(manifest.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s legacy parameters: %w", manifest.Name, err)
+		}
+		legacyOutput, err := cloneLegacyParamDefs(manifest.Output)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s legacy output: %w", manifest.Name, err)
+		}
+		providerCapabilities, err := cloneJSONMap(manifest.ProviderCapabilities)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s provider capabilities: %w", manifest.Name, err)
 		}
 		entry := map[string]interface{}{
 			"name":                 manifest.Name,
@@ -515,10 +581,10 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 			"executionPlane":       manifest.ExecutionPlane,
 			"requiresUserDevice":   manifest.RequiresUserDevice,
 			"artifactLocation":     manifest.ArtifactLocation,
-			"inputSchema":          canonicalToolSchema(manifest.InputSchema, manifest.Parameters),
-			"outputSchema":         canonicalToolSchema(manifest.OutputSchema, manifest.Output),
-			"parameters":           cloneLegacyParamDefs(manifest.Parameters),
-			"output":               cloneLegacyParamDefs(manifest.Output),
+			"inputSchema":          inputSchema,
+			"outputSchema":         outputSchema,
+			"parameters":           legacyParameters,
+			"output":               legacyOutput,
 			"capabilities":         manifest.Capabilities,
 			"tags":                 manifest.Tags,
 			"whenToUse":            manifest.WhenToUse,
@@ -533,7 +599,7 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 			"skillPackageId":       manifest.SkillPackageID,
 			"provider":             manifest.Provider,
 			"providerBinding":      manifest.ProviderBinding,
-			"providerCapabilities": cloneJSONMap(manifest.ProviderCapabilities),
+			"providerCapabilities": providerCapabilities,
 		}
 		// Include local-tool fields when applicable.
 		if manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
@@ -544,9 +610,13 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 		if manifest.HumanReview != nil {
 			entry["humanReview"] = manifest.HumanReview
 		}
-		out = append(out, cloneJSONMap(entry))
+		clonedEntry, err := cloneJSONMap(entry)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s repair prompt metadata: %w", manifest.Name, err)
+		}
+		out = append(out, clonedEntry)
 	}
-	return out
+	return out, nil
 }
 
 func normalizeLLMPlan(plan *AgentPlan, req StartRunRequest, domain string, maxTools int, manifests []*tool.ToolManifest) {

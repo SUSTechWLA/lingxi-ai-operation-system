@@ -116,6 +116,30 @@ func TestToolRetrieverDerivesClosedCanonicalSchemaFromLegacyParamDefs(t *testing
 	}
 }
 
+func TestToolRetrieverRejectsNonJSONCanonicalSchemasWithoutRecursing(t *testing.T) {
+	cyclic := map[string]interface{}{"type": "object"}
+	cyclic["properties"] = cyclic
+	tests := []struct {
+		name   string
+		schema map[string]interface{}
+	}{
+		{name: "cycle", schema: cyclic},
+		{name: "function", schema: map[string]interface{}{"type": "object", "invalid": func() {}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			retriever := NewHybridToolRetriever([]*tool.ToolManifest{{
+				Name: "invalid_schema_tool", Description: "invalid schema search", Capabilities: []string{"general", "search"},
+				Tags: []string{"search"}, InputSchema: tt.schema, CostLevel: tool.CostLow, RiskLevel: tool.RiskLow,
+			}})
+			_, err := retriever.Retrieve(context.Background(), ToolRetrieveRequest{UserInput: "search", Domain: "general", MaxCandidates: 1})
+			if err == nil || !strings.Contains(err.Error(), "tool invalid_schema_tool input schema") {
+				t.Fatalf("Retrieve error = %v, want explicit invalid input schema error", err)
+			}
+		})
+	}
+}
+
 func TestToolRetrieverRanksFreshKnowledgeToolForCurrentEvent(t *testing.T) {
 	retriever := NewHybridToolRetriever([]*tool.ToolManifest{
 		{

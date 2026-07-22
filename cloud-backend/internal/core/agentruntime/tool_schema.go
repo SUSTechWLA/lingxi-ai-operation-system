@@ -1,6 +1,8 @@
 package agentruntime
 
 import (
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -8,7 +10,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
-func canonicalToolSchema(schema map[string]interface{}, legacy map[string]tool.ParamDef) map[string]interface{} {
+func canonicalToolSchema(schema map[string]interface{}, legacy map[string]tool.ParamDef) (map[string]interface{}, error) {
 	if schema != nil {
 		return cloneJSONMap(schema)
 	}
@@ -25,7 +27,11 @@ func canonicalToolSchema(schema map[string]interface{}, legacy map[string]tool.P
 			property["description"] = definition.Description
 		}
 		if definition.Default != nil {
-			property["default"] = cloneJSONValue(definition.Default)
+			clonedDefault, err := cloneJSONValue(definition.Default)
+			if err != nil {
+				return nil, fmt.Errorf("legacy property %s default: %w", name, err)
+			}
+			property["default"] = clonedDefault
 		}
 		if len(definition.Enum) > 0 {
 			property["enum"] = append([]string(nil), definition.Enum...)
@@ -44,35 +50,49 @@ func canonicalToolSchema(schema map[string]interface{}, legacy map[string]tool.P
 	if len(required) > 0 {
 		out["required"] = required
 	}
-	return out
+	return out, nil
 }
 
-func cloneLegacyParamDefs(input map[string]tool.ParamDef) map[string]tool.ParamDef {
+func cloneLegacyParamDefs(input map[string]tool.ParamDef) (map[string]tool.ParamDef, error) {
 	if input == nil {
-		return nil
+		return nil, nil
 	}
 	out := make(map[string]tool.ParamDef, len(input))
 	for name, definition := range input {
 		definition.Enum = append([]string(nil), definition.Enum...)
-		definition.Default = cloneJSONValue(definition.Default)
+		clonedDefault, err := cloneJSONValue(definition.Default)
+		if err != nil {
+			return nil, fmt.Errorf("legacy property %s default: %w", name, err)
+		}
+		definition.Default = clonedDefault
 		out[name] = definition
 	}
-	return out
+	return out, nil
 }
 
-func cloneJSONMap(input map[string]interface{}) map[string]interface{} {
+func cloneJSONMap(input map[string]interface{}) (map[string]interface{}, error) {
 	if input == nil {
-		return nil
+		return nil, nil
 	}
-	cloned, _ := cloneJSONValue(input).(map[string]interface{})
-	return cloned
+	clonedValue, err := cloneJSONValue(input)
+	if err != nil {
+		return nil, err
+	}
+	cloned, ok := clonedValue.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("JSON value is %T, want object", clonedValue)
+	}
+	return cloned, nil
 }
 
-func cloneJSONValue(input interface{}) interface{} {
+func cloneJSONValue(input interface{}) (interface{}, error) {
 	if input == nil {
-		return nil
+		return nil, nil
 	}
-	return cloneJSONReflect(reflect.ValueOf(input)).Interface()
+	if _, err := json.Marshal(input); err != nil {
+		return nil, fmt.Errorf("value is not JSON-compatible: %w", err)
+	}
+	return cloneJSONReflect(reflect.ValueOf(input)).Interface(), nil
 }
 
 func cloneJSONReflect(value reflect.Value) reflect.Value {

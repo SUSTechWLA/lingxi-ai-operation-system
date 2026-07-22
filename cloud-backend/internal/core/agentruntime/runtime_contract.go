@@ -150,6 +150,11 @@ func (c AgentRuntimeContract) Validate() error {
 		if len(layer.Components) == 0 {
 			return fmt.Errorf("layer %s has no implementation components", layer.Name)
 		}
+		for _, component := range layer.Components {
+			if !knownAgentRuntimeComponent(component) {
+				return fmt.Errorf("layer %s references unknown implementation component %s", layer.Name, component)
+			}
+		}
 		for _, dependency := range layer.DependsOn {
 			if _, exists := byName[dependency]; !exists {
 				return fmt.Errorf("layer %s depends on unknown layer %s", layer.Name, dependency)
@@ -160,6 +165,19 @@ func (c AgentRuntimeContract) Validate() error {
 		return err
 	}
 	return nil
+}
+
+func knownAgentRuntimeComponent(component string) bool {
+	switch component {
+	case "StartRunRequest", "plannerUserPrompt", "CompactedContext", "RoleMemory",
+		"ToolManifest", "HybridToolRetriever", "LLMPlanner",
+		"PlanGuard", "LocalCapabilityValidator",
+		"PlanCompiler", "PlanJudge",
+		"Runner", "PlanRepairer", "PlanCompiler.PreparePlan", "PlanGuard.ValidatePlan", "QualityPolicy.AutoRepair":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c AgentRuntimeContract) Conformance() AgentRuntimeConformanceReport {

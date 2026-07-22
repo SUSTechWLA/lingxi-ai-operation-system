@@ -2624,89 +2624,129 @@ func isContentGenerationTool(toolName string, manifest *tool.ToolManifest) bool 
 // injectQualityGates scans the plan steps and auto-inserts quality checker steps
 // after production tools that don't already have an explicit quality check in the plan.
 func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
-	usedStepIDs := make(map[string]bool, len(steps)*2)
-	existingGateForProduction := make(map[string]bool)
-	for _, s := range steps {
-		usedStepIDs[s.ID] = true
-		if s.Tool == "__quality_gate__" {
-			if productionStep, _ := s.Arguments["productionStep"].(string); productionStep != "" {
-				existingGateForProduction[productionStep] = true
-			}
+	base := stripSyntheticQualityGates(steps)
+	usedStepIDs := make(map[string]bool, len(base)*3)
+	for _, step := range base {
+		usedStepIDs[step.ID] = true
+	}
+
+	explicitCheckerByProduction := make(map[string]AgentStep)
+	claimedCheckerIDs := make(map[string]bool)
+	for _, production := range base {
+		manifest := c.manifestFor(production.Tool)
+		checkerTool, hasChecker := qualityCheckerFor(production.Tool, manifest)
+		if !hasChecker || manifest == nil || !manifest.QualityPolicy.Required {
+			continue
+		}
+		if checker, ok := qualityCheckerDependingOn(base, checkerTool, production.ID, claimedCheckerIDs); ok {
+			explicitCheckerByProduction[production.ID] = checker
+			claimedCheckerIDs[checker.ID] = true
 		}
 	}
 
-	var out []AgentStep
-	out = make([]AgentStep, 0, len(steps)*3)
-	pendingGatesByChecker := make(map[string][]AgentStep)
+	out := make([]AgentStep, 0, len(base)*3)
+	qualityCheckerIDs := make(map[string]bool, len(explicitCheckerByProduction))
+	for _, checker := range explicitCheckerByProduction {
+		qualityCheckerIDs[checker.ID] = true
+	}
 
-	for _, step := range steps {
-		out = append(out, step)
-		if pending := pendingGatesByChecker[step.ID]; len(pending) > 0 {
-			out = append(out, pending...)
+	for _, step := range base {
+		if qualityCheckerIDs[step.ID] {
+			continue
 		}
+		out = append(out, step)
 
 		manifest := c.manifestFor(step.Tool)
-		checkerName, hasChecker := qualityCheckerFor(step.Tool, manifest)
-		if !hasChecker || existingGateForProduction[step.ID] {
+		checkerTool, hasChecker := qualityCheckerFor(step.Tool, manifest)
+		if !hasChecker || manifest == nil || !manifest.QualityPolicy.Required {
 			continue
 		}
 
-		// Check if the production tool's manifest has qualityPolicy.Required.
-		if manifest == nil || !manifest.QualityPolicy.Required {
-			// Quality checker is recommended but not required by manifest; skip auto-insert.
-			continue
-		}
-
-		if existingChecker, ok := qualityCheckerDependingOn(steps, checkerName, step.ID); ok {
-			gateStep := buildRequiredQualityGate(step, manifest, existingChecker.ID, checkerName, c.manifestFor(checkerName))
-			pendingGatesByChecker[existingChecker.ID] = append(pendingGatesByChecker[existingChecker.ID], gateStep)
-			usedStepIDs[gateStep.ID] = true
-			continue
-		}
-
-		checkerStepID := uniqueQualityStepID(checkerName, step.ID+"_"+checkerName, usedStepIDs)
-		// Auto-insert a quality check step.
-		checkerStep := AgentStep{
-			ID:              checkerStepID,
-			Intent:          fmt.Sprintf("自动质量检查：%s 的输出", step.Tool),
-			Tool:            checkerName,
-			DependsOn:       []string{step.ID},
-			Arguments:       buildQualityCheckArgs(step),
-			ExpectedOutput:  []string{"passed", "score", "issues", "repairSuggestions"},
-			ProduceArtifact: true,
+		checkerStep, explicit := explicitCheckerByProduction[step.ID]
+		if !explicit {
+			checkerStepID := uniqueQualityStepID(checkerTool, step.ID+"_"+checkerTool, usedStepIDs)
+			checkerStep = AgentStep{
+				ID:              checkerStepID,
+				Intent:          fmt.Sprintf("自动质量检查：%s 的输出", step.Tool),
+				Tool:            checkerTool,
+				DependsOn:       []string{step.ID},
+				Arguments:       buildQualityCheckArgs(step),
+				ExpectedOutput:  []string{"passed", "score", "issues", "repairSuggestions"},
+				ProduceArtifact: true,
+			}
+			usedStepIDs[checkerStepID] = true
 		}
 		out = append(out, checkerStep)
-		usedStepIDs[checkerStepID] = true
 
-		gateStep := buildRequiredQualityGate(step, manifest, checkerStepID, checkerName, c.manifestFor(checkerName))
+		preferredGateID := step.ID + "_quality_gate"
+		gateID := uniqueQualityStepID(preferredGateID, preferredGateID+"_internal", usedStepIDs)
+		gateStep := buildRequiredQualityGate(gateID, step, manifest, checkerStep.ID, checkerTool, c.manifestFor(checkerTool))
 		out = append(out, gateStep)
-		usedStepIDs[gateStep.ID] = true
+		usedStepIDs[gateID] = true
 	}
 
-	// Rewire downstream dependencies through quality gates.
-	// Any step that depends on a production step with a quality gate
-	// must wait for the gate instead of the production step directly.
-	for i := range out {
-		s := &out[i]
-		for j, dep := range s.DependsOn {
-			for _, prev := range out {
-				if prev.Tool == "__quality_gate__" {
-					prod, _ := prev.Arguments["productionStep"].(string)
-					checker, _ := prev.Arguments["checkerStep"].(string)
-					if prod != "" && (dep == prod || dep == checker) && s.ID != checker && s.ID != prev.ID {
-						s.DependsOn[j] = prev.ID
-					}
+	// Only steps positioned after a rebuilt gate are downstream. Rewire them
+	// through the gate while preserving the checker -> production dependency.
+	for gateIndex, gate := range out {
+		if gate.Tool != "__quality_gate__" {
+			continue
+		}
+		productionID, _ := gate.Arguments["productionStep"].(string)
+		checkerID, _ := gate.Arguments["checkerStep"].(string)
+		for i := gateIndex + 1; i < len(out); i++ {
+			for j, dependency := range out[i].DependsOn {
+				if dependency == productionID || dependency == checkerID {
+					out[i].DependsOn[j] = gate.ID
 				}
 			}
 		}
 	}
-
+	for i := range out {
+		if len(out[i].DependsOn) == 0 {
+			out[i].DependsOn = nil
+		}
+	}
 	return out
 }
 
-func qualityCheckerDependingOn(steps []AgentStep, checkerTool, productionStep string) (AgentStep, bool) {
+func stripSyntheticQualityGates(steps []AgentStep) []AgentStep {
+	productionByGateID := make(map[string]string)
+	for _, step := range steps {
+		if step.Tool != "__quality_gate__" {
+			continue
+		}
+		productionID, _ := step.Arguments["productionStep"].(string)
+		productionByGateID[step.ID] = productionID
+	}
+	out := make([]AgentStep, 0, len(steps))
+	for _, step := range steps {
+		if step.Tool == "__quality_gate__" {
+			continue
+		}
+		cloned := step
+		cloned.DependsOn = nil
+		if step.DependsOn != nil {
+			cloned.DependsOn = make([]string, 0, len(step.DependsOn))
+		}
+		for _, dependency := range step.DependsOn {
+			if productionID, wasGate := productionByGateID[dependency]; wasGate {
+				if productionID != "" && !containsString(cloned.DependsOn, productionID) {
+					cloned.DependsOn = append(cloned.DependsOn, productionID)
+				}
+				continue
+			}
+			if !containsString(cloned.DependsOn, dependency) {
+				cloned.DependsOn = append(cloned.DependsOn, dependency)
+			}
+		}
+		out = append(out, cloned)
+	}
+	return out
+}
+
+func qualityCheckerDependingOn(steps []AgentStep, checkerTool, productionStep string, claimed map[string]bool) (AgentStep, bool) {
 	for _, candidate := range steps {
-		if candidate.Tool != checkerTool {
+		if candidate.Tool != checkerTool || claimed[candidate.ID] {
 			continue
 		}
 		for _, dependency := range candidate.DependsOn {
@@ -2733,13 +2773,13 @@ func uniqueQualityStepID(preferred, fallback string, used map[string]bool) strin
 	}
 }
 
-func buildRequiredQualityGate(production AgentStep, manifest *tool.ToolManifest, checkerStepID, checkerTool string, checkerManifest *tool.ToolManifest) AgentStep {
+func buildRequiredQualityGate(gateID string, production AgentStep, manifest *tool.ToolManifest, checkerStepID, checkerTool string, checkerManifest *tool.ToolManifest) AgentStep {
 	minScore := manifest.QualityPolicy.MinScore
 	if minScore <= 0 {
 		minScore = 85
 	}
 	return AgentStep{
-		ID:        production.ID + "_quality_gate",
+		ID:        gateID,
 		Intent:    fmt.Sprintf("质量门禁：%s 评分需 >=%d", checkerTool, minScore),
 		Tool:      "__quality_gate__",
 		DependsOn: []string{checkerStepID},

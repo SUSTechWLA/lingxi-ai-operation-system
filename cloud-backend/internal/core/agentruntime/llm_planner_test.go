@@ -101,6 +101,8 @@ func TestLLMPlannerPromptInjectsCompletePublicRequestContextAndCanonicalToolSche
 		Mode:    "analysis",
 		Context: map[string]interface{}{
 			"retrievedKnowledge": map[string]interface{}{"facts": []interface{}{"public launch fact"}, "sources": []interface{}{"kb://launch"}},
+			"modelProvider":      map[string]interface{}{"apiKey": "sk-never-prompt", "model": "private-provider"},
+			"projectState":       map[string]interface{}{"stage": "research", "credential": "private-credential", "safe": "visible"},
 			"compactedContext": CompactedContext{
 				ProjectGoal: "verify launch", CurrentStage: "research",
 				HardConstraints: []string{"cite public sources"},
@@ -125,8 +127,16 @@ func TestLLMPlannerPromptInjectsCompletePublicRequestContextAndCanonicalToolSche
 		t.Fatalf("request identity missing from prompt: %#v", request)
 	}
 	contextValue, _ := request["context"].(map[string]interface{})
-	if !reflectJSONEqual(contextValue, req.Context) {
+	wantContext := map[string]interface{}{
+		"retrievedKnowledge": req.Context["retrievedKnowledge"],
+		"compactedContext":   req.Context["compactedContext"],
+		"projectState":       map[string]interface{}{"stage": "research", "credential": "[REDACTED]", "safe": "visible"},
+	}
+	if !reflectJSONEqual(contextValue, wantContext) {
 		t.Fatalf("complete context was not injected: %#v", contextValue)
+	}
+	if strings.Contains(client.lastUserPrompt, "sk-never-prompt") || strings.Contains(client.lastUserPrompt, "private-credential") {
+		t.Fatalf("planner prompt leaked credentials: %s", client.lastUserPrompt)
 	}
 	candidates, _ := payload["candidateTools"].([]interface{})
 	candidate, _ := candidates[0].(map[string]interface{})
@@ -169,7 +179,10 @@ func TestCompactToolManifestsReturnsCanonicalIndependentRepairPayload(t *testing
 		ProviderCapabilities: map[string]interface{}{"protocolVersion": "2025-11-25"},
 	}
 
-	payload := compactToolManifests([]*tool.ToolManifest{manifest})
+	payload, err := compactToolManifests([]*tool.ToolManifest{manifest})
+	if err != nil {
+		t.Fatalf("compactToolManifests returned error: %v", err)
+	}
 	if len(payload) != 1 || !reflectJSONEqual(payload[0]["inputSchema"], manifest.InputSchema) {
 		t.Fatalf("repair payload lost canonical schema: %#v", payload)
 	}
@@ -187,6 +200,7 @@ func TestCompactToolManifestsReturnsCanonicalIndependentRepairPayload(t *testing
 func TestClientProviderPlannerUsesRequestTextProvider(t *testing.T) {
 	var gotAuthorization string
 	var gotModel string
+	var gotRequestBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {
 			t.Fatalf("unexpected planner path: %s", r.URL.Path)
@@ -197,6 +211,8 @@ func TestClientProviderPlannerUsesRequestTextProvider(t *testing.T) {
 			t.Fatalf("decode planner request: %v", err)
 		}
 		gotModel, _ = body["model"].(string)
+		encodedBody, _ := json.Marshal(body)
+		gotRequestBody = string(encodedBody)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"goal\":\"生成品牌故事视频\",\"domain\":\"video_creation\",\"mode\":\"dynamic_agent\",\"steps\":[{\"id\":\"script_generation\",\"intent\":\"生成口播稿\",\"tool\":\"video_script_generator\",\"arguments\":{\"topic\":\"独立咖啡店品牌故事\"},\"expectedOutput\":[\"script\"],\"produceArtifact\":true}],\"budget\":{\"maxLLMCalls\":1,\"maxToolCalls\":1,\"maxSteps\":1,\"maxReplans\":0,\"maxCostLevel\":\"medium\"},\"stopPolicy\":{\"stopWhenEnough\":true}}"},"finish_reason":"stop"}]}`))
 	}))
@@ -217,6 +233,17 @@ func TestClientProviderPlannerUsesRequestTextProvider(t *testing.T) {
 					"model":   "client-planner-model",
 				},
 			},
+			"retrievedKnowledge": map[string]interface{}{"facts": []interface{}{"public launch fact"}},
+			"projectState": map[string]interface{}{
+				"stage": "draft",
+				"details": map[string]interface{}{
+					"token":         "tok-nested-secret",
+					"authorization": "Bearer nested-secret",
+					"cookie":        "session=private",
+					"safe":          "keep this",
+				},
+			},
+			"apiKey": "sk-top-level-secret",
 		},
 	})
 	if err != nil {
@@ -227,6 +254,14 @@ func TestClientProviderPlannerUsesRequestTextProvider(t *testing.T) {
 	}
 	if gotModel != "client-planner-model" {
 		t.Fatalf("expected planner to use client model, got %q", gotModel)
+	}
+	for _, secret := range []string{"sk-client-planner", "sk-top-level-secret", "tok-nested-secret", "Bearer nested-secret", "session=private"} {
+		if strings.Contains(gotRequestBody, secret) {
+			t.Fatalf("planner request body leaked credential %q: %s", secret, gotRequestBody)
+		}
+	}
+	if !strings.Contains(gotRequestBody, "public launch fact") || !strings.Contains(gotRequestBody, "keep this") {
+		t.Fatalf("planner request body lost safe context: %s", gotRequestBody)
 	}
 	if len(plan.Steps) != 1 || plan.Steps[0].Tool != "video_script_generator" {
 		t.Fatalf("unexpected plan: %#v", plan)

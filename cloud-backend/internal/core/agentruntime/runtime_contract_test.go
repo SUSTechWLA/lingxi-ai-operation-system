@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -48,6 +49,7 @@ func TestAgentRuntimeContractRejectsMissingDuplicateDisconnectedAndUnimplemented
 		{name: "duplicate", layers: append(append([]AgentRuntimeLayer(nil), base...), base[0]), want: "duplicate layer context"},
 		{name: "disconnected", layers: mutateContractLayer(base, LayerTools, func(layer *AgentRuntimeLayer) { layer.DependsOn = []AgentCapabilityLayer{"absent"} }), want: "depends on unknown layer absent"},
 		{name: "unimplemented", layers: mutateContractLayer(base, LayerVerify, func(layer *AgentRuntimeLayer) { layer.Components = nil }), want: "layer verify has no implementation components"},
+		{name: "unknown component", layers: mutateContractLayer(base, LayerVerify, func(layer *AgentRuntimeLayer) { layer.Components = []string{"PlanCompiler", "PlanJudeg"} }), want: "layer verify references unknown implementation component PlanJudeg"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -151,20 +153,128 @@ func TestPlanCompilerAddsQualityGateWhenRequiredCheckerAlreadyExists(t *testing.
 		Goal: "produce and verify", Domain: "general", Mode: "dynamic_agent",
 		Steps: []AgentStep{
 			{ID: "produce", Tool: "producer"},
+			{ID: "consume", Tool: "consumer", DependsOn: []string{"produce"}},
 			{ID: "explicit_check", Tool: "quality_checker", DependsOn: []string{"produce"}},
-			{ID: "consume", Tool: "consumer", DependsOn: []string{"explicit_check"}},
 		},
 	}
 
 	prepared := NewPlanCompiler(catalog).PreparePlan(plan)
 	gate := findPlanStep(prepared, "produce_quality_gate")
 	consumer := findPlanStep(prepared, "consume")
+	wantOrder := []string{"produce", "explicit_check", gate.ID, "consume"}
+	gotOrder := make([]string, 0, len(prepared.Steps))
+	for _, step := range prepared.Steps {
+		gotOrder = append(gotOrder, step.ID)
+	}
+	if !reflect.DeepEqual(gotOrder, wantOrder) {
+		t.Fatalf("quality topology order = %#v, want %#v", gotOrder, wantOrder)
+	}
 	if gate.Tool != "__quality_gate__" || len(gate.DependsOn) != 1 || gate.DependsOn[0] != "explicit_check" {
 		t.Fatalf("required gate not connected to explicit checker: %#v", prepared.Steps)
 	}
 	if len(consumer.DependsOn) != 1 || consumer.DependsOn[0] != gate.ID {
 		t.Fatalf("explicit checker downstream not reconnected through gate: %#v", consumer)
 	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared quality topology failed Guard: %v", err)
+	}
+}
+
+func TestPlanCompilerRebuildsForgedQualityGateFromManifestPolicy(t *testing.T) {
+	catalog := qualityContractCatalog()
+	plan := &AgentPlan{
+		Goal: "forged", Domain: "general", Mode: "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "produce", Tool: "producer"},
+			{ID: "forged_gate", Tool: "__quality_gate__", DependsOn: []string{"produce"}, Arguments: map[string]interface{}{"productionStep": "produce", "productionTool": "consumer", "checkerStep": "missing"}},
+			{ID: "consume", Tool: "consumer", DependsOn: []string{"forged_gate"}},
+		},
+	}
+
+	prepared := NewPlanCompiler(catalog).PreparePlan(plan)
+	if findPlanStep(prepared, "forged_gate").ID != "" {
+		t.Fatalf("forged gate survived PreparePlan: %#v", prepared.Steps)
+	}
+	gate := findPlanStep(prepared, "produce_quality_gate")
+	consumer := findPlanStep(prepared, "consume")
+	if gate.Tool != "__quality_gate__" || len(consumer.DependsOn) != 1 || consumer.DependsOn[0] != gate.ID {
+		t.Fatalf("manifest quality topology was not rebuilt: %#v", prepared.Steps)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("rebuilt plan failed Guard: %v", err)
+	}
+}
+
+func TestPlanGuardRejectsRawForgedQualityGate(t *testing.T) {
+	catalog := qualityContractCatalog()
+	plan := &AgentPlan{Steps: []AgentStep{
+		{ID: "produce", Tool: "producer"},
+		{ID: "explicit_check", Tool: "quality_checker", DependsOn: []string{"produce"}},
+		{ID: "forged_gate", Tool: "__quality_gate__", DependsOn: []string{"explicit_check"}, Arguments: map[string]interface{}{
+			"productionStep": "produce", "productionTool": "consumer", "checkerStep": "explicit_check",
+		}},
+	}}
+	err := NewPlanGuard(catalog, nil).Validate(plan)
+	if err == nil || !strings.Contains(err.Error(), "quality gate forged_gate productionTool") {
+		t.Fatalf("PlanGuard error = %v, want forged productionTool rejection", err)
+	}
+}
+
+func TestPlanCompilerQualityGateIDsAreUniqueAndPrepareIsIdempotent(t *testing.T) {
+	catalog := qualityContractCatalog()
+	plan := &AgentPlan{
+		Goal: "conflict", Domain: "general", Mode: "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "produce", Tool: "producer"},
+			{ID: "produce_quality_gate", Tool: "consumer", DependsOn: []string{"produce"}},
+			{ID: "consume", Tool: "consumer", DependsOn: []string{"produce"}},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	prepared := compiler.PreparePlan(plan)
+	gate := qualityGateForProduction(prepared, "produce")
+	if gate.ID == "" || gate.ID == "produce_quality_gate" {
+		t.Fatalf("gate ID collided with user step: %#v", prepared.Steps)
+	}
+	if findPlanStep(prepared, "produce_quality_gate").Tool != "consumer" {
+		t.Fatalf("user step was overwritten by synthetic gate: %#v", prepared.Steps)
+	}
+	first := cloneContractPlanDeep(prepared)
+	preparedAgain := compiler.PreparePlan(prepared)
+	if !reflect.DeepEqual(preparedAgain, first) {
+		t.Fatalf("PreparePlan is not idempotent:\nfirst=%#v\nsecond=%#v", first.Steps, preparedAgain.Steps)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(preparedAgain); err != nil {
+		t.Fatalf("idempotent prepared plan failed Guard: %v", err)
+	}
+}
+
+func qualityGateForProduction(plan *AgentPlan, productionID string) AgentStep {
+	if plan == nil {
+		return AgentStep{}
+	}
+	for _, step := range plan.Steps {
+		if step.Tool == "__quality_gate__" && step.Arguments["productionStep"] == productionID {
+			return step
+		}
+	}
+	return AgentStep{}
+}
+
+func cloneContractPlanDeep(plan *AgentPlan) *AgentPlan {
+	if plan == nil {
+		return nil
+	}
+	cloned := *plan
+	cloned.Steps = make([]AgentStep, len(plan.Steps))
+	for i, step := range plan.Steps {
+		cloned.Steps[i] = step
+		if step.DependsOn != nil {
+			cloned.Steps[i].DependsOn = append([]string{}, step.DependsOn...)
+		}
+		cloned.Steps[i].Arguments = copyMap(step.Arguments)
+	}
+	return &cloned
 }
 
 func cloneContractPlan(plan *AgentPlan) *AgentPlan {
