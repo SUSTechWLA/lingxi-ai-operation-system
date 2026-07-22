@@ -3177,7 +3177,12 @@ func buildToolNode(nodeID string, step AgentStep, manifest *tool.ToolManifest) m
 		nodeName = "external"
 		inputTool = "external"
 	}
-	input := map[string]interface{}{"tool": inputTool, "parameters": params}
+	contractArguments, _ := cloneArgumentValue(args).(map[string]interface{})
+	input := map[string]interface{}{
+		"tool":              inputTool,
+		"parameters":        params,
+		"contractArguments": contractArguments,
+	}
 	if manifest != nil {
 		input["capabilityTool"] = manifest.Name
 		input["skillPackageId"] = manifest.SkillPackageID

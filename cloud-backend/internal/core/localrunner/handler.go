@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/tangying-ai/aios-core/internal/core/auth"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
 type RunnerService interface {
@@ -28,6 +29,10 @@ type NodeResultSink interface {
 	OnProgress(ctx context.Context, nodeID string, progress float64, step, message string) error
 }
 
+type ToolManifestResolver interface {
+	GetManifest(name string) *tool.ToolManifest
+}
+
 // ArtifactSyncCallback is invoked after a local job completes successfully,
 // allowing the caller to materialize artifact records from the job output.
 type ArtifactSyncCallback func(ctx context.Context, job *LocalJob, output map[string]interface{}) error
@@ -41,6 +46,7 @@ type Handler struct {
 	results              NodeResultSink
 	artifactSyncCallback ArtifactSyncCallback
 	jobFailureCallback   JobFailureCallback
+	manifestResolver     ToolManifestResolver
 	middleware           []gin.HandlerFunc
 }
 
@@ -58,6 +64,13 @@ func (h *Handler) WithArtifactSyncCallback(cb ArtifactSyncCallback) *Handler {
 // WithJobFailureCallback registers a domain failure callback.
 func (h *Handler) WithJobFailureCallback(cb JobFailureCallback) *Handler {
 	h.jobFailureCallback = cb
+	return h
+}
+
+// WithToolManifestResolver enables canonical output validation before a local
+// completion is durably marked COMPLETED or published to the DAG state machine.
+func (h *Handler) WithToolManifestResolver(resolver ToolManifestResolver) *Handler {
+	h.manifestResolver = resolver
 	return h
 }
 
@@ -161,8 +174,24 @@ func (h *Handler) completeJob(c *gin.Context) {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}
-	jobContext, _ := h.service.GetJob(c.Request.Context(), c.Param("jobId"))
+	jobContext, err := h.service.GetJob(c.Request.Context(), c.Param("jobId"))
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if jobContext != nil && (jobContext.Status == JobCompleted || jobContext.Status == JobFailed) {
+		// Terminal reports are idempotent no-ops. In particular, a late complete
+		// report must never turn a failed node into success.
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
 	req.Output = normalizeCompleteJobOutput(jobContext, req.Output)
+	if manifest := h.manifestForLocalJob(jobContext); manifest != nil {
+		if err := tool.ValidateLocalJobOutput(manifest, req.Output); err != nil {
+			h.failInvalidCompletion(c, jobContext, err)
+			return
+		}
+	}
 	job, err := h.service.CompleteJob(c.Request.Context(), c.Param("jobId"), req)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, err.Error())
@@ -186,6 +215,52 @@ func (h *Handler) completeJob(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *Handler) manifestForLocalJob(job *LocalJob) *tool.ToolManifest {
+	if h == nil || h.manifestResolver == nil || job == nil {
+		return nil
+	}
+	for _, name := range []string{job.MCPLogicalToolName, job.ToolName} {
+		if name != "" {
+			if manifest := h.manifestResolver.GetManifest(name); manifest != nil {
+				return manifest
+			}
+		}
+	}
+	return nil
+}
+
+func (h *Handler) failInvalidCompletion(c *gin.Context, job *LocalJob, validationErr error) {
+	message := "OUTPUT_SCHEMA_INVALID: " + validationErr.Error()
+	failed, err := h.service.FailJob(c.Request.Context(), c.Param("jobId"), FailJobRequest{
+		Success: false,
+		Error: map[string]interface{}{
+			"code":    "OUTPUT_SCHEMA_INVALID",
+			"message": message,
+		},
+		Retryable: true,
+	})
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if job == nil {
+		job = failed
+	}
+	if h.results != nil && job != nil && job.NodeID != "" {
+		if err := h.results.OnFailure(c.Request.Context(), job.NodeID, message); err != nil {
+			writeError(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if h.jobFailureCallback != nil && job != nil {
+		if err := h.jobFailureCallback(c.Request.Context(), job, message); err != nil {
+			writeError(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	writeError(c, http.StatusUnprocessableEntity, message)
 }
 
 func normalizeCompleteJobOutput(job *LocalJob, output map[string]interface{}) map[string]interface{} {

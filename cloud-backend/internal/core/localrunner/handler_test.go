@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/tangying-ai/aios-core/internal/core/auth"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
 func TestHandlerRegisterRunnerUsesEdgeRunProtocol(t *testing.T) {
@@ -182,6 +184,99 @@ func TestHandlerCompleteJobAdvancesNodeResult(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsInvalidCanonicalLocalOutputBeforeCompletion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_contract", NodeID: "node_contract", ToolName: "native_contract", Status: JobRunning,
+	}}
+	registry := tool.NewToolRegistry()
+	registry.RegisterExternal(&tool.ToolManifest{
+		Name: "native_contract", Boundary: tool.BoundaryLocalNative,
+		OutputSchema: map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{"assetId": map[string]interface{}{"type": "string"}},
+			"required": []interface{}{"assetId"}, "additionalProperties": false,
+		},
+	})
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).WithToolManifestResolver(registry).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_contract/complete", bytes.NewBufferString(`{
+		"success":true,"output":{"unexpected":true}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	if service.completeJobID != "" {
+		t.Fatalf("invalid output was completed: %s", service.completeJobID)
+	}
+	if service.failJobID != "local_job_contract" || !strings.Contains(sink.failureError, "OUTPUT_SCHEMA_INVALID") {
+		t.Fatalf("invalid output was not failed through node sink: service=%#v sink=%#v", service, sink)
+	}
+	if sink.successNodeID != "" {
+		t.Fatalf("invalid output reported success: %#v", sink)
+	}
+}
+
+func TestHandlerValidatesMCPStructuredContentInsteadOfWrapper(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_mcp", NodeID: "node_mcp", ToolName: "mcp_asset", MCPLogicalToolName: "mcp_asset", Status: JobRunning,
+	}}
+	registry := tool.NewToolRegistry()
+	registry.RegisterExternal(&tool.ToolManifest{
+		Name: "mcp_asset", Boundary: tool.BoundaryMCPProvider,
+		OutputSchema: map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{"assetId": map[string]interface{}{"type": "string"}},
+			"required": []interface{}{"assetId"}, "additionalProperties": false,
+		},
+	})
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).WithToolManifestResolver(registry).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_mcp/complete", bytes.NewBufferString(`{
+		"success":true,
+		"output":{"content":[{"type":"text","text":"ok"}],"structuredContent":{"assetId":"asset-1"},"isError":false}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || service.completeJobID != "local_job_mcp" || sink.successNodeID != "node_mcp" {
+		t.Fatalf("valid MCP completion failed: status=%d body=%s service=%#v sink=%#v", rec.Code, rec.Body.String(), service, sink)
+	}
+}
+
+func TestHandlerTerminalCompletionReportDoesNotReenterOnSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_failed", NodeID: "node_failed", ToolName: "native_contract", Status: JobFailed,
+	}}
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_failed/complete", bytes.NewBufferString(`{"success":true,"output":{"result":"late"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("terminal retry status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if service.completeJobID != "" || sink.successNodeID != "" {
+		t.Fatalf("FAILED completion reentered success: service=%#v sink=%#v", service, sink)
+	}
+}
+
 func TestHandlerCompleteHyperFramesRenderNormalizesVideoArtifact(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := &fakeRunnerService{
@@ -295,6 +390,8 @@ type fakeRunnerService struct {
 	claimRunnerID string
 	completeJobID string
 	completeReq   CompleteJobRequest
+	failJobID     string
+	failReq       FailJobRequest
 	job           *LocalJob
 	heartbeats    []HeartbeatRequest
 }
@@ -329,7 +426,9 @@ func (f *fakeRunnerService) CompleteJob(_ context.Context, jobID string, req Com
 	return f.job, nil
 }
 
-func (f *fakeRunnerService) FailJob(_ context.Context, _ string, _ FailJobRequest) (*LocalJob, error) {
+func (f *fakeRunnerService) FailJob(_ context.Context, jobID string, req FailJobRequest) (*LocalJob, error) {
+	f.failJobID = jobID
+	f.failReq = req
 	return f.job, nil
 }
 

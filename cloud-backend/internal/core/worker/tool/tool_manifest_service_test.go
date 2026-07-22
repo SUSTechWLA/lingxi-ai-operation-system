@@ -360,6 +360,31 @@ func TestRegisterExternalRejectsInvalidSchemaWithoutCallingRepository(t *testing
 	}
 }
 
+func TestRegisterManifestRejectsSemanticSchemaErrorWithoutPartialMutation(t *testing.T) {
+	repo := &stubToolManifestRepo{}
+	registry := NewToolRegistry()
+	service := newTestToolManifestService(repo, &stubToolManifestCache{getErr: redis.Nil}, registry)
+
+	err := service.RegisterManifest(context.Background(), &ToolManifest{
+		Name:        "remote_ref_manifest",
+		Description: "Must not load remote schemas",
+		Type:        "external",
+		InputSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{"input": map[string]interface{}{"$ref": "https://schemas.example.invalid/input.json"}},
+		},
+	})
+	if !errors.Is(err, ErrInputSchemaInvalid) {
+		t.Fatalf("registration error = %v, want ErrInputSchemaInvalid", err)
+	}
+	if repo.upsertCalls != 0 {
+		t.Fatalf("invalid contract partially persisted: %d upserts", repo.upsertCalls)
+	}
+	if registry.GetExternalManifest("remote_ref_manifest") != nil {
+		t.Fatal("invalid contract partially mutated registry")
+	}
+}
+
 func TestSyncBuiltinToolsReturnsObservableSchemaErrors(t *testing.T) {
 	repo := &stubToolManifestRepo{}
 	registry := NewToolRegistry()

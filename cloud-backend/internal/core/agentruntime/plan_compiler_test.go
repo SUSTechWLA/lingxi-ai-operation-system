@@ -232,6 +232,44 @@ func TestPlanCompiler_QualityGateReviewsProductionOutput(t *testing.T) {
 	}
 }
 
+func TestPlanCompilerCompilePreservesPureContractArguments(t *testing.T) {
+	catalog := staticToolCatalog{"remote_tool": {
+		Name:        "remote_tool",
+		Type:        "external",
+		Endpoint:    "https://tool.example.invalid/call",
+		InputSchema: map[string]interface{}{"type": "object"},
+	}}
+	plan := &AgentPlan{Steps: []AgentStep{{
+		ID: "call", Tool: "remote_tool", Intent: "route metadata",
+		Arguments:      map[string]interface{}{"query": "hello", "nested": map[string]interface{}{"count": float64(2)}},
+		ExpectedOutput: []string{"result"}, ProduceArtifact: true,
+	}}}
+	dag, err := NewPlanCompiler(catalog).Compile(plan)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if len(dag.Nodes) != 1 {
+		t.Fatalf("nodes = %#v", dag.Nodes)
+	}
+	contractArguments, ok := dag.Nodes[0].Input["contractArguments"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("contractArguments missing: %#v", dag.Nodes[0].Input)
+	}
+	want := map[string]interface{}{"query": "hello", "nested": map[string]interface{}{"count": float64(2)}}
+	if !reflect.DeepEqual(contractArguments, want) {
+		t.Fatalf("contractArguments = %#v, want pure arguments %#v", contractArguments, want)
+	}
+	for _, polluted := range []string{"tool", "intent", "expectedOutput", "produceArtifact", "capabilityTool"} {
+		if _, exists := contractArguments[polluted]; exists {
+			t.Fatalf("contractArguments polluted by %q: %#v", polluted, contractArguments)
+		}
+	}
+	contractArguments["query"] = "mutated"
+	if plan.Steps[0].Arguments["query"] != "hello" {
+		t.Fatalf("compiled contractArguments aliases plan arguments: %#v", plan.Steps[0].Arguments)
+	}
+}
+
 func TestPlanCompiler_PreparePlanCompletesPartialVideoBetaPlan(t *testing.T) {
 	compiler := NewPlanCompiler(staticToolCatalog{
 		"shot_splitter":                 {Name: "shot_splitter"},

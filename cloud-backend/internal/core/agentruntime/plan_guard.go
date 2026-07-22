@@ -99,11 +99,17 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 		if err := validateRiskLevel(step, manifest); err != nil {
 			return err
 		}
-		if err := validateRequiredParameters(step, manifest); err != nil {
-			return err
-		}
-		if err := validateParameterTypes(step, manifest); err != nil {
-			return err
+		if manifest.InputSchema != nil {
+			if err := validateCanonicalStepInput(step, manifest); err != nil {
+				return err
+			}
+		} else {
+			if err := validateRequiredParameters(step, manifest); err != nil {
+				return err
+			}
+			if err := validateParameterTypes(step, manifest); err != nil {
+				return err
+			}
 		}
 		if err := validateToolPolicy(step, manifest, plan); err != nil {
 			return err
@@ -956,7 +962,8 @@ func validateReferenceExpressions(
 	stepMap map[string]AgentStep,
 	stepManifests map[string]*tool.ToolManifest,
 ) error {
-	for _, reference := range argumentReferences(step.Arguments) {
+	for _, contractReference := range contractArgumentReferences(step.Arguments) {
+		reference := contractReference.argumentReference
 		refStepID := reference.StepID
 		refField := reference.Field
 		expression := reference.Expression
@@ -991,13 +998,19 @@ func validateReferenceExpressions(
 					step.ID, refStepID, refField,
 				)
 			}
-			if len(refManifest.Output) > 0 {
-				if _, ok := refManifest.Output[refField]; !ok {
-					return fmt.Errorf(
-						"agent step %s references output field %s of step %s, but tool %s does not declare this output field",
-						step.ID, refField, refStepID, refStep.Tool,
-					)
-				}
+			sourceSchema, declared := canonicalOutputFieldSchema(refManifest, refField)
+			if !declared {
+				return fmt.Errorf(
+					"agent step %s references output field %s of step %s, but tool %s does not declare this output field",
+					step.ID, refField, refStepID, refStep.Tool,
+				)
+			}
+			if targetSchema, ok := canonicalInputPathSchema(stepManifests[step.ID], contractReference.Path); ok &&
+				!referenceTypesCompatible(sourceSchema, targetSchema) {
+				return fmt.Errorf(
+					"agent step %s reference %s type is incompatible with input path %v",
+					step.ID, expression, contractReference.Path,
+				)
 			}
 		}
 	}

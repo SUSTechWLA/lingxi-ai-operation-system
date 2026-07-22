@@ -211,7 +211,7 @@ BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh
 
 ### Agent/Tool/MCP 标准契约
 
-Agent 运行时按 Context、Tools、Constrain、Verify、Correct 五层分离感知、行动、安全边界、结果验证和失败修复。工具统一使用 canonical JSON Schema，再由 OpenAI、Anthropic 和 Gemini adapter 转成各自 API 格式；本地扩展按标准 MCP 生命周期动态发现，不为每个 provider 增加专用 runner 分支。完整规则见 [Agent、Tool 与 MCP 标准契约](docs/agent-tool-mcp-contract.md)。
+Agent 运行时按 Context、Tools、Constrain、Verify、Correct 五层分离感知、行动、安全边界、结果验证和失败修复。当前 planner 通过 Chat Completions 生成一次性 JSON `AgentPlan`，再经 Guard、DAG、工具执行、结果验证和 repair loop 推进；`LLMToolDefinition` 的 OpenAI Responses / Chat Completions、Anthropic、Gemini 四种 adapter 是标准 provider-boundary library，当前不代表已启用 provider-native `tool_calls` 回灌。canonical JSON Schema 会在注册、参数解析后和结果发布前执行验证；本地扩展按标准 MCP 生命周期动态发现，不为每个 provider 增加专用 runner 分支。完整规则见 [Agent、Tool 与 MCP 标准契约](docs/agent-tool-mcp-contract.md)。
 
 以下配置可直接作为 `PUT /api/local/mcp-providers` 的请求体。PUT 只校验并持久化配置，不会立即连接 provider；只有 `enabled: true` 的 provider 才会在状态检查、工具发现或实际调用时执行 `initialize` 和 `tools/list`。把绝对路径和占位符替换为本机值；`<MCP_AUTH_TOKEN>` 不是有效密钥，也不会被仓库保存为真实凭据。下方 HTTP provider 是 `enabled: false` 的可选配置示例，因此保存时和后续发现时都不会自动连接：
 

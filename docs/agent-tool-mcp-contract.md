@@ -33,13 +33,15 @@ Every tool has one canonical definition:
 - execution-plane, capability, approval, timeout, and provider-binding
   metadata.
 
-Provider adapters translate this canonical definition at the API edge. OpenAI
-uses the function tool wrapper and strict schema semantics, Anthropic uses
-`name` / `description` / `input_schema`, and Gemini uses function declarations
-with its supported schema representation. Provider-specific spelling must not
-leak back into the canonical registry. If a provider cannot represent a schema
-feature without changing its meaning, conformance fails closed instead of
-silently weakening the contract.
+`LLMToolDefinition` and its four adapters are a provider-boundary library:
+OpenAI Responses, OpenAI Chat Completions, Anthropic, and Gemini wire formats
+can be derived without changing the canonical registry. The current production
+planner does **not** pass these definitions as provider-native function tools;
+it asks a Chat Completions model for one JSON `AgentPlan` DAG. The adapter
+library is therefore a validated integration boundary for future native tool
+calling, not a claim that native calling is active today. If a provider cannot
+represent a schema feature without changing its meaning, the adapter fails
+closed instead of silently weakening the contract.
 
 `strict` means the model-generated arguments must satisfy the declared schema;
 it does not authorize execution. Authorization remains a separate constraint
@@ -74,6 +76,15 @@ Verification is independent of an executor returning exit code zero. Missing
 artifacts, malformed structured results, failed quality thresholds, or a result
 that cannot be attributed to the selected provider remain failures.
 
+Explicit canonical schemas are compiled at registration using Draft 7 or Draft
+2020-12 semantics. Remote `$ref` loading is disabled, schema size and nesting
+are bounded, and invalid registration is rejected before database or registry
+mutation. At execution, unresolved exact output references fail with
+`INPUT_REFERENCE_UNRESOLVED`; resolved arguments and outputs fail with
+`INPUT_SCHEMA_INVALID` or `OUTPUT_SCHEMA_INVALID`. MCP tool wrappers validate
+their `structuredContent` against the remote tool's `outputSchema`; native
+local tools validate the root output object.
+
 ### 5. Correct
 
 Correction is scoped recovery after a verified failure. It may retry a
@@ -83,15 +94,30 @@ revalidated by the same schema and Guard rules. Exhausted retry budgets,
 authorization failures, ambiguous destructive actions, and invalid repair
 plans fail closed and are surfaced for user action.
 
-## Conversation and tool-result loop
+## Current planning and execution loop
 
-An Agent request is composed from the system instruction, tool definitions,
-user messages, prior assistant messages that are safe to retain, and tool
-results. Retrieved private or current knowledge may be injected into the user
-or context portion with source and scope metadata. An assistant turn can return
-user-facing content or a structured tool call. The runtime executes an approved
-call and appends the structured result to the next model turn, closing the
-observe-decide-act-verify loop.
+The current runtime is a workflow loop, not a provider-native assistant
+`tool_calls` loop:
+
+1. The planner receives sanitized context and compact canonical tool
+   candidates, then a Chat Completions request returns one JSON `AgentPlan`.
+2. `PlanCompiler.PreparePlan` normalizes that plan, and `PlanGuard` validates
+   dependencies, policy, canonical input schemas, and precise output
+   references.
+3. The compiler creates a DAG. Every executable node carries pure
+   `contractArguments` separately from transport, intent, artifact, and routing
+   metadata.
+4. Executors resolve references, validate the resolved logical input, run the
+   cloud or local tool, validate its canonical output, and publish a tool result
+   event.
+5. Quality gates, retry policy, and repair planning verify or correct the
+   workflow result.
+
+The runtime does not currently send provider-native assistant tool-call IDs or
+tool result messages back into another assistant turn. Assistant messages are
+allowed by the wider Agent model to contain content or `tool_calls`, but that
+optional multi-turn provider behavior is not implemented by this JSON-DAG
+planner and must not be inferred from the adapter types.
 
 The product must not claim to expose or persist a model's private chain of
 thought. It records auditable decisions instead: sanitized inputs, selected

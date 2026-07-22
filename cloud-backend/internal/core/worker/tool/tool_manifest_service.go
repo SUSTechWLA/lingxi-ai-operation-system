@@ -239,6 +239,9 @@ func manifestToRecord(m *ToolManifest) (*model.ToolManifestRecord, error) {
 	if m == nil {
 		return nil, fmt.Errorf("tool manifest is nil")
 	}
+	if err := ValidateManifestContracts(m); err != nil {
+		return nil, err
+	}
 	costLevel := m.CostLevel
 	if costLevel == "" {
 		costLevel = CostLow

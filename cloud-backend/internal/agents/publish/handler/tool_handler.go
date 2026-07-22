@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -88,6 +89,14 @@ func (h *ToolHandler) RegisterTool(c *gin.Context) {
 
 	// Persist to DB + in-memory registry + invalidate cache
 	if err := h.manifestSvc.RegisterExternal(c.Request.Context(), &manifest); err != nil {
+		if errors.Is(err, tool.ErrInputSchemaInvalid) || errors.Is(err, tool.ErrOutputSchemaInvalid) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "invalid tool contract: " + err.Error(),
+				"data":    nil,
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "failed to register tool: " + err.Error(),

@@ -336,6 +336,7 @@ func main() {
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r, requireAuth)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r, requireAuth)
 	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, requireAuth)
+	localRunnerHandler.WithToolManifestResolver(toolRegistry)
 	localRunnerHandler.RegisterRoutes(r)
 	// Preflight: check local capabilities before starting a video pipeline.
 	r.GET("/api/video/preflight", requireAuth, localrunner.HandleVideoPreflight(localRunnerService))
