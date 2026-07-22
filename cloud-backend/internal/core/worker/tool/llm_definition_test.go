@@ -165,6 +165,161 @@ func TestLLMToolDefinitionRejectsNonPortableStrictSchemas(t *testing.T) {
 			},
 			wantMessage: "oneOf",
 		},
+		{
+			name: "type must be one string",
+			schema: map[string]interface{}{
+				"type":                 []interface{}{"object", "null"},
+				"properties":           map[string]interface{}{},
+				"required":             []interface{}{},
+				"additionalProperties": false,
+			},
+			wantMessage: "single JSON Schema type",
+		},
+		{
+			name: "title must be string",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"title":                42,
+				"properties":           map[string]interface{}{},
+				"required":             []interface{}{},
+				"additionalProperties": false,
+			},
+			wantMessage: "title",
+		},
+		{
+			name: "description must be string",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"description":          true,
+				"properties":           map[string]interface{}{},
+				"required":             []interface{}{},
+				"additionalProperties": false,
+			},
+			wantMessage: "description",
+		},
+		{
+			name: "enum must be array",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"enum":                 "value",
+				"properties":           map[string]interface{}{},
+				"required":             []interface{}{},
+				"additionalProperties": false,
+			},
+			wantMessage: "enum",
+		},
+		{
+			name: "enum must not be empty",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"enum":                 []interface{}{},
+				"properties":           map[string]interface{}{},
+				"required":             []interface{}{},
+				"additionalProperties": false,
+			},
+			wantMessage: "enum",
+		},
+		{
+			name: "properties must be schema map",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"properties":           []interface{}{},
+				"required":             []interface{}{},
+				"additionalProperties": false,
+			},
+			wantMessage: "properties",
+		},
+		{
+			name: "required must be string array",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{},
+				"required":             "name",
+				"additionalProperties": false,
+			},
+			wantMessage: "required",
+		},
+		{
+			name: "required must not contain duplicates",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{"name": map[string]interface{}{"type": "string"}},
+				"required":             []interface{}{"name", "name"},
+				"additionalProperties": false,
+			},
+			wantMessage: "duplicate",
+		},
+		{
+			name: "required items must be strings",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{"name": map[string]interface{}{"type": "string"}},
+				"required":             []interface{}{"name", 7},
+				"additionalProperties": false,
+			},
+			wantMessage: "must be a string",
+		},
+		{
+			name: "additional properties must be false boolean",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{},
+				"required":             []interface{}{},
+				"additionalProperties": "false",
+			},
+			wantMessage: "additionalProperties=false",
+		},
+		{
+			name: "items must be schema map",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{"values": map[string]interface{}{"type": "array", "items": "string"}},
+				"required":             []interface{}{"values"},
+				"additionalProperties": false,
+			},
+			wantMessage: "items",
+		},
+		{
+			name: "properties only apply to objects",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{"value": map[string]interface{}{"type": "string", "properties": map[string]interface{}{}}},
+				"required":             []interface{}{"value"},
+				"additionalProperties": false,
+			},
+			wantMessage: "properties",
+		},
+		{
+			name: "required only applies to objects",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{"value": map[string]interface{}{"type": "string", "required": []interface{}{}}},
+				"required":             []interface{}{"value"},
+				"additionalProperties": false,
+			},
+			wantMessage: "required",
+		},
+		{
+			name: "additional properties only apply to objects",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{"value": map[string]interface{}{"type": "string", "additionalProperties": false}},
+				"required":             []interface{}{"value"},
+				"additionalProperties": false,
+			},
+			wantMessage: "additionalProperties",
+		},
+		{
+			name: "items only apply to arrays",
+			schema: map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{},
+				"required":             []interface{}{},
+				"additionalProperties": false,
+				"items":                map[string]interface{}{"type": "string"},
+			},
+			wantMessage: "items",
+		},
 	}
 
 	for _, tt := range tests {
@@ -235,6 +390,14 @@ func TestLLMToolDefinitionValidateRejectsInvalidNameAndInputRoot(t *testing.T) {
 			definition: LLMToolDefinition{Name: "bad:tool", InputSchema: map[string]interface{}{"type": "object"}},
 		},
 		{
+			name:       "digit cannot be first",
+			definition: LLMToolDefinition{Name: "1bad_tool", InputSchema: map[string]interface{}{"type": "object"}},
+		},
+		{
+			name:       "hyphen cannot be first",
+			definition: LLMToolDefinition{Name: "-bad_tool", InputSchema: map[string]interface{}{"type": "object"}},
+		},
+		{
 			name:       "longer than 64 characters",
 			definition: LLMToolDefinition{Name: strings.Repeat("a", 65), InputSchema: map[string]interface{}{"type": "object"}},
 		},
@@ -259,7 +422,7 @@ func TestLLMToolDefinitionValidateRejectsInvalidNameAndInputRoot(t *testing.T) {
 
 func TestLLMToolDefinitionValidateAccepts64CharacterPortableName(t *testing.T) {
 	definition := LLMToolDefinition{
-		Name:        strings.Repeat("a", 62) + "-_",
+		Name:        "_" + strings.Repeat("a", 61) + "-_",
 		InputSchema: map[string]interface{}{"type": "object"},
 	}
 	if err := definition.Validate(); err != nil {
@@ -303,9 +466,11 @@ func nestedLLMToolTestSchema() map[string]interface{} {
 
 func strictLLMToolTestSchema() map[string]interface{} {
 	return map[string]interface{}{
-		"type": "object",
+		"type":        "object",
+		"title":       "Strict tool input",
+		"description": "Portable strict schema",
 		"properties": map[string]interface{}{
-			"title": map[string]interface{}{"type": "string"},
+			"title": map[string]interface{}{"type": "string", "enum": []interface{}{"short", "long"}},
 			"scenes": map[string]interface{}{
 				"type": "array",
 				"items": map[string]interface{}{

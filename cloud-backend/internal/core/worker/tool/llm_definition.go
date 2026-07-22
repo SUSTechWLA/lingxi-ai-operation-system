@@ -3,13 +3,14 @@ package tool
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 )
 
 const maxLLMToolNameLength = 64
 
-var llmToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var llmToolNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
 var portableStrictSchemaKeywords = map[string]struct{}{
 	"type":                 {},
@@ -44,7 +45,7 @@ func (definition LLMToolDefinition) Validate() error {
 		return fmt.Errorf("tool name %q is invalid", definition.Name)
 	}
 	if rootType, ok := definition.InputSchema["type"].(string); !ok || rootType != "object" {
-		return fmt.Errorf("tool input schema root type must be object")
+		return fmt.Errorf("tool input schema root type must be the single JSON Schema type object")
 	}
 	if _, err := json.Marshal(definition.InputSchema); err != nil {
 		return fmt.Errorf("marshal tool input schema: %w", err)
@@ -78,21 +79,40 @@ func validatePortableStrictSchema(schema map[string]interface{}, path string) er
 	if !ok || typeName == "" {
 		return fmt.Errorf("type at %s must be a single JSON Schema type", path)
 	}
+	for _, keyword := range []string{"title", "description"} {
+		if value, exists := schema[keyword]; exists {
+			if _, ok := value.(string); !ok {
+				return fmt.Errorf("%s at %s must be a string", keyword, path)
+			}
+		}
+	}
+	if enum, exists := schema["enum"]; exists {
+		if !isNonEmptySchemaArray(enum) {
+			return fmt.Errorf("enum at %s must be a non-empty array", path)
+		}
+	}
+
 	switch typeName {
 	case "object":
+		if _, exists := schema["items"]; exists {
+			return fmt.Errorf("items at %s is only valid for type array", path)
+		}
 		return validatePortableStrictObject(schema, path)
 	case "array":
+		if err := rejectStrictKeywordsAtWrongPosition(schema, path, "object", "properties", "required", "additionalProperties"); err != nil {
+			return err
+		}
 		items, ok := schema["items"].(map[string]interface{})
 		if !ok {
 			return fmt.Errorf("array at %s must define one items schema", path)
 		}
 		return validatePortableStrictSchema(items, path+".items")
 	case "string", "number", "integer", "boolean", "null":
-		if _, exists := schema["properties"]; exists {
-			return fmt.Errorf("properties at %s require type object", path)
+		if err := rejectStrictKeywordsAtWrongPosition(schema, path, "object", "properties", "required", "additionalProperties"); err != nil {
+			return err
 		}
 		if _, exists := schema["items"]; exists {
-			return fmt.Errorf("items at %s require type array", path)
+			return fmt.Errorf("items at %s is only valid for type array", path)
 		}
 		return nil
 	default:
@@ -109,9 +129,9 @@ func validatePortableStrictObject(schema map[string]interface{}, path string) er
 	if !ok {
 		return fmt.Errorf("object at %s must define properties", path)
 	}
-	required := schemaRequiredSet(schema["required"])
-	if len(properties) > 0 && len(required) == 0 {
-		return fmt.Errorf("object at %s must list every property in required", path)
+	required, err := portableStrictRequiredSet(schema["required"], path)
+	if err != nil {
+		return err
 	}
 	for name, rawProperty := range properties {
 		if !required[name] {
@@ -131,6 +151,51 @@ func validatePortableStrictObject(schema map[string]interface{}, path string) er
 		}
 	}
 	return nil
+}
+
+func isNonEmptySchemaArray(value interface{}) bool {
+	if value == nil {
+		return false
+	}
+	typed := reflect.ValueOf(value)
+	if typed.Kind() != reflect.Slice && typed.Kind() != reflect.Array {
+		return false
+	}
+	if typed.Kind() == reflect.Slice && typed.Type().Elem().Kind() == reflect.Uint8 {
+		return false
+	}
+	return typed.Len() > 0
+}
+
+func rejectStrictKeywordsAtWrongPosition(schema map[string]interface{}, path, expectedType string, keywords ...string) error {
+	for _, keyword := range keywords {
+		if _, exists := schema[keyword]; exists {
+			return fmt.Errorf("%s at %s is only valid for type %s", keyword, path, expectedType)
+		}
+	}
+	return nil
+}
+
+func portableStrictRequiredSet(raw interface{}, path string) (map[string]bool, error) {
+	if raw == nil {
+		return nil, fmt.Errorf("required at %s must be a string array", path)
+	}
+	typed := reflect.ValueOf(raw)
+	if typed.Kind() != reflect.Slice && typed.Kind() != reflect.Array {
+		return nil, fmt.Errorf("required at %s must be a string array", path)
+	}
+	required := make(map[string]bool, typed.Len())
+	for index := 0; index < typed.Len(); index++ {
+		name, ok := typed.Index(index).Interface().(string)
+		if !ok {
+			return nil, fmt.Errorf("required item %d at %s must be a string", index, path)
+		}
+		if required[name] {
+			return nil, fmt.Errorf("required at %s contains duplicate property %q", path, name)
+		}
+		required[name] = true
+	}
+	return required, nil
 }
 
 type OpenAIResponsesTool struct {
