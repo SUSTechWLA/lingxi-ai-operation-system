@@ -138,6 +138,46 @@ func TestExecuteNodeExternalBridgeDispatchesDelegatedLocalTool(t *testing.T) {
 	}
 }
 
+func TestExecuteNodeRequestScopedMCPGatewayDispatchesImmutableBinding(t *testing.T) {
+	ctx := context.Background()
+	registry := tool.NewToolRegistry()
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID: "node_dynamic_mcp", TaskID: "task_001", Type: model.NodeTypeTool, Status: model.NodeReady,
+		Input: map[string]interface{}{"tool": localMCPGatewayToolName},
+	})
+	dispatcher := &fakeLocalJobDispatcher{job: &localrunner.LocalJob{ID: "local_job_dynamic_mcp"}}
+	nodeExecutor := NewNodeExecutor(registry, nil, config.WorkerConfig{}, nil, nil, nodeRepo)
+	nodeExecutor.SetLocalJobDispatcher(dispatcher)
+	revision := strings.Repeat("a", 64)
+	nodeExecutor.ExecuteNode(ctx, eventbus.Event{
+		TaskID: "task_001", NodeID: "node_dynamic_mcp", Type: string(model.NodeTypeTool),
+		Payload: map[string]interface{}{
+			"tool": localMCPGatewayToolName,
+			"parameters": map[string]interface{}{
+				"localCommand": "LOCAL_MCP_TOOL_CALL", "targetRunnerId": "runner-a", "catalogRevision": revision,
+				"providerId": "studio", "logicalToolName": "studio.render", "remoteToolName": "render",
+				"arguments": map[string]interface{}{"prompt": "hello"}, "timeoutSec": float64(90),
+			},
+		},
+	})
+
+	req := dispatcher.req
+	if req.TargetRunnerID != "runner-a" || req.CatalogRevision != revision || req.MCPProviderID != "studio" ||
+		req.MCPLogicalToolName != "studio.render" || req.MCPRemoteToolName != "render" {
+		t.Fatalf("immutable MCP binding was not dispatched: %#v", req)
+	}
+	arguments, _ := req.Payload["arguments"].(map[string]interface{})
+	if len(req.Payload) != 1 || arguments["prompt"] != "hello" {
+		t.Fatalf("gateway must dispatch only logical arguments, got %#v", req.Payload)
+	}
+	if req.ToolName != "studio.render" || req.Command != "LOCAL_MCP_TOOL_CALL" || req.TimeoutSec != 90 {
+		t.Fatalf("unexpected gateway dispatch: %#v", req)
+	}
+	if nodeRepo.updatedStatus != model.NodeWaitingLocal {
+		t.Fatalf("node status=%s, want WAITING_LOCAL", nodeRepo.updatedStatus)
+	}
+}
+
 func TestExecuteNodeExternalBridgeResolvesProjectIDFromTask(t *testing.T) {
 	ctx := context.Background()
 	registry := tool.NewToolRegistry()
@@ -236,6 +276,48 @@ func TestResolveSingleRefReadsStructuredStdoutContent(t *testing.T) {
 	shot, ok := shots[0].(map[string]interface{})
 	if !ok || shot["shotId"] != "SHOT_01" {
 		t.Fatalf("unexpected shot payload: %#v", resolved)
+	}
+}
+
+func TestResolveSingleRefReadsDottedNestedOutputPath(t *testing.T) {
+	ctx := context.Background()
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID: "task_001-produce_exec", TaskID: "task_001",
+		Output: map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"asset": map[string]interface{}{"identity": map[string]interface{}{"id": "asset-42"}},
+			},
+		},
+	})
+
+	resolved, ok := resolveSingleRef(ctx, nodeRepo, "task_001", "{{produce.output.asset.identity.id}}")
+	if !ok || resolved != "asset-42" {
+		t.Fatalf("nested dotted output did not resolve: value=%#v ok=%v", resolved, ok)
+	}
+}
+
+func TestResolveSingleRefDottedPathPrefersNestedAndMCPStructuredContent(t *testing.T) {
+	ctx := context.Background()
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID: "task_001-produce_exec", TaskID: "task_001",
+		Output: map[string]interface{}{
+			"asset.identity.id": "flat-wrapper-cheat",
+			"optional":          "wrapper-cheat",
+			"asset":             map[string]interface{}{"identity": map[string]interface{}{"id": "wrapper-id"}},
+			"structuredContent": map[string]interface{}{
+				"asset.identity.id": "flat-structured-cheat",
+				"asset":             map[string]interface{}{"identity": map[string]interface{}{"id": "structured-id"}},
+			},
+		},
+	})
+
+	resolved, ok := resolveSingleRef(ctx, nodeRepo, "task_001", "{{produce.output.asset.identity.id}}")
+	if !ok || resolved != "structured-id" {
+		t.Fatalf("canonical nested MCP field should beat flat dotted/wrapper fields: value=%#v ok=%v", resolved, ok)
+	}
+	resolved, ok = resolveSingleRef(ctx, nodeRepo, "task_001", "{{produce.output.optional}}")
+	if ok {
+		t.Fatalf("MCP structuredContent missing field must not fall back to wrapper: value=%#v", resolved)
 	}
 }
 

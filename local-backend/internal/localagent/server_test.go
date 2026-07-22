@@ -15,7 +15,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localmcp"
 )
 
@@ -469,24 +471,10 @@ func TestReadMCPProvidersAddsBundledIPAvatarToExistingConfig(t *testing.T) {
 
 func TestLocalMCPProviderSettingsSaveAndStatus(t *testing.T) {
 	root := t.TempDir()
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode mcp request: %v", err)
-		}
-		if req["method"] != "tools/list" {
-			t.Fatalf("method = %v, want tools/list", req["method"])
-		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"tools": []map[string]interface{}{
-					{"name": "jimeng.generate_video", "description": "generate video"},
-				},
-			},
-		})
-	}))
+	mcp := newMCPProtocolTestServer(t, func(toolName string, _ map[string]interface{}) map[string]interface{} {
+		t.Fatalf("unexpected tool call during discovery: %s", toolName)
+		return nil
+	}, "jimeng.generate_video")
 	defer mcp.Close()
 
 	server := NewServer(Config{DataDir: root})
@@ -526,8 +514,64 @@ func TestLocalMCPProviderSettingsSaveAndStatus(t *testing.T) {
 	}
 }
 
+func TestMCPProviderStatusBoundsHangingSessionClose(t *testing.T) {
+	t.Setenv("TANGYING_IP_AVATAR_MCP_SCRIPT", filepath.Join(t.TempDir(), "missing.py"))
+	sdkServer := mcp.NewServer(&mcp.Implementation{Name: "slow-close", Version: "1.0.0"}, nil)
+	sdkServer.AddTool(&mcp.Tool{Name: "healthy", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{}, nil
+	})
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return sdkServer }, nil)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(10 * time.Second):
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	server := NewServer(Config{DataDir: t.TempDir()})
+	if err := server.writeMCPProviders([]localmcp.ProviderConfig{{ID: "slow-close", Endpoint: httpServer.URL, Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	statuses, err := server.mcpProviderStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 1500*time.Millisecond {
+		t.Fatalf("provider status hung during session close: %v", elapsed)
+	}
+	var slowCloseStatus *LocalMCPProviderStatus
+	for index := range statuses {
+		if statuses[index].ID == "slow-close" {
+			slowCloseStatus = &statuses[index]
+			break
+		}
+	}
+	if slowCloseStatus == nil || slowCloseStatus.Error == "" {
+		t.Fatalf("bounded close failure should be reported: %+v", statuses)
+	}
+}
+
 func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
 	root := t.TempDir()
+	configDir := filepath.Join(root, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "mcp-providers.json")
+	if err := os.WriteFile(configPath, []byte(`{"providers":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(configPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	server := NewServer(Config{DataDir: root})
 	body := bytes.NewBufferString(`{
 		"providers":[{
@@ -537,8 +581,10 @@ func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
 				"command":"python3",
 				"args":["/opt/mcp/echo_server.py"],
 				"env":{"ECHO_MODE":"test"},
+				"headers":{" Authorization ":"Bearer test-token"},
 				"toolPrefix":"echo.",
 				"toolNameMap":{"echo.health":"health"},
+				"approvalMode":" BEFORE_EXECUTE ",
 				"enabled":true
 			}]
 	}`)
@@ -564,47 +610,222 @@ func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
 	if len(provider.Args) != 1 || provider.Args[0] != "/opt/mcp/echo_server.py" {
 		t.Fatalf("stdio args not preserved: %+v", provider.Args)
 	}
-	if provider.Env["ECHO_MODE"] != "test" {
-		t.Fatalf("stdio env not preserved: %+v", provider.Env)
+	if provider.Env != nil || !provider.HasEnv || len(provider.EnvKeys) != 1 || provider.EnvKeys[0] != "ECHO_MODE" {
+		t.Fatalf("provider response should expose only environment metadata: %+v", provider)
+	}
+	if provider.Headers != nil || !provider.HasHeaders || len(provider.HeaderKeys) != 1 || provider.HeaderKeys[0] != "Authorization" {
+		t.Fatalf("provider response should expose only header metadata: %+v", provider)
+	}
+	if strings.Contains(rec.Body.String(), "Bearer test-token") || strings.Contains(rec.Body.String(), `"ECHO_MODE":"test"`) {
+		t.Fatalf("provider response leaked a configured secret: %s", rec.Body.String())
+	}
+	stored, err := server.ReadMCPProviders()
+	if err != nil {
+		t.Fatalf("read stored providers: %v", err)
+	}
+	storedProvider, ok := localMCPProviderByID(stored, "echo")
+	if !ok || storedProvider.Headers["Authorization"] != "Bearer test-token" || storedProvider.Env["ECHO_MODE"] != "test" {
+		t.Fatalf("provider secrets were not persisted internally: %+v", storedProvider)
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("stat MCP provider config: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("MCP provider config mode = %o, want 600", got)
 	}
 	if provider.ToolPrefix != "echo." || provider.ToolNameMap["echo.health"] != "health" {
 		t.Fatalf("stdio tool mapping not preserved: %+v", provider)
+	}
+	if provider.ApprovalMode != "before_execute" || storedProvider.ApprovalMode != "before_execute" {
+		t.Fatalf("approval mode not normalized and persisted: response=%q stored=%q", provider.ApprovalMode, storedProvider.ApprovalMode)
+	}
+}
+
+func TestLocalMCPProviderSettingsRejectsInvalidApprovalModeWithoutPersisting(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "mcp-providers.json")
+	if err := os.WriteFile(configPath, []byte(`{
+		"providers":[{
+			"id":"existing",
+			"transport":"stdio",
+			"command":"python3",
+			"approvalMode":"none",
+			"enabled":true
+		}]
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer(Config{DataDir: root})
+	req := httptest.NewRequest(http.MethodPut, "/api/local/mcp-providers", bytes.NewBufferString(`{
+		"providers":[{
+			"id":"unsafe",
+			"transport":"stdio",
+			"command":"python3",
+			"approvalMode":"after_artifact",
+			"enabled":true
+		}]
+	}`))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid approval mode status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "approvalMode") {
+		t.Fatalf("invalid approval mode error must identify approvalMode: %s", rec.Body.String())
+	}
+
+	providers, err := server.ReadMCPProviders()
+	if err != nil {
+		t.Fatalf("read providers after rejected update: %v", err)
+	}
+	if existing, ok := localMCPProviderByID(providers, "existing"); !ok || existing.ApprovalMode != "none" {
+		t.Fatalf("existing provider was not preserved: %+v", providers)
+	}
+	if _, ok := localMCPProviderByID(providers, "unsafe"); ok {
+		t.Fatalf("invalid provider was persisted: %+v", providers)
+	}
+}
+
+func TestNormalizeMCPProvidersApprovalModes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		mode string
+		want string
+	}{
+		{name: "empty defaults to review", mode: "", want: localmcp.ApprovalModeBeforeExecute},
+		{name: "none", mode: " NONE ", want: localmcp.ApprovalModeNone},
+		{name: "before execute", mode: "Before_Execute", want: localmcp.ApprovalModeBeforeExecute},
+		{name: "always", mode: " ALWAYS ", want: localmcp.ApprovalModeAlways},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			providers, err := normalizeMCPProviders([]localmcp.ProviderConfig{{
+				ID:           "test",
+				Transport:    "stdio",
+				Command:      "python3",
+				ApprovalMode: test.mode,
+			}})
+			if err != nil {
+				t.Fatalf("normalizeMCPProviders returned error: %v", err)
+			}
+			if len(providers) != 1 || providers[0].ApprovalMode != test.want {
+				t.Fatalf("normalized approvalMode = %#v, want %q", providers, test.want)
+			}
+		})
+	}
+}
+
+func TestLocalMCPProviderSettingsSecretMergeDistinguishesAbsentAndEmpty(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+
+	put := func(payload string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPut, "/api/local/mcp-providers", bytes.NewBufferString(payload))
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("save status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "Bearer private-token") || strings.Contains(rec.Body.String(), "private-env-token") {
+			t.Fatalf("PUT response leaked provider secret: %s", rec.Body.String())
+		}
+		return rec
+	}
+
+	put(`{"providers":[{"id":"secure","transport":"stdio","command":"mcp-server","env":{"PRIVATE_TOKEN":"private-env-token"},"headers":{"Authorization":"Bearer private-token"},"enabled":true}]}`)
+	put(`{"providers":[{"id":"secure","label":"renamed","transport":"stdio","command":"mcp-server","enabled":true}]}`)
+	providers, err := server.ReadMCPProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, ok := localMCPProviderByID(providers, "secure")
+	if !ok || provider.Headers["Authorization"] != "Bearer private-token" || provider.Env["PRIVATE_TOKEN"] != "private-env-token" {
+		t.Fatalf("absent secret maps must preserve existing values: %+v", provider)
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/api/local/mcp-providers", nil)
+	getRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getRec, get)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body = %s", getRec.Code, getRec.Body.String())
+	}
+	put(getRec.Body.String())
+	providers, err = server.ReadMCPProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, ok = localMCPProviderByID(providers, "secure")
+	if !ok || provider.Headers["Authorization"] != "Bearer private-token" || provider.Env["PRIVATE_TOKEN"] != "private-env-token" {
+		t.Fatalf("round-tripping a sanitized GET payload must preserve stored secrets: %+v", provider)
+	}
+
+	put(`{"providers":[{"id":"secure","label":"renamed","transport":"stdio","command":"mcp-server","env":{},"headers":{},"enabled":true}]}`)
+	providers, err = server.ReadMCPProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, ok = localMCPProviderByID(providers, "secure")
+	if !ok || len(provider.Headers) != 0 || len(provider.Env) != 0 {
+		t.Fatalf("explicit empty secret maps must clear existing values: %+v", provider)
+	}
+}
+
+func TestLocalMCPProviderPublicEndpointsNeverExposeSecretValues(t *testing.T) {
+	root := t.TempDir()
+	mcp := newMCPProtocolTestServer(t, func(_ string, _ map[string]interface{}) map[string]interface{} {
+		return map[string]interface{}{"structuredContent": map[string]interface{}{"available": true}}
+	}, "jimeng.check_status")
+	defer mcp.Close()
+	server := NewServer(Config{DataDir: root})
+	headerSecret := "Bearer public-endpoint-secret"
+	envSecret := "public-env-secret-canary"
+
+	register := httptest.NewRequest(http.MethodPost, "/api/local/jimeng/setup/register-mcp", bytes.NewBufferString(`{"endpoint":"`+mcp.URL+`","env":{"DREAMINA_TOKEN":"`+envSecret+`"},"headers":{"Authorization":"`+headerSecret+`"}}`))
+	registerRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(registerRec, register)
+	if registerRec.Code != http.StatusOK || strings.Contains(registerRec.Body.String(), headerSecret) || strings.Contains(registerRec.Body.String(), envSecret) {
+		t.Fatalf("register response status=%d leaked secret: %s", registerRec.Code, registerRec.Body.String())
+	}
+
+	for _, path := range []string{"/api/local/mcp-providers", "/api/local/mcp-providers/status", "/api/local/jimeng/setup/status"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), headerSecret) || strings.Contains(rec.Body.String(), envSecret) {
+			t.Fatalf("GET %s leaked secret: %s", path, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"hasHeaders":true`) || !strings.Contains(rec.Body.String(), `"Authorization"`) {
+			t.Fatalf("GET %s omitted safe header metadata: %s", path, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"hasEnv":true`) || !strings.Contains(rec.Body.String(), `"DREAMINA_TOKEN"`) {
+			t.Fatalf("GET %s omitted safe environment metadata: %s", path, rec.Body.String())
+		}
 	}
 }
 
 func TestJiMengSetupStatusReadsDreaminaStatusThroughMCP(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeAgentCommandRunner{}
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode mcp request: %v", err)
+	mcp := newMCPProtocolTestServer(t, func(toolName string, _ map[string]interface{}) map[string]interface{} {
+		if toolName != "jimeng.check_status" {
+			t.Fatalf("tool = %v, want jimeng.check_status", toolName)
 		}
-		resp := map[string]interface{}{"jsonrpc": "2.0", "id": req["id"]}
-		switch req["method"] {
-		case "tools/list":
-			resp["result"] = map[string]interface{}{
-				"tools": []map[string]interface{}{
-					{"name": "jimeng.check_status", "description": "check status"},
-					{"name": "jimeng.generate_video", "description": "generate video"},
-				},
-			}
-		case "tools/call":
-			params := req["params"].(map[string]interface{})
-			if params["name"] != "jimeng.check_status" {
-				t.Fatalf("tool = %v, want jimeng.check_status", params["name"])
-			}
-			resp["result"] = map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"available": true,
-					"version":   "dreamina-from-mcp",
-				},
-			}
-		default:
-			t.Fatalf("unexpected mcp method %v", req["method"])
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"available": true,
+				"version":   "dreamina-from-mcp",
+			},
 		}
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
+	}, "jimeng.check_status", "jimeng.generate_video")
 	defer mcp.Close()
 
 	server := NewServer(Config{DataDir: root, CommandRunner: runner})
@@ -743,27 +964,18 @@ func localMCPProviderByID(providers []localmcp.ProviderConfig, id string) (local
 
 func TestJiMengLoginHeadlessCallsRegisteredMCPProvider(t *testing.T) {
 	root := t.TempDir()
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode mcp request: %v", err)
+	mcp := newMCPProtocolTestServer(t, func(toolName string, _ map[string]interface{}) map[string]interface{} {
+		if toolName != "jimeng.login_headless" {
+			t.Fatalf("tool = %v, want jimeng.login_headless", toolName)
 		}
-		params := req["params"].(map[string]interface{})
-		if params["name"] != "jimeng.login_headless" {
-			t.Fatalf("tool = %v, want jimeng.login_headless", params["name"])
-		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"verification_uri": "https://example.com/device",
-					"user_code":        "ABCD-EFGH",
-					"device_code":      "device-1",
-				},
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"verification_uri": "https://example.com/device",
+				"user_code":        "ABCD-EFGH",
+				"device_code":      "device-1",
 			},
-		})
-	}))
+		}
+	}, "jimeng.login_headless")
 	defer mcp.Close()
 
 	server := NewServer(Config{DataDir: root})
@@ -788,6 +1000,9 @@ func TestJiMengLoginHeadlessCallsRegisteredMCPProvider(t *testing.T) {
 	structured := result["structuredContent"].(map[string]interface{})
 	if structured["user_code"] != "ABCD-EFGH" {
 		t.Fatalf("user_code = %#v", structured["user_code"])
+	}
+	if result["providerId"] != "jimeng" || result["toolName"] != "jimeng.login_headless" {
+		t.Fatalf("JiMeng endpoint did not use generic MCP output: %#v", result)
 	}
 }
 
@@ -833,7 +1048,7 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
 		t.Fatalf("create config dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "config", "mcp-providers.json"), []byte(`{"providers":[{"id":"jimeng","label":"JiMeng MCP","transport":"stdio","command":"python3","args":["mcp/jimeng/server.py"],"env":{"DREAMINA_TOKEN":"secret-token"},"enabled":true}]}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "config", "mcp-providers.json"), []byte(`{"providers":[{"id":"jimeng","label":"JiMeng MCP","transport":"stdio","command":"python3","args":["mcp/jimeng/server.py"],"env":{"DREAMINA_TOKEN":"secret-token","ACCOUNT_SESSION":"second-env-secret-should-redact"},"headers":{"Authorization":"Bearer mcp-header-token-should-redact","X-Workspace":"custom-header-secret-should-redact"},"enabled":true}]}`), 0o644); err != nil {
 		t.Fatalf("write mcp providers: %v", err)
 	}
 	artifactDir := filepath.Join(root, "artifacts", "vp-1", "video-1")
@@ -948,13 +1163,52 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	if manifest["appVersion"] != "9.9.9-beta" || manifest["gitCommit"] != "abc1234-test" {
 		t.Fatalf("diagnostics manifest should include version and git commit: %#v", manifest)
 	}
+	var mcpStatus struct {
+		Providers []map[string]interface{} `json:"providers"`
+	}
+	if err := json.Unmarshal([]byte(entries["mcp/provider-status.json"]), &mcpStatus); err != nil {
+		t.Fatalf("invalid MCP provider diagnostics: %v", err)
+	}
+	var diagnosticProvider map[string]interface{}
+	for _, provider := range mcpStatus.Providers {
+		if provider["id"] == "jimeng" {
+			diagnosticProvider = provider
+			break
+		}
+	}
+	if diagnosticProvider == nil {
+		t.Fatalf("MCP provider diagnostics missing jimeng provider: %#v", mcpStatus.Providers)
+	}
+	if _, ok := diagnosticProvider["headers"]; ok {
+		t.Fatalf("MCP provider diagnostics must omit header values: %#v", diagnosticProvider)
+	}
+	if diagnosticProvider["hasHeaders"] != true {
+		t.Fatalf("MCP provider diagnostics should preserve hasHeaders metadata: %#v", diagnosticProvider)
+	}
+	headerKeys, ok := diagnosticProvider["headerKeys"].([]interface{})
+	if !ok || len(headerKeys) != 2 || headerKeys[0] != "Authorization" || headerKeys[1] != "X-Workspace" {
+		t.Fatalf("MCP provider diagnostics should preserve sorted headerKeys metadata: %#v", diagnosticProvider["headerKeys"])
+	}
+	if _, ok := diagnosticProvider["env"]; ok {
+		t.Fatalf("MCP provider diagnostics must omit environment values: %#v", diagnosticProvider)
+	}
+	if diagnosticProvider["hasEnv"] != true {
+		t.Fatalf("MCP provider diagnostics should preserve hasEnv metadata: %#v", diagnosticProvider)
+	}
+	envKeys, ok := diagnosticProvider["envKeys"].([]interface{})
+	if !ok || len(envKeys) != 2 || envKeys[0] != "ACCOUNT_SESSION" || envKeys[1] != "DREAMINA_TOKEN" {
+		t.Fatalf("MCP provider diagnostics should preserve sorted envKeys metadata: %#v", diagnosticProvider["envKeys"])
+	}
 	recentTaskIDs, ok := manifest["recentTaskIds"].([]interface{})
 	if !ok || len(recentTaskIDs) != 1 || recentTaskIDs[0] != "task-beta-123" {
 		t.Fatalf("diagnostics manifest should include recent task ids, got %#v", manifest["recentTaskIds"])
 	}
 	allEntries := strings.Join(mapValues(entries), "\n")
 	if strings.Contains(allEntries, "secret-token") ||
+		strings.Contains(allEntries, "second-env-secret-should-redact") ||
 		strings.Contains(allEntries, "sk-test-secret-should-redact") ||
+		strings.Contains(allEntries, "mcp-header-token-should-redact") ||
+		strings.Contains(allEntries, "custom-header-secret-should-redact") ||
 		strings.Contains(allEntries, "live-token-should-redact") ||
 		strings.Contains(allEntries, "session-cookie-should-redact") ||
 		strings.Contains(allEntries, "json-bearer-should-redact") ||

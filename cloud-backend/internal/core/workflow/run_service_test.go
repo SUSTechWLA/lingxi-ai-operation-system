@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 )
 
@@ -21,16 +20,9 @@ func TestJSONUnmarshalAcceptsRawMessageDAG(t *testing.T) {
 	}
 }
 
-func TestWorkflowRunUserIDFromContext(t *testing.T) {
-	ctx := auth.ContextWithUser(context.Background(), "u_auth")
-	if got := workflowRunUserID(ctx); got != "u_auth" {
-		t.Fatalf("workflowRunUserID = %q, want authenticated user", got)
-	}
-}
-
-func TestWorkflowRunUserIDDefaultsWhenUnauthenticated(t *testing.T) {
-	if got := workflowRunUserID(context.Background()); got != "default" {
-		t.Fatalf("workflowRunUserID = %q, want default", got)
+func TestCreateRunFailsClosedWithoutAuthenticatedUser(t *testing.T) {
+	if _, err := (&RunService{}).CreateRun(context.Background(), "", "project", "template", "1", nil); err == nil {
+		t.Fatal("workflow run task creation must require an explicit authenticated owner")
 	}
 }
 

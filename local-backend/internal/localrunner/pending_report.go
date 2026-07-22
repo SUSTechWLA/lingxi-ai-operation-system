@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // PendingReport represents a locally-persisted job completion/failure report
@@ -14,8 +13,8 @@ import (
 // Reports are persisted before cloud delivery and deleted after success,
 // ensuring no result is lost on network failure.
 type PendingReport struct {
-	JobID    string      `json:"jobId"`
-	Type     string      `json:"type"` // "complete" or "fail"
+	JobID    string              `json:"jobId"`
+	Type     string              `json:"type"` // "complete" or "fail"
 	Complete *CompleteJobRequest `json:"complete,omitempty"`
 	Fail     *FailJobRequest     `json:"fail,omitempty"`
 }
@@ -28,10 +27,6 @@ type PendingReportStore struct {
 // maxPendingReports limits how many reports accumulate on disk before
 // Save starts rejecting new reports to prevent disk exhaustion.
 const maxPendingReports = 1000
-
-// staleReportAge is the age after which an undelivered report is
-// considered stale and can be cleaned up.
-const staleReportAge = 7 * 24 * time.Hour
 
 // NewPendingReportStore creates a store rooted at the given directory.
 func NewPendingReportStore(dataDir string) *PendingReportStore {
@@ -90,8 +85,9 @@ func (s *PendingReportStore) Count() (int, error) {
 	return count, nil
 }
 
-// List returns all pending reports on disk. Stale reports (older than
-// staleReportAge) are silently removed during listing.
+// List returns all pending reports on disk. Age alone never proves cloud-side
+// terminal delivery, so valid reports remain until an accepted cloud response
+// causes Remove to be called explicitly.
 func (s *PendingReportStore) List() ([]PendingReport, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -107,15 +103,6 @@ func (s *PendingReportStore) List() ([]PendingReport, error) {
 			continue
 		}
 		filePath := filepath.Join(s.dir, entry.Name())
-
-		// Check staleness: skip and remove reports older than staleReportAge.
-		info, err := entry.Info()
-		if err == nil {
-			if time.Since(info.ModTime()) > staleReportAge {
-				_ = os.Remove(filePath)
-				continue
-			}
-		}
 
 		data, err := os.ReadFile(filePath)
 		if err != nil {

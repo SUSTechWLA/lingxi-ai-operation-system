@@ -33,6 +33,13 @@ func (g *PlanGuard) WithDirectors(directors DirectorRegistry) *PlanGuard {
 	return g
 }
 
+func (g *PlanGuard) withToolCatalog(tools ToolCatalog) *PlanGuard {
+	if g == nil {
+		return nil
+	}
+	return &PlanGuard{tools: tools, localValidator: g.localValidator, directors: g.directors}
+}
+
 func (g *PlanGuard) Validate(plan *AgentPlan) error {
 	return g.ValidatePlan(context.Background(), "", plan)
 }
@@ -78,6 +85,11 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 		if manifest == nil {
 			return fmt.Errorf("agent step %s references unknown tool %s", step.ID, step.Tool)
 		}
+		if step.Tool == "__quality_gate__" {
+			if err := g.validateQualityGate(step, stepMap); err != nil {
+				return err
+			}
+		}
 
 		// Local capability check: for video plans, local runner availability is
 		// an execution-time dependency because local preview/render steps occur
@@ -94,11 +106,17 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 		if err := validateRiskLevel(step, manifest); err != nil {
 			return err
 		}
-		if err := validateRequiredParameters(step, manifest); err != nil {
-			return err
-		}
-		if err := validateParameterTypes(step, manifest); err != nil {
-			return err
+		if manifest.InputSchema != nil {
+			if err := validateCanonicalStepInput(step, manifest); err != nil {
+				return err
+			}
+		} else {
+			if err := validateRequiredParameters(step, manifest); err != nil {
+				return err
+			}
+			if err := validateParameterTypes(step, manifest); err != nil {
+				return err
+			}
 		}
 		if err := validateToolPolicy(step, manifest, plan); err != nil {
 			return err
@@ -107,6 +125,9 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 			return fmt.Errorf("agent step %s uses side-effect tool %s without approval policy", step.ID, step.Tool)
 		}
 		for _, dep := range step.DependsOn {
+			if dep == step.ID {
+				return fmt.Errorf("agent step %s cannot depend on itself", step.ID)
+			}
 			if !seen[dep] {
 				return fmt.Errorf("agent step %s depends on unknown or later step %s", step.ID, dep)
 			}
@@ -133,6 +154,86 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 	}
 
 	return nil
+}
+
+func (g *PlanGuard) validateQualityGate(gate AgentStep, steps map[string]AgentStep) error {
+	productionID, _ := gate.Arguments["productionStep"].(string)
+	checkerID, _ := gate.Arguments["checkerStep"].(string)
+	productionTool, _ := gate.Arguments["productionTool"].(string)
+	if productionID == "" || checkerID == "" || productionTool == "" {
+		return fmt.Errorf("quality gate %s is missing productionStep, productionTool, or checkerStep", gate.ID)
+	}
+	production, exists := steps[productionID]
+	if !exists {
+		return fmt.Errorf("quality gate %s references unknown production step %s", gate.ID, productionID)
+	}
+	if production.Tool != productionTool {
+		return fmt.Errorf("quality gate %s productionTool %s does not match production step tool %s", gate.ID, productionTool, production.Tool)
+	}
+	productionManifest := g.manifestFor(production.Tool)
+	if productionManifest == nil || !productionManifest.QualityPolicy.Required {
+		return fmt.Errorf("quality gate %s production step %s has no required quality policy", gate.ID, productionID)
+	}
+	checkerTool, hasChecker := qualityCheckerFor(production.Tool, productionManifest)
+	if !hasChecker {
+		return fmt.Errorf("quality gate %s production step %s has no configured checker", gate.ID, productionID)
+	}
+	checker, exists := steps[checkerID]
+	if !exists {
+		return fmt.Errorf("quality gate %s references unknown checker step %s", gate.ID, checkerID)
+	}
+	if checker.Tool != checkerTool {
+		return fmt.Errorf("quality gate %s checker tool %s does not match required tool %s", gate.ID, checker.Tool, checkerTool)
+	}
+	if !containsString(checker.DependsOn, productionID) {
+		return fmt.Errorf("quality gate %s checker %s does not depend on production step %s", gate.ID, checkerID, productionID)
+	}
+	if len(gate.DependsOn) != 1 || gate.DependsOn[0] != checkerID {
+		return fmt.Errorf("quality gate %s must depend only on checker step %s", gate.ID, checkerID)
+	}
+	expectedMinScore := productionManifest.QualityPolicy.MinScore
+	if expectedMinScore <= 0 {
+		expectedMinScore = 85
+	}
+	minScore, hasMinScore := gate.Arguments["minScore"]
+	if !hasMinScore || intArgument(minScore) != expectedMinScore {
+		return fmt.Errorf("quality gate %s minScore does not match manifest policy", gate.ID)
+	}
+	if autoRepair, ok := gate.Arguments["autoRepair"].(bool); !ok || autoRepair != productionManifest.QualityPolicy.AutoRepair {
+		return fmt.Errorf("quality gate %s autoRepair does not match manifest policy", gate.ID)
+	}
+	maxRepairAttempts, hasMaxRepairAttempts := gate.Arguments["maxRepairAttempts"]
+	if !hasMaxRepairAttempts || intArgument(maxRepairAttempts) != productionManifest.QualityPolicy.MaxRepairAttempts {
+		return fmt.Errorf("quality gate %s maxRepairAttempts does not match manifest policy", gate.ID)
+	}
+	if autoApprove, _ := gate.Arguments["autoApproveWhenPassed"].(bool); !autoApprove {
+		return fmt.Errorf("quality gate %s must auto-approve only after the checker passes", gate.ID)
+	}
+	checkerManifest := g.manifestFor(checker.Tool)
+	if fmt.Sprint(gate.Arguments["qualityCheckerNode"]) != compiledToolOutputNodeID(checkerID, checkerManifest) {
+		return fmt.Errorf("quality gate %s qualityCheckerNode does not match checker step %s", gate.ID, checkerID)
+	}
+	if fmt.Sprint(gate.Arguments["productionSourceNode"]) != compiledToolSourceNodeID(productionID, productionManifest) {
+		return fmt.Errorf("quality gate %s productionSourceNode does not match production step %s", gate.ID, productionID)
+	}
+	return nil
+}
+
+func intArgument(value interface{}) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float32:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
 }
 
 func validateShotRegenerationScope(step AgentStep, stepMap map[string]AgentStep) error {
@@ -724,6 +825,15 @@ func (g *PlanGuard) ValidateWithWarnings(plan *AgentPlan) ([]string, error) {
 }
 
 func (g *PlanGuard) manifestFor(name string) *tool.ToolManifest {
+	if name == "__quality_gate__" {
+		return &tool.ToolManifest{
+			Name:      "__quality_gate__",
+			Type:      "control",
+			Boundary:  tool.BoundaryCloudBuiltin,
+			CostLevel: tool.CostLow,
+			RiskLevel: tool.RiskLow,
+		}
+	}
 	if g == nil || g.tools == nil {
 		return nil
 	}
@@ -859,22 +969,19 @@ func validateReferenceExpressions(
 	stepMap map[string]AgentStep,
 	stepManifests map[string]*tool.ToolManifest,
 ) error {
-	for _, value := range step.Arguments {
-		s, ok := value.(string)
-		if !ok {
-			continue
-		}
-		matches := referencePattern.FindStringSubmatch(s)
-		if matches == nil {
-			continue
-		}
-		refStepID := matches[1]
-		refField := matches[2]
+	for _, contractReference := range contractArgumentReferences(step.Arguments) {
+		reference := contractReference.argumentReference
+		refStepID := reference.StepID
+		refField := reference.Field
+		expression := reference.Expression
 
 		// Check the referenced step exists.
 		refStep, exists := stepMap[refStepID]
 		if !exists {
-			return fmt.Errorf("agent step %s references unknown step %s in argument expression %s", step.ID, refStepID, s)
+			return fmt.Errorf("agent step %s references unknown step %s in argument expression %s", step.ID, refStepID, expression)
+		}
+		if refStepID == step.ID {
+			return fmt.Errorf("agent step %s cannot reference its own output in argument expression %s", step.ID, expression)
 		}
 
 		// Check the referenced step is an upstream dependency.
@@ -885,7 +992,7 @@ func validateReferenceExpressions(
 				break
 			}
 		}
-		if !isUpstream && refStepID != step.ID {
+		if !isUpstream {
 			return fmt.Errorf("agent step %s references step %s which is not declared as a dependency", step.ID, refStepID)
 		}
 
@@ -898,13 +1005,19 @@ func validateReferenceExpressions(
 					step.ID, refStepID, refField,
 				)
 			}
-			if len(refManifest.Output) > 0 {
-				if _, ok := refManifest.Output[refField]; !ok {
-					return fmt.Errorf(
-						"agent step %s references output field %s of step %s, but tool %s does not declare this output field",
-						step.ID, refField, refStepID, refStep.Tool,
-					)
-				}
+			sourceSchema, declared := canonicalOutputFieldSchema(refManifest, refField)
+			if !declared {
+				return fmt.Errorf(
+					"agent step %s references output field %s of step %s, but tool %s does not declare this output field",
+					step.ID, refField, refStepID, refStep.Tool,
+				)
+			}
+			if targetSchema, ok := canonicalInputPathSchema(stepManifests[step.ID], contractReference.Path); ok &&
+				!referenceTypesCompatible(sourceSchema, targetSchema) {
+				return fmt.Errorf(
+					"agent step %s reference %s type is incompatible with input path %v",
+					step.ID, expression, contractReference.Path,
+				)
 			}
 		}
 	}

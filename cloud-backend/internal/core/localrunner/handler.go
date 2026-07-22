@@ -2,21 +2,27 @@ package localrunner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/tangying-ai/aios-core/internal/core/auth"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
 type RunnerService interface {
 	RegisterRunner(ctx context.Context, req RegisterRunnerRequest) (*RegisterRunnerResponse, error)
 	Heartbeat(ctx context.Context, runnerID string, req HeartbeatRequest) error
 	ClaimJob(ctx context.Context, runnerID string) (*LocalJob, error)
-	ReportProgress(ctx context.Context, jobID string, req ProgressRequest) error
-	CompleteJob(ctx context.Context, jobID string, req CompleteJobRequest) (*LocalJob, error)
-	FailJob(ctx context.Context, jobID string, req FailJobRequest) (*LocalJob, error)
+	ReportProgress(ctx context.Context, identity JobMutationIdentity, jobID string, req ProgressRequest) error
+	CompleteJob(ctx context.Context, identity JobMutationIdentity, jobID string, req CompleteJobRequest) (*LocalJob, error)
+	FailJob(ctx context.Context, identity JobMutationIdentity, jobID string, req FailJobRequest) (*LocalJob, error)
+	ClaimTerminalCallback(ctx context.Context, identity JobMutationIdentity, jobID string, phase CallbackPhase) (*TerminalCallbackClaim, error)
+	AcknowledgeTerminalCallback(ctx context.Context, jobID string, phase CallbackPhase, token string) error
+	ReleaseTerminalCallback(ctx context.Context, jobID string, phase CallbackPhase, token string) error
 	GetJob(ctx context.Context, jobID string) (*LocalJob, error)
 	ValidateRunnerAccess(ctx context.Context, userID, deviceID, runnerID, sessionID string) error
 	ValidateJobAccess(ctx context.Context, userID, runnerID, jobID string) error
@@ -26,6 +32,31 @@ type NodeResultSink interface {
 	OnSuccess(ctx context.Context, nodeID string, output map[string]interface{}) error
 	OnFailure(ctx context.Context, nodeID string, errorMessage string) error
 	OnProgress(ctx context.Context, nodeID string, progress float64, step, message string) error
+}
+
+type callbackIdempotencyContextKey struct{}
+
+// CallbackIdempotencyKeyFromContext returns the stable delivery key attached to
+// terminal callback invocations. Sinks that support idempotent writes should
+// persist this key with their side effect.
+func CallbackIdempotencyKeyFromContext(ctx context.Context) (string, bool) {
+	value, ok := ctx.Value(callbackIdempotencyContextKey{}).(string)
+	return value, ok && value != ""
+}
+
+type ToolManifestResolver interface {
+	GetManifest(name string) *tool.ToolManifest
+}
+
+type ScopedLocalJobManifestResolver interface {
+	ResolveMCPJobManifest(ctx context.Context, job *LocalJob) (*tool.ToolManifest, error)
+}
+
+// StaleMCPJobRetirer atomically retires MCP jobs whose immutable catalog
+// binding is no longer advertised by the authenticated target runner. The
+// returned terminal jobs include any pending callback replay work.
+type StaleMCPJobRetirer interface {
+	RetireStaleMCPJobs(ctx context.Context, identity JobMutationIdentity) ([]*LocalJob, error)
 }
 
 // ArtifactSyncCallback is invoked after a local job completes successfully,
@@ -41,6 +72,7 @@ type Handler struct {
 	results              NodeResultSink
 	artifactSyncCallback ArtifactSyncCallback
 	jobFailureCallback   JobFailureCallback
+	manifestResolver     ToolManifestResolver
 	middleware           []gin.HandlerFunc
 }
 
@@ -58,6 +90,13 @@ func (h *Handler) WithArtifactSyncCallback(cb ArtifactSyncCallback) *Handler {
 // WithJobFailureCallback registers a domain failure callback.
 func (h *Handler) WithJobFailureCallback(cb JobFailureCallback) *Handler {
 	h.jobFailureCallback = cb
+	return h
+}
+
+// WithToolManifestResolver enables canonical output validation before a local
+// completion is durably marked COMPLETED or published to the DAG state machine.
+func (h *Handler) WithToolManifestResolver(resolver ToolManifestResolver) *Handler {
+	h.manifestResolver = resolver
 	return h
 }
 
@@ -108,12 +147,20 @@ func (h *Handler) heartbeat(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if err := h.retireStaleMCPJobs(c.Request.Context(), h.runnerIdentityFromRequest(c)); err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (h *Handler) claimJob(c *gin.Context) {
 	if err := h.validateRunnerFromRequest(c); err != nil {
 		writeError(c, http.StatusForbidden, err.Error())
+		return
+	}
+	if err := h.retireStaleMCPJobs(c.Request.Context(), h.runnerIdentityFromRequest(c)); err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	job, err := h.service.ClaimJob(c.Request.Context(), c.Param("runnerId"))
@@ -124,18 +171,36 @@ func (h *Handler) claimJob(c *gin.Context) {
 	c.JSON(http.StatusOK, ClaimJobResponse{Job: job})
 }
 
+func (h *Handler) retireStaleMCPJobs(ctx context.Context, identity JobMutationIdentity) error {
+	retirer, ok := h.service.(StaleMCPJobRetirer)
+	if !ok {
+		return nil
+	}
+	jobs, err := retirer.RetireStaleMCPJobs(ctx, identity)
+	if err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		if err := h.deliverTerminalCallbacks(ctx, identity, job); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (h *Handler) reportProgress(c *gin.Context) {
 	var req ProgressRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateJobFromRequest(c); err != nil {
+	identity, err := h.validateJobFromRequest(c)
+	if err != nil {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}
-	if err := h.service.ReportProgress(c.Request.Context(), c.Param("jobId"), req); err != nil {
-		writeError(c, http.StatusInternalServerError, err.Error())
+	if err := h.service.ReportProgress(c.Request.Context(), identity, c.Param("jobId"), req); err != nil {
+		writeJobMutationError(c, err)
 		return
 	}
 
@@ -157,35 +222,186 @@ func (h *Handler) completeJob(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateJobFromRequest(c); err != nil {
+	identity, err := h.validateJobFromRequest(c)
+	if err != nil {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}
-	jobContext, _ := h.service.GetJob(c.Request.Context(), c.Param("jobId"))
-	req.Output = normalizeCompleteJobOutput(jobContext, req.Output)
-	job, err := h.service.CompleteJob(c.Request.Context(), c.Param("jobId"), req)
+	jobContext, err := h.service.GetJob(c.Request.Context(), c.Param("jobId"))
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if jobContext == nil {
-		jobContext = job
+	if jobContext != nil && (jobContext.Status == JobCompleted || jobContext.Status == JobFailed) {
+		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, jobContext); err != nil {
+			writeCallbackError(c, err)
+			return
+		}
+		// The persisted terminal status is authoritative. A late complete report
+		// may replay pending callbacks, but can never turn FAILED into success.
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
 	}
 	req.Output = normalizeCompleteJobOutput(jobContext, req.Output)
-	if h.results != nil && job != nil && job.NodeID != "" {
-		if err := h.results.OnSuccess(c.Request.Context(), job.NodeID, req.Output); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
+	if isMCPErrorCompletion(jobContext, req.Output) {
+		validationErr := tool.ValidateLocalJobOutput(&tool.ToolManifest{Boundary: tool.BoundaryMCPProvider}, req.Output)
+		h.failInvalidCompletion(c, identity, jobContext, validationErr)
+		return
+	}
+	manifest, manifestErr := h.manifestForLocalJob(c.Request.Context(), jobContext)
+	if manifestErr != nil {
+		h.failInvalidCompletion(c, identity, jobContext, manifestErr)
+		return
+	}
+	if manifest != nil {
+		if err := tool.ValidateLocalJobOutput(manifest, req.Output); err != nil {
+			h.failInvalidCompletion(c, identity, jobContext, err)
 			return
 		}
 	}
-	// Sync artifact metadata to cloud ArtifactIndex after local job completion.
-	if h.artifactSyncCallback != nil && jobContext != nil {
-		if err := h.artifactSyncCallback(c.Request.Context(), jobContext, req.Output); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
+	job, err := h.service.CompleteJob(c.Request.Context(), identity, c.Param("jobId"), req)
+	if err != nil {
+		if h.recoverTerminalMutation(c, identity, err) {
 			return
 		}
+		writeJobMutationError(c, err)
+		return
+	}
+	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
+		writeCallbackError(c, err)
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *Handler) manifestForLocalJob(ctx context.Context, job *LocalJob) (*tool.ToolManifest, error) {
+	if h == nil || job == nil {
+		return nil, nil
+	}
+	if NormalizeCommand(job.Command) == CommandLocalMCPToolCall {
+		if resolver, ok := h.service.(ScopedLocalJobManifestResolver); ok {
+			manifest, err := resolver.ResolveMCPJobManifest(ctx, job)
+			if err != nil || manifest != nil {
+				return manifest, err
+			}
+		}
+	}
+	if h.manifestResolver == nil {
+		return nil, nil
+	}
+	for _, name := range []string{job.MCPLogicalToolName, job.ToolName} {
+		if name != "" {
+			if manifest := h.manifestResolver.GetManifest(name); manifest != nil {
+				return manifest, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func isMCPErrorCompletion(job *LocalJob, output map[string]interface{}) bool {
+	if job == nil || NormalizeCommand(job.Command) != CommandLocalMCPToolCall {
+		return false
+	}
+	isError, _ := output["isError"].(bool)
+	return isError
+}
+
+func (h *Handler) failInvalidCompletion(c *gin.Context, identity JobMutationIdentity, job *LocalJob, validationErr error) {
+	code := "OUTPUT_SCHEMA_INVALID"
+	if errors.Is(validationErr, tool.ErrMCPToolResult) {
+		code = "MCP_TOOL_ERROR"
+	}
+	message := code + ": " + validationErr.Error()
+	failed, err := h.service.FailJob(c.Request.Context(), identity, c.Param("jobId"), FailJobRequest{
+		Success: false,
+		Error: map[string]interface{}{
+			"code":    code,
+			"message": message,
+		},
+		Retryable: true,
+	})
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, failed); err != nil {
+		writeCallbackError(c, err)
+		return
+	}
+	writeError(c, http.StatusUnprocessableEntity, message)
+}
+
+func (h *Handler) deliverTerminalCallbacks(ctx context.Context, identity JobMutationIdentity, job *LocalJob) error {
+	if job == nil || (job.Status != JobCompleted && job.Status != JobFailed) {
+		return nil
+	}
+	if err := h.deliverTerminalCallbackPhase(ctx, identity, job, CallbackPhaseResult); err != nil {
+		return err
+	}
+	return h.deliverTerminalCallbackPhase(ctx, identity, job, CallbackPhaseFollowup)
+}
+
+func (h *Handler) deliverTerminalCallbackPhase(ctx context.Context, identity JobMutationIdentity, job *LocalJob, phase CallbackPhase) error {
+	claim, err := h.service.ClaimTerminalCallback(ctx, identity, job.ID, phase)
+	if err != nil {
+		return err
+	}
+	if claim == nil || claim.Delivered {
+		return nil
+	}
+	callbackCtx := context.WithValue(ctx, callbackIdempotencyContextKey{}, claim.IdempotencyKey)
+	deliveryErr := h.invokeTerminalCallback(callbackCtx, job, phase)
+	if deliveryErr != nil {
+		if releaseErr := h.service.ReleaseTerminalCallback(ctx, job.ID, phase, claim.Token); releaseErr != nil {
+			return fmt.Errorf("terminal callback failed: %v; release claim: %w", deliveryErr, releaseErr)
+		}
+		return deliveryErr
+	}
+	return h.service.AcknowledgeTerminalCallback(ctx, job.ID, phase, claim.Token)
+}
+
+func (h *Handler) invokeTerminalCallback(ctx context.Context, job *LocalJob, phase CallbackPhase) error {
+	switch phase {
+	case CallbackPhaseResult:
+		if job.Status == JobCompleted {
+			if h.results != nil && job.NodeID != "" {
+				if err := h.results.OnSuccess(ctx, job.NodeID, job.Output); err != nil {
+					return err
+				}
+			}
+		} else if h.results != nil && job.NodeID != "" {
+			if err := h.results.OnFailure(ctx, job.NodeID, terminalFailureMessage(job)); err != nil {
+				return err
+			}
+		}
+		return nil
+	case CallbackPhaseFollowup:
+		if job.Status == JobCompleted {
+			if h.artifactSyncCallback != nil {
+				if err := h.artifactSyncCallback(ctx, job, job.Output); err != nil {
+					return err
+				}
+			}
+		} else if h.jobFailureCallback != nil {
+			if err := h.jobFailureCallback(ctx, job, terminalFailureMessage(job)); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown callback phase %q", phase)
+	}
+}
+
+func terminalFailureMessage(job *LocalJob) string {
+	if job == nil {
+		return "local job failed"
+	}
+	if strings.TrimSpace(job.ErrorMessage) != "" {
+		return job.ErrorMessage
+	}
+	return errorMessageFromMap(job.Error)
 }
 
 func normalizeCompleteJobOutput(job *LocalJob, output map[string]interface{}) map[string]interface{} {
@@ -305,63 +521,127 @@ func (h *Handler) failJob(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateJobFromRequest(c); err != nil {
+	identity, err := h.validateJobFromRequest(c)
+	if err != nil {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}
-	job, err := h.service.FailJob(c.Request.Context(), c.Param("jobId"), req)
+	existing, err := h.service.GetJob(c.Request.Context(), c.Param("jobId"))
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if h.results != nil && job != nil && job.NodeID != "" {
-		if err := h.results.OnFailure(c.Request.Context(), job.NodeID, errorMessageFromMap(req.Error)); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
+	if existing != nil && (existing.Status == JobCompleted || existing.Status == JobFailed) {
+		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, existing); err != nil {
+			writeCallbackError(c, err)
 			return
 		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
 	}
-	if h.jobFailureCallback != nil && job != nil {
-		if err := h.jobFailureCallback(c.Request.Context(), job, errorMessageFromMap(req.Error)); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
+	job, err := h.service.FailJob(c.Request.Context(), identity, c.Param("jobId"), req)
+	if err != nil {
+		if h.recoverTerminalMutation(c, identity, err) {
 			return
 		}
+		writeJobMutationError(c, err)
+		return
+	}
+	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
+		writeCallbackError(c, err)
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// recoverTerminalMutation handles the loser of a concurrent complete/fail CAS.
+// The terminal row is authoritative and its callback outbox remains replayable;
+// returning 403 here would incorrectly make the local runner discard the report.
+func (h *Handler) recoverTerminalMutation(c *gin.Context, identity JobMutationIdentity, mutationErr error) bool {
+	if !errors.Is(mutationErr, ErrJobAccessDenied) {
+		return false
+	}
+	job, err := h.service.GetJob(c.Request.Context(), c.Param("jobId"))
+	if err != nil || job == nil || (job.Status != JobCompleted && job.Status != JobFailed) {
+		return false
+	}
+	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
+		writeCallbackError(c, err)
+		return true
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+	return true
+}
+
+func writeCallbackError(c *gin.Context, err error) {
+	if errors.Is(err, ErrCallbackBusy) {
+		writeError(c, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeError(c, http.StatusInternalServerError, err.Error())
+}
+
+func writeJobMutationError(c *gin.Context, err error) {
+	status := http.StatusInternalServerError
+	if errors.Is(err, ErrJobAccessDenied) || errors.Is(err, ErrRunnerAccessDenied) {
+		status = http.StatusForbidden
+	} else if errors.Is(err, ErrJobAlreadyCompleted) {
+		status = http.StatusConflict
+	}
+	writeError(c, status, err.Error())
 }
 
 // validateRunnerFromRequest checks that the runner ID from the URL matches
 // the authenticated user and the X-Runner-ID / X-Runner-Session-ID headers.
 func (h *Handler) validateRunnerFromRequest(c *gin.Context) error {
-	runnerID := c.Param("runnerId")
-	userID, _ := auth.UserIDFromContext(c.Request.Context())
-	deviceID, _ := auth.DeviceIDFromContext(c.Request.Context())
+	identity := h.runnerIdentityFromRequest(c)
+	runnerID := identity.RunnerID
 	headerRunnerID := c.GetHeader("X-Runner-ID")
-	sessionID := c.GetHeader("X-Runner-Session-ID")
-	if sessionID == "" {
-		sessionID = c.GetHeader("X-Runner-Session-Id")
-	}
 
 	// If X-Runner-ID is present, it must match the URL param
 	if headerRunnerID != "" && headerRunnerID != runnerID {
 		return ErrRunnerAccessDenied
 	}
 
-	return h.service.ValidateRunnerAccess(c.Request.Context(), userID, deviceID, runnerID, sessionID)
+	return h.service.ValidateRunnerAccess(c.Request.Context(), identity.UserID, identity.DeviceID, runnerID, identity.SessionID)
+}
+
+func (h *Handler) runnerIdentityFromRequest(c *gin.Context) JobMutationIdentity {
+	userID, _ := auth.UserIDFromContext(c.Request.Context())
+	deviceID, _ := auth.DeviceIDFromContext(c.Request.Context())
+	sessionID := c.GetHeader("X-Runner-Session-ID")
+	if sessionID == "" {
+		sessionID = c.GetHeader("X-Runner-Session-Id")
+	}
+	return JobMutationIdentity{
+		UserID: userID, DeviceID: deviceID, RunnerID: c.Param("runnerId"), SessionID: sessionID,
+	}
 }
 
 // validateJobFromRequest checks that the requesting runner (from X-Runner-ID header)
 // has access to the job.
-func (h *Handler) validateJobFromRequest(c *gin.Context) error {
+func (h *Handler) validateJobFromRequest(c *gin.Context) (JobMutationIdentity, error) {
 	jobID := c.Param("jobId")
 	userID, _ := auth.UserIDFromContext(c.Request.Context())
+	deviceID, _ := auth.DeviceIDFromContext(c.Request.Context())
 	runnerID := c.GetHeader("X-Runner-ID")
 	if runnerID == "" {
 		runnerID = c.GetHeader("X-Runner-Id")
 	}
 	if runnerID == "" {
-		return fmt.Errorf("X-Runner-ID header required")
+		return JobMutationIdentity{}, fmt.Errorf("X-Runner-ID header required")
 	}
-	return h.service.ValidateJobAccess(c.Request.Context(), userID, runnerID, jobID)
+	sessionID := c.GetHeader("X-Runner-Session-ID")
+	if sessionID == "" {
+		sessionID = c.GetHeader("X-Runner-Session-Id")
+	}
+	if err := h.service.ValidateRunnerAccess(c.Request.Context(), userID, deviceID, runnerID, sessionID); err != nil {
+		return JobMutationIdentity{}, err
+	}
+	if err := h.service.ValidateJobAccess(c.Request.Context(), userID, runnerID, jobID); err != nil {
+		return JobMutationIdentity{}, err
+	}
+	return JobMutationIdentity{UserID: userID, DeviceID: deviceID, RunnerID: runnerID, SessionID: sessionID}, nil
 }
 
 func writeError(c *gin.Context, status int, message string) {

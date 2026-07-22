@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -13,6 +13,22 @@ const authSource = await readFile(new URL('../src/components/AuthScreen.tsx', im
 const directorSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
 const cssSource = await readFile(new URL('../src/index.css', import.meta.url), 'utf8')
 const tailwindSource = await readFile(new URL('../tailwind.config.js', import.meta.url), 'utf8')
+
+async function readThemeSourceTree(directory) {
+  const entries = await readdir(directory, { withFileTypes: true })
+  const chunks = []
+  for (const entry of entries) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) {
+      chunks.push(await readThemeSourceTree(path))
+    } else if (/\.(?:ts|tsx|css)$/.test(entry.name)) {
+      chunks.push(await readFile(path, 'utf8'))
+    }
+  }
+  return chunks.join('\n')
+}
+
+const themeSourceTree = await readThemeSourceTree(new URL('../src/', import.meta.url).pathname)
 
 function readRgbToken(cssBlock, tokenName) {
   const match = cssBlock.match(new RegExp(`--color-${tokenName}:\\s*(\\d+)\\s+(\\d+)\\s+(\\d+)\\s*;`))
@@ -108,6 +124,9 @@ try {
   assert.doesNotMatch(cssSource, /#FFF6D6|#2B1606/)
   assert.match(tailwindSource, /rgb\(var\(--color-background\) \/ <alpha-value>\)/)
   assert.match(tailwindSource, /rgb\(var\(--color-ink\) \/ <alpha-value>\)/)
+  for (const token of ['brand-panel', 'on-brand-panel', 'warning', 'on-warning', 'warning-soft', 'warning-ink', 'success', 'on-success', 'success-soft', 'success-ink', 'danger', 'on-danger', 'danger-soft', 'danger-ink', 'neutral', 'on-neutral', 'neutral-soft', 'neutral-ink']) {
+    assert.match(tailwindSource, new RegExp(`['"]?${token}['"]?[^\\n]*--color-${token}`), `Tailwind must expose the ${token} semantic color`)
+  }
 
   const lightThemeMatch = cssSource.match(/:root\s*\{([\s\S]*?)\}/)
   const darkThemeMatch = cssSource.match(/\[data-theme=['"]dark['"]\]\s*\{([\s\S]*?)\}/)
@@ -121,6 +140,15 @@ try {
     }
     const hoverRatio = contrastRatio(readRgbToken(cssBlock, 'background-card'), readRgbToken(cssBlock, 'ink'))
     if (hoverRatio < 4.5) contrastFailures.push(`${themeName} background-card on ink hover is ${hoverRatio.toFixed(2)}:1; expected at least 4.5:1`)
+    for (const [backgroundToken, foregroundToken] of [['brand-panel', 'on-brand-panel'], ['warning', 'on-warning'], ['warning-soft', 'warning-ink'], ['success', 'on-success'], ['success-soft', 'success-ink'], ['danger', 'on-danger'], ['danger-soft', 'danger-ink'], ['neutral', 'on-neutral'], ['neutral-soft', 'neutral-ink']]) {
+      const ratio = contrastRatio(readRgbToken(cssBlock, foregroundToken), readRgbToken(cssBlock, backgroundToken))
+      if (ratio < 4.5) contrastFailures.push(`${themeName} ${foregroundToken} on ${backgroundToken} is ${ratio.toFixed(2)}:1; expected at least 4.5:1`)
+    }
+  }
+
+  for (const token of ['background', 'background-mist', 'background-card', 'brand-panel', 'warning-soft', 'success-soft', 'danger-soft', 'neutral-soft']) {
+    const luminance = relativeLuminance(readRgbToken(darkThemeMatch[1], token))
+    if (luminance > 0.08) contrastFailures.push(`dark ${token} luminance is ${luminance.toFixed(3)}; expected a genuinely dark surface`)
   }
 
   assert.match(tailwindSource, /on-primary[^\n]*--color-on-primary/)
@@ -132,6 +160,11 @@ try {
   assert.doesNotMatch(directorSource, /\bbg-white(?:\/(?:65|70|75|80))?(?=[\s'"`])/, 'themed Director surfaces must use the semantic background-card token')
   assert.doesNotMatch(directorSource, /\bbg-ink(?:\/80)?\b[^'"\n]*\btext-white\b|\btext-white\b[^'"\n]*\bbg-ink(?:\/80)?\b/, 'ink surfaces invert in dark mode and must use the semantic card foreground')
   assert.doesNotMatch(directorSource, /\btangying-gradient\b[^'"\n]*\btext-white\b/, 'the custom gradient cannot guarantee white-text contrast in dark mode')
+  assert.doesNotMatch(themeSourceTree, /\b(?:bg|text|border|ring)-white(?:\/[0-9]+)?\b/, 'theme-aware UI must not depend on hard-coded white utilities')
+  assert.doesNotMatch(themeSourceTree, /\bbg-\[[^\]]*#fff/i, 'theme-aware UI must not contain hard-coded white arbitrary backgrounds')
+  assert.doesNotMatch(themeSourceTree, /\bbg-(?:amber|green|red|stone|violet)-50(?:\/[0-9]+)?\b/, 'light status surfaces must use semantic theme colors')
+  assert.match(authSource, /bg-brand-panel[^'"\n]*text-on-brand-panel/, 'desktop login identity panel must stay dark in night mode')
+  assert.doesNotMatch(authSource, /bg-primary-dark[^'"\n]*md:flex/, 'login identity panel must not use the reversible primary-dark accent as a surface')
 
   const primaryActionStart = directorSource.indexOf('disabled={primaryAction.disabled}')
   const primaryActionEnd = directorSource.indexOf('</button>', primaryActionStart)

@@ -877,14 +877,21 @@ func (s *Server) diagnosticMCPProviders() map[string]interface{} {
 	}
 	items := make([]interface{}, 0, len(providers))
 	for _, provider := range providers {
-		data, _ := json.Marshal(provider)
+		sanitizedProvider := sanitizeMCPProvider(provider)
+		data, _ := json.Marshal(sanitizedProvider)
 		var entry map[string]interface{}
 		_ = json.Unmarshal(data, &entry)
-		if env, ok := entry["env"].(map[string]interface{}); ok {
-			entry["env"] = redactMap(env)
-		}
 		entry["reachable"] = false
 		entry["diagnosticNote"] = "provider config snapshot only; live tools/list is checked by /api/local/mcp-providers/status"
+		entry = redactMap(entry)
+		if sanitizedProvider.HasEnv {
+			entry["hasEnv"] = true
+			entry["envKeys"] = append([]string(nil), sanitizedProvider.EnvKeys...)
+		}
+		if sanitizedProvider.HasHeaders {
+			entry["hasHeaders"] = true
+			entry["headerKeys"] = append([]string(nil), sanitizedProvider.HeaderKeys...)
+		}
 		items = append(items, entry)
 	}
 	return map[string]interface{}{"schemaVersion": 1, "providers": items}
@@ -1579,5 +1586,5 @@ func (s *Server) writeModelProviderSettings(settings map[ModelCapability]ModelPr
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.modelProviderConfigPath(), append(data, '\n'), 0o600)
+	return atomicWritePrivateFile(s.modelProviderConfigPath(), append(data, '\n'))
 }

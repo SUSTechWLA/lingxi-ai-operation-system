@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -23,6 +25,8 @@ import (
 
 // nodeRefPattern matches {{node_id.output.field}} references in node inputs.
 var nodeRefPattern = regexp.MustCompile(`\{\{([^.]+)\.output\.([^}]+)\}\}`)
+
+const localMCPGatewayToolName = "__local_mcp_gateway__"
 
 type NodeExecutor struct {
 	toolRegistry    *tool.ToolRegistry
@@ -168,8 +172,28 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	parameters := tool.ExtractParameters(payload)
 	manifest := ne.toolRegistry.GetManifest(toolName)
 
-	// Resolve {{node_id.output.field}} references.
-	parameters = ne.resolveParameters(ctx, taskID, parameters)
+	// Resolve {{node_id.output.field}} references and validate only the logical
+	// tool arguments, excluding transport metadata added by DAG compilation.
+	var resolveErr error
+	parameters, resolveErr = ne.resolveParameters(ctx, taskID, parameters)
+	if resolveErr != nil || containsExactNodeReference(parameters) {
+		if resolveErr == nil {
+			resolveErr = fmt.Errorf("exact output reference remains unresolved")
+		}
+		ne.publishFailure(taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
+		return
+	}
+	contractManifest := ne.executionContractManifest(toolName, parameters, manifest)
+	contractArguments := executionContractArguments(payload, parameters, contractManifest)
+	contractArguments, resolveErr = ne.resolveParameters(ctx, taskID, contractArguments)
+	if resolveErr != nil {
+		ne.publishFailure(taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
+		return
+	}
+	if err := validateExecutionInput(contractManifest, contractArguments); err != nil {
+		ne.publishFailure(taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
+		return
+	}
 
 	// Build tool context with checkpoint data for retries.
 	toolCtx := ne.buildToolContext(ctx, nodeID, taskID, isLongRunning)
@@ -265,17 +289,16 @@ func (ne *NodeExecutor) hydratePayloadFromDB(ctx context.Context, nodeID string,
 }
 
 // resolveParameters resolves {{node_id.output.field}} references using completed
-// parent node outputs. Returns the original parameters on resolution failure.
-func (ne *NodeExecutor) resolveParameters(ctx context.Context, taskID string, parameters map[string]interface{}) map[string]interface{} {
+// parent node outputs and propagates failures so execution can fail closed.
+func (ne *NodeExecutor) resolveParameters(ctx context.Context, taskID string, parameters map[string]interface{}) (map[string]interface{}, error) {
 	if ne.nodeRepo == nil {
-		return parameters
+		return parameters, nil
 	}
 	resolved, err := ne.resolveNodeReferences(ctx, taskID, parameters)
 	if err != nil {
-		zap.L().Warn("Failed to resolve node references, using original parameters", zap.Error(err))
-		return parameters
+		return nil, err
 	}
-	return resolved
+	return resolved, nil
 }
 
 // buildToolContext builds a ToolContext with retry count from the node record.
@@ -376,6 +399,7 @@ func (ne *NodeExecutor) executeTool(
 		return executor.ExecutionResult{Error: fmt.Sprintf("Invalid parameters for tool: %s", toolName)}, nil
 	}
 	manifest := ne.toolRegistry.GetManifest(toolName)
+	contractManifest := ne.executionContractManifest(toolName, parameters, manifest)
 
 	// Wire progress reporter for long-running tasks.
 	if isLongRunning && progressCb != nil {
@@ -406,6 +430,14 @@ func (ne *NodeExecutor) executeTool(
 			execCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			result, execErr = execImpl.Execute(execCtx, *execReq)
+			if execErr == nil && result.Error == "" && result.ExitCode == 0 && contractManifest != nil && contractManifest.OutputSchema != nil {
+				var output interface{}
+				if err := json.Unmarshal(result.Stdout, &output); err != nil {
+					result.Error = fmt.Sprintf("%s: buildable tool stdout is not JSON: %v", outputSchemaInvalidCode, err)
+				} else if err := tool.ValidateManifestOutput(contractManifest, output); err != nil {
+					result.Error = fmt.Sprintf("%s: %v", outputSchemaInvalidCode, err)
+				}
+			}
 		}
 	} else if et, ok := t.(tool.ExecutableTool); ok {
 		resultCh := make(chan tool.ToolResult, 1)
@@ -417,8 +449,16 @@ func (ne *NodeExecutor) executeTool(
 		select {
 		case toolResult := <-resultCh:
 			if toolResult.Success {
-				output, _ := json.Marshal(toolResult.Data)
-				result = executor.ExecutionResult{ExitCode: 0, Stdout: output}
+				if err := tool.ValidateLocalJobOutput(contractManifest, toolResult.Data); err != nil {
+					code := outputSchemaInvalidCode
+					if errors.Is(err, tool.ErrMCPToolResult) {
+						code = mcpToolErrorCode
+					}
+					result = executor.ExecutionResult{ExitCode: 1, Error: fmt.Sprintf("%s: %v", code, err)}
+				} else {
+					output, _ := json.Marshal(toolResult.Data)
+					result = executor.ExecutionResult{ExitCode: 0, Stdout: output}
+				}
 			} else {
 				result = executor.ExecutionResult{ExitCode: 1, Error: toolResult.Error}
 			}
@@ -497,6 +537,20 @@ func (ne *NodeExecutor) localExecutionManifest(toolName string, parameters map[s
 	if manifest != nil && manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
 		return manifest
 	}
+	if toolName == localMCPGatewayToolName {
+		if localrunner.NormalizeCommand(firstString(parameters, nil, "localCommand")) != localrunner.CommandLocalMCPToolCall {
+			return nil
+		}
+		logicalToolName := firstString(parameters, nil, "logicalToolName")
+		if logicalToolName == "" || firstString(parameters, nil, "targetRunnerId") == "" || firstString(parameters, nil, "catalogRevision") == "" {
+			return nil
+		}
+		return &tool.ToolManifest{
+			Name: logicalToolName, Type: "mcp", Boundary: tool.BoundaryMCPProvider,
+			ExecutionPlane: tool.ExecutionPlaneLocal, LocalCommand: localrunner.CommandLocalMCPToolCall,
+			RequiresUserDevice: true, Timeout: timeoutSecFromParameters(parameters),
+		}
+	}
 	if toolName != "external" || ne.toolRegistry == nil {
 		return nil
 	}
@@ -568,17 +622,31 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		jobTimeoutSec = timeoutSec + 45
 	}
 
-	job, err := ne.localDispatcher.DispatchLocalJob(ctx, localrunner.DispatchLocalJobRequest{
+	dispatchPayload := parameters
+	dispatchRequest := localrunner.DispatchLocalJobRequest{
 		ProjectID:      projectID,
 		TaskID:         event.TaskID,
 		NodeID:         event.NodeID,
 		ToolName:       manifest.Name,
 		Command:        command,
-		Payload:        parameters,
+		Payload:        dispatchPayload,
 		TimeoutSec:     jobTimeoutSec,
 		ArtifactPolicy: localArtifactPolicyForManifest(manifest),
 		IdempotencyKey: idempotencyKey,
-	})
+	}
+	if localrunner.NormalizeCommand(command) == localrunner.CommandLocalMCPToolCall && firstString(parameters, nil, "targetRunnerId") != "" {
+		dispatchRequest.TargetRunnerID = firstString(parameters, nil, "targetRunnerId")
+		dispatchRequest.CatalogRevision = firstString(parameters, nil, "catalogRevision")
+		dispatchRequest.MCPProviderID = firstString(parameters, nil, "providerId")
+		dispatchRequest.MCPLogicalToolName = firstString(parameters, nil, "logicalToolName")
+		dispatchRequest.MCPRemoteToolName = firstString(parameters, nil, "remoteToolName", "toolName")
+		if arguments, ok := parameters["arguments"].(map[string]interface{}); ok {
+			dispatchRequest.Payload = map[string]interface{}{"arguments": cloneExecutionMap(arguments)}
+		} else {
+			dispatchRequest.Payload = map[string]interface{}{"arguments": map[string]interface{}{}}
+		}
+	}
+	job, err := ne.localDispatcher.DispatchLocalJob(ctx, dispatchRequest)
 	if err != nil {
 		return err
 	}
@@ -835,6 +903,7 @@ func resolveValue(ctx context.Context, nodeRepo repository.NodeRepo, taskID stri
 			if isRef {
 				return typed, nil
 			}
+			return nil, fmt.Errorf("unresolved exact node output reference %s", val)
 		}
 		return resolveString(ctx, nodeRepo, taskID, val), nil
 	case map[string]interface{}:
@@ -858,6 +927,30 @@ func resolveValue(ctx context.Context, nodeRepo repository.NodeRepo, taskID stri
 		}
 		return resolved, nil
 	default:
+		reflected := reflect.ValueOf(v)
+		if reflected.IsValid() && (reflected.Kind() == reflect.Slice || reflected.Kind() == reflect.Array) {
+			resolved := make([]interface{}, reflected.Len())
+			for index := 0; index < reflected.Len(); index++ {
+				item, err := resolveValue(ctx, nodeRepo, taskID, reflected.Index(index).Interface())
+				if err != nil {
+					return nil, err
+				}
+				resolved[index] = item
+			}
+			return resolved, nil
+		}
+		if reflected.IsValid() && reflected.Kind() == reflect.Map && reflected.Type().Key().Kind() == reflect.String {
+			resolved := make(map[string]interface{}, reflected.Len())
+			iter := reflected.MapRange()
+			for iter.Next() {
+				item, err := resolveValue(ctx, nodeRepo, taskID, iter.Value().Interface())
+				if err != nil {
+					return nil, err
+				}
+				resolved[iter.Key().String()] = item
+			}
+			return resolved, nil
+		}
 		return v, nil
 	}
 }
@@ -1003,14 +1096,28 @@ func resolveString(ctx context.Context, nodeRepo repository.NodeRepo, taskID str
 }
 
 func lookupOutputField(output map[string]interface{}, field string) (interface{}, bool) {
-	if output == nil || strings.TrimSpace(field) == "" {
+	field = strings.TrimSpace(field)
+	if output == nil || field == "" {
 		return nil, false
 	}
-	if val, ok := output[field]; ok {
+	// MCP output references are rooted at structuredContent. Consult it before
+	// protocol wrapper fields so wrapper metadata cannot shadow canonical tool
+	// output. Dotted names always mean nested traversal, never a flat key.
+	structured := parseObjectPayload(output["structuredContent"])
+	if structured != nil {
+		if val, ok := lookupNestedOutputField(structured, field); ok {
+			return val, true
+		}
+		if val, ok := lookupArtifactOutputField(structured, field); ok {
+			return val, true
+		}
+		return nil, false
+	}
+	if val, ok := lookupNestedOutputField(output, field); ok {
 		return val, true
 	}
 	for _, payload := range structuredOutputPayloads(output) {
-		if val, ok := payload[field]; ok {
+		if val, ok := lookupNestedOutputField(payload, field); ok {
 			return val, true
 		}
 	}
@@ -1023,6 +1130,24 @@ func lookupOutputField(output map[string]interface{}, field string) (interface{}
 		}
 	}
 	return nil, false
+}
+
+func lookupNestedOutputField(output map[string]interface{}, field string) (interface{}, bool) {
+	if output == nil {
+		return nil, false
+	}
+	var current interface{} = output
+	for _, segment := range strings.Split(field, ".") {
+		object, ok := current.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[segment]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
 }
 
 func lookupArtifactOutputField(output map[string]interface{}, field string) (interface{}, bool) {
@@ -1131,6 +1256,9 @@ func nonEmptyString(value interface{}) (string, bool) {
 
 func structuredOutputPayloads(output map[string]interface{}) []map[string]interface{} {
 	payloads := make([]map[string]interface{}, 0, 4)
+	if structured := parseObjectPayload(output["structuredContent"]); structured != nil {
+		payloads = append(payloads, structured)
+	}
 	if parsed := parseObjectPayload(output["stdout"]); parsed != nil {
 		payloads = append(payloads, parsed)
 		if embedded := parseObjectPayload(parsed["content"]); embedded != nil {

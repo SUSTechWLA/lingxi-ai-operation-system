@@ -336,6 +336,7 @@ func main() {
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r, requireAuth)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r, requireAuth)
 	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, requireAuth)
+	localRunnerHandler.WithToolManifestResolver(toolRegistry)
 	localRunnerHandler.RegisterRoutes(r)
 	// Preflight: check local capabilities before starting a video pipeline.
 	r.GET("/api/video/preflight", requireAuth, localrunner.HandleVideoPreflight(localRunnerService))
@@ -362,7 +363,9 @@ func main() {
 	}
 	toolRegistry.Register(builtin.NewVideoCopyGeneratorTool(serverModelConfig))
 
-	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r, requireAuth)
+	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).
+		WithRegistrationInternalToken(cfg.Agent.ToolRegistrationInternalToken).
+		RegisterRoutes(r, requireAuth)
 	skillcapability.NewHandler(skillCapabilityReg).RegisterRoutes(r, requireAuth)
 	videodirector.NewHandler(videoDirectorRegistry).RegisterRoutes(r, requireAuth)
 
@@ -416,7 +419,8 @@ func main() {
 			pc.WithDirectors(videoDirectorAdapter)
 			return pc
 		}(),
-	).WithPlanJudge(videoPlanJudge.NewRuntimeJudge())
+	).WithPlanJudge(videoPlanJudge.NewRuntimeJudge()).
+		WithRequestToolResolver(agentruntime.NewLocalMCPRequestToolResolver(toolRegistry, localRunnerService))
 	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine).
 		WithRegenerationDispatcher(taskExecutionCtrl)
 	agentRuntimeHandler.RegisterRoutes(r, requireAuth)

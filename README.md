@@ -209,6 +209,48 @@ BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh
 
 本地 Agent 支持标准 MCP provider 注册。provider 可以用 Python、Node、Go 或其他语言实现，只要暴露标准 `tools/list` 与 `tools/call` 能力即可；系统只保存 provider 配置，不绑定具体实现语言。
 
+### Agent/Tool/MCP 标准契约
+
+Agent 运行时按 Context、Tools、Constrain、Verify、Correct 五层分离感知、行动、安全边界、结果验证和失败修复。当前 planner 通过 Chat Completions 生成一次性 JSON `AgentPlan`，再经 Guard、DAG、工具执行、结果验证和 repair loop 推进；`LLMToolDefinition` 的 OpenAI Responses / Chat Completions、Anthropic、Gemini 四种 adapter 是标准 provider-boundary library，当前不代表已启用 provider-native `tool_calls` 回灌。canonical JSON Schema 会在注册、参数解析后和结果发布前执行验证；本地扩展按标准 MCP 生命周期动态发现，不为每个 provider 增加专用 runner 分支。完整规则见 [Agent、Tool 与 MCP 标准契约](docs/agent-tool-mcp-contract.md)。
+
+Runner 通过心跳上报经过大小、schema 和 revision 校验的安全 `tools/list` 摘要。云端在每次 Agent run 开始时只按已认证的 `userId`、`deviceId` 和可选 `targetRunnerId` 读取在线 catalog，并建立一次运行内不可变的工具快照；这些虚拟 manifest 不写入全局 registry、数据库或 Redis。跨设备出现同名工具时必须选定设备/runner，否则返回 `MCP_TOOL_AMBIGUOUS`。编译后的隐藏 gateway 固化 `targetRunnerId`、`catalogRevision`、`providerId`、`remoteToolName` 和 `logicalToolName`，派发时 revision 变化会返回 `MCP_CATALOG_STALE`，要求重新规划；cloud-owned job 同时固化非 secret schema 快照，完成时据此校验 `structuredContent`，`isError=true` 不会被当成成功。内置 IP Avatar 也必须由真实 runner catalog 提供，不再通过云端伪造全局 manifest。
+
+以下配置可直接作为 `PUT /api/local/mcp-providers` 的请求体。PUT 只校验并持久化配置，不会立即连接 provider；只有 `enabled: true` 的 provider 才会在状态检查、工具发现或实际调用时执行 `initialize` 和 `tools/list`。把绝对路径和占位符替换为本机值；`<MCP_AUTH_TOKEN>` 不是有效密钥，也不会被仓库保存为真实凭据。下方 HTTP provider 是 `enabled: false` 的可选配置示例，因此保存时和后续发现时都不会自动连接：
+
+```json
+{
+  "providers": [
+    {
+      "id": "custom_stdio",
+      "label": "Custom stdio MCP",
+      "transport": "stdio",
+      "command": "python3",
+      "args": ["/absolute/path/to/server.py"],
+      "workingDir": "/absolute/path/to/provider",
+      "toolPrefix": "custom.",
+      "approvalMode": "before_execute",
+      "enabled": true
+    },
+    {
+      "id": "custom_http",
+      "label": "Custom Streamable HTTP MCP",
+      "transport": "http",
+      "endpoint": "https://mcp.example.invalid/mcp",
+      "headers": {
+        "Authorization": "Bearer <MCP_AUTH_TOKEN>"
+      },
+      "toolPrefix": "remote.",
+      "approvalMode": "before_execute",
+      "enabled": false
+    }
+  ]
+}
+```
+
+环境变量和 Header secret 只写不回显：配置写入后，GET、状态和诊断接口只返回 `hasEnv` / `envKeys` 与 `hasHeaders` / `headerKeys` 元数据，不返回 value。更新时省略 `env` 或 `headers` 会保留已存密钥，显式传入空对象才会清除。`approvalMode` 省略或留空时安全默认成 `before_execute`；只有显式设置 `none` 才会取消执行前审批。所有 provider 工具会映射到统一 manifest，并通过通用 `LOCAL_MCP_TOOL_CALL` 执行；接入新 provider 无需新增 `LOCAL_VENDOR_*` 命令。
+
+`GET /api/tools` 仍可供普通已认证用户查看全局工具；`POST /api/tools/register` 和 `DELETE /api/tools/:name` 只接受内部控制面请求，并要求 `X-Internal-Tool-Token` 与服务端 `TOOL_REGISTRATION_INTERNAL_TOKEN` 完全匹配。未配置该令牌时全局 mutation 默认关闭。本地用户 MCP provider 只走上述 request-scoped catalog，不调用全局注册接口。
+
 即梦 JiMeng 扩展内置了 Python stdio MCP server，用来封装用户本机 Dreamina CLI。用户端提供显式授权的一键安装向导：
 
 1. 安装或更新 Dreamina CLI。
@@ -225,6 +267,8 @@ Dreamina OAuth、积分、任务记录和日志仍保留在用户自己的机器
 <summary><strong>开发者验证命令</strong></summary>
 
 ```bash
+python3 -m pip install 'mcp>=1.27,<2'
+python3 scripts/test_mcp_contracts.py
 cd local-backend && go test ./...
 cd ../cloud-backend && go test ./...
 cd ../frontend && npm run test:director && npm run test:settings && npm run lint && npm run build
@@ -255,6 +299,7 @@ Local agent:   http://localhost:18080/api/local/docs
 - [Project Introduction (English)](docs/PROJECT_INTRODUCTION_EN.md)
 - [中文 Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki)
 - [English Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki/English)
+- [Agent、Tool 与 MCP 标准契约](docs/agent-tool-mcp-contract.md)
 - [MCP Provider 接入](docs/mcp-providers.md)
 - [Closed Beta Runbook](docs/BETA_RUNBOOK.md)
 - [Release Status](docs/RELEASE_STATUS.md)

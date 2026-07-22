@@ -1251,7 +1251,10 @@ func TestOrchestratorService_CreateTask(t *testing.T) {
 	ss := NewStateService(nodeRepo, taskRepo, depRepo, ctxRepo, eventSaver)
 	os := NewOrchestratorService(taskRepo, nodeRepo, depRepo, ctxRepo, ss)
 
-	task, err := os.CreateTask(context.Background(), map[string]interface{}{"query": "test"})
+	task, err := os.CreateTask(context.Background(), "user-auth", map[string]interface{}{
+		"query":  "test",
+		"userId": "user-forged",
+	})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -1260,6 +1263,9 @@ func TestOrchestratorService_CreateTask(t *testing.T) {
 	}
 	if task.Status != model.TaskCreated {
 		t.Errorf("Expected CREATED, got %s", task.Status)
+	}
+	if task.UserID != "user-auth" {
+		t.Fatalf("task owner = %q, want authenticated owner", task.UserID)
 	}
 }
 
@@ -1274,7 +1280,7 @@ func TestOrchestratorService_SubmitDAG(t *testing.T) {
 	os := NewOrchestratorService(taskRepo, nodeRepo, depRepo, ctxRepo, ss)
 
 	// Create task first
-	task, _ := os.CreateTask(context.Background(), map[string]interface{}{})
+	task, _ := os.CreateTask(context.Background(), "user-test", map[string]interface{}{})
 
 	dagReq := &model.DAGRequest{
 		Nodes: []model.NodeRequest{
@@ -1325,7 +1331,7 @@ func TestOrchestratorService_SubmitDAG_InvalidDAG(t *testing.T) {
 	ss := NewStateService(nodeRepo, taskRepo, depRepo, ctxRepo, eventSaver)
 	os := NewOrchestratorService(taskRepo, nodeRepo, depRepo, ctxRepo, ss)
 
-	task, _ := os.CreateTask(context.Background(), map[string]interface{}{})
+	task, _ := os.CreateTask(context.Background(), "user-test", map[string]interface{}{})
 
 	// Empty DAG
 	err := os.SubmitDAG(context.Background(), task.ID, &model.DAGRequest{})
@@ -1364,7 +1370,7 @@ func TestOrchestratorService_GetTaskWithDetails(t *testing.T) {
 	ss := NewStateService(nodeRepo, taskRepo, depRepo, ctxRepo, eventSaver)
 	os := NewOrchestratorService(taskRepo, nodeRepo, depRepo, ctxRepo, ss)
 
-	task, _ := os.CreateTask(context.Background(), map[string]interface{}{"query": "test"})
+	task, _ := os.CreateTask(context.Background(), "user-test", map[string]interface{}{"query": "test"})
 
 	result, err := os.GetTaskWithDetails(context.Background(), task.ID)
 	if err != nil {

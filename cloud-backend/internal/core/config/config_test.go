@@ -167,6 +167,23 @@ func TestValidateForModeRejectsProductionDefaultMinIOAccessKey(t *testing.T) {
 	}
 }
 
+func TestValidateForModeAcceptsStrongInternalToolRegistrationToken(t *testing.T) {
+	cfg := &Config{
+		Server:   ServerConfig{CORSAllowedOrigins: "https://app.example.com"},
+		Postgres: PostgresConfig{Password: "long-non-default-postgres-password"},
+		Auth:     AuthConfig{TokenSecret: "0123456789abcdef0123456789abcdef"},
+		Agent:    AgentConfig{ToolRegistrationInternalToken: "abcdef0123456789abcdef0123456789"},
+		MinIO: MinIOConfig{
+			AccessKey: "long-non-default-minio-access-key", SecretKey: "long-non-default-minio-secret-value",
+		},
+		BashTool: BashToolConfig{AllowedCommands: "ls,cat,pwd"},
+		Sandbox:  SandboxConfig{Enabled: true, Address: "127.0.0.1:50051", Fallback: false},
+	}
+	if err := cfg.ValidateForMode("production"); err != nil {
+		t.Fatalf("strong production control-plane configuration rejected: %v", err)
+	}
+}
+
 func TestConfigZeroValueBehavior(t *testing.T) {
 	// When VideoCreationEnabled is false, old routes should behave normally.
 	// This test validates the zero-value behavior of the feature flag.

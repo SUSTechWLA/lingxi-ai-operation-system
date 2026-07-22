@@ -678,15 +678,31 @@ func (r *ContextRepository) FindLatestSnapshotByNodeID(ctx context.Context, node
 	return &c, nil
 }
 
-func NewTaskFromMap(input map[string]interface{}) *model.Task {
+// NewTaskForUser creates a task with an explicit, trusted owner. Owner-like
+// fields carried by request payloads are discarded so callers cannot smuggle
+// an alternate tenant identity into either the row or its persisted input.
+func NewTaskForUser(userID string, input map[string]interface{}) (*model.Task, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, fmt.Errorf("authenticated task owner is required")
+	}
+	sanitizedInput := make(map[string]interface{}, len(input)+1)
+	for key, value := range input {
+		if key == "userId" || key == "user_id" {
+			continue
+		}
+		sanitizedInput[key] = value
+	}
+	sanitizedInput["user_id"] = userID
 	now := time.Now()
 	task := &model.Task{
 		ID:        generateID(),
+		UserID:    userID,
 		Status:    model.TaskCreated,
-		Input:     input,
+		Input:     sanitizedInput,
 		CreatedAt: now,
 	}
-	return task
+	return task, nil
 }
 
 func generateID() string {

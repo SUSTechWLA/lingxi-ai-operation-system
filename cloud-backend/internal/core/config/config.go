@@ -29,8 +29,9 @@ type Config struct {
 
 // AgentConfig controls the dynamic agent runtime.
 type AgentConfig struct {
-	PlannerMode     string `mapstructure:"AGENT_PLANNER_MODE"` // "llm" | "hybrid" | "heuristic"
-	PlannerMaxTools int    `mapstructure:"AGENT_PLANNER_MAX_TOOLS"`
+	PlannerMode                   string `mapstructure:"AGENT_PLANNER_MODE"` // "llm" | "hybrid" | "heuristic"
+	PlannerMaxTools               int    `mapstructure:"AGENT_PLANNER_MAX_TOOLS"`
+	ToolRegistrationInternalToken string `mapstructure:"TOOL_REGISTRATION_INTERNAL_TOKEN"`
 }
 
 // VideoConfig controls the video creation feature flags.
@@ -172,6 +173,9 @@ func (cfg *Config) ValidateForMode(mode string) error {
 	if isWeakSecret(cfg.Auth.TokenSecret, "development-only-change-me", "replace-with-a-long-random-secret") {
 		problems = append(problems, "AUTH_TOKEN_SECRET must be set to a long random value in production")
 	}
+	if isWeakSecret(cfg.Agent.ToolRegistrationInternalToken, "replace-with-a-long-random-internal-token") {
+		problems = append(problems, "TOOL_REGISTRATION_INTERNAL_TOKEN must be set to a long random value in production")
+	}
 	if isWeakSecret(cfg.Postgres.Password, "changeme", "your-postgres-password") {
 		problems = append(problems, "POSTGRES_PASSWORD must be set to a non-default value in production")
 	}
@@ -275,6 +279,7 @@ func setDefaults() {
 	viper.SetDefault("LEGACY_SKILL_WORKFLOW_AUTOREGISTER", false)
 	viper.SetDefault("AGENT_PLANNER_MODE", "hybrid")
 	viper.SetDefault("AGENT_PLANNER_MAX_TOOLS", 8)
+	viper.SetDefault("TOOL_REGISTRATION_INTERNAL_TOKEN", "")
 	viper.SetDefault("HYPERFRAMES_MODE", "disabled")
 	viper.SetDefault("HYPERFRAMES_SERVICE_URL", "http://127.0.0.1:8787")
 	viper.SetDefault("HYPERFRAMES_TIMEOUT_SEC", 1800)

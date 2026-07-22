@@ -67,6 +67,45 @@ func TestPlanCompiler_InsertsAfterArtifactReviewFromToolManifest(t *testing.T) {
 	requireEdge(t, dag, "script_generation_review", "shot_split")
 }
 
+func TestPlanCompiler_InsertsBeforeExecuteReviewFromMCPProviderApprovalMode(t *testing.T) {
+	manifests := tool.ManifestsFromMCPTools(tool.MCPProviderConfig{
+		ID:           "custom",
+		Transport:    "stdio",
+		ToolPrefix:   "custom.",
+		Enabled:      true,
+		ApprovalMode: tool.ApprovalBeforeExecute,
+	}, []tool.MCPTool{{
+		Name:        "generate",
+		Description: "Generate an artifact through a local MCP provider.",
+		InputSchema: map[string]interface{}{"type": "object"},
+	}})
+	if len(manifests) != 1 {
+		t.Fatalf("MCP manifests = %#v, want one", manifests)
+	}
+	compiler := NewPlanCompiler(staticToolCatalog{manifests[0].Name: manifests[0]})
+
+	dag, err := compiler.Compile(&AgentPlan{
+		Goal:   "run a local provider tool",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{{
+			ID:        "mcp_generation",
+			Tool:      manifests[0].Name,
+			Arguments: map[string]interface{}{"prompt": "safe test"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Compile returned error: %v", err)
+	}
+
+	review := requireNode(t, dag, "mcp_generation_review_before", string(model.NodeTypeReviewGate), "审核-mcp_generation")
+	if got, _ := review.Input["reviewPhase"].(string); got != "before_execute" {
+		t.Fatalf("MCP review phase = %q, want before_execute", got)
+	}
+	requireNode(t, dag, "mcp_generation_exec", string(model.NodeTypeTool), "external")
+	requireEdge(t, dag, "mcp_generation_review_before", "mcp_generation_exec")
+}
+
 func TestPlanCompiler_ExternalToolNodeRoutesThroughExternalBridge(t *testing.T) {
 	compiler := NewPlanCompiler(staticToolCatalog{
 		"video_prompt_generator": &tool.ToolManifest{
@@ -190,6 +229,44 @@ func TestPlanCompiler_QualityGateReviewsProductionOutput(t *testing.T) {
 	}
 	if got, _ := gate.Input["qualityCheckerNode"].(string); got != "script_quality_checker" {
 		t.Fatalf("quality gate should expose checker node for score metadata, got input %#v", gate.Input)
+	}
+}
+
+func TestPlanCompilerCompilePreservesPureContractArguments(t *testing.T) {
+	catalog := staticToolCatalog{"remote_tool": {
+		Name:        "remote_tool",
+		Type:        "external",
+		Endpoint:    "https://tool.example.invalid/call",
+		InputSchema: map[string]interface{}{"type": "object"},
+	}}
+	plan := &AgentPlan{Steps: []AgentStep{{
+		ID: "call", Tool: "remote_tool", Intent: "route metadata",
+		Arguments:      map[string]interface{}{"query": "hello", "nested": map[string]interface{}{"count": float64(2)}},
+		ExpectedOutput: []string{"result"}, ProduceArtifact: true,
+	}}}
+	dag, err := NewPlanCompiler(catalog).Compile(plan)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if len(dag.Nodes) != 1 {
+		t.Fatalf("nodes = %#v", dag.Nodes)
+	}
+	contractArguments, ok := dag.Nodes[0].Input["contractArguments"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("contractArguments missing: %#v", dag.Nodes[0].Input)
+	}
+	want := map[string]interface{}{"query": "hello", "nested": map[string]interface{}{"count": float64(2)}}
+	if !reflect.DeepEqual(contractArguments, want) {
+		t.Fatalf("contractArguments = %#v, want pure arguments %#v", contractArguments, want)
+	}
+	for _, polluted := range []string{"tool", "intent", "expectedOutput", "produceArtifact", "capabilityTool"} {
+		if _, exists := contractArguments[polluted]; exists {
+			t.Fatalf("contractArguments polluted by %q: %#v", polluted, contractArguments)
+		}
+	}
+	contractArguments["query"] = "mutated"
+	if plan.Steps[0].Arguments["query"] != "hello" {
+		t.Fatalf("compiled contractArguments aliases plan arguments: %#v", plan.Steps[0].Arguments)
 	}
 }
 

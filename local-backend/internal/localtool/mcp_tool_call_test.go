@@ -2,12 +2,11 @@ package localtool
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -15,32 +14,21 @@ import (
 )
 
 func TestMCPToolCallExecutorCallsConfiguredProvider(t *testing.T) {
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
+	mcp := newMCPProtocolTestServer(t, func(toolName string, _ map[string]interface{}) map[string]interface{} {
+		if toolName != "runway.generate_video" {
+			t.Fatalf("tool = %v, want runway.generate_video", toolName)
 		}
-		if req["method"] != "tools/call" {
-			t.Fatalf("method = %v, want tools/call", req["method"])
-		}
-		params := req["params"].(map[string]interface{})
-		if params["name"] != "runway.generate_video" {
-			t.Fatalf("tool = %v, want runway.generate_video", params["name"])
-		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"content": []map[string]interface{}{
-					{"type": "text", "text": "ok"},
-				},
-				"structuredContent": map[string]interface{}{
-					"submit_id":  "vid-1",
-					"gen_status": "querying",
-				},
+		return map[string]interface{}{
+			"_meta": map[string]interface{}{"trace": "trace-1"},
+			"content": []map[string]interface{}{
+				{"type": "text", "text": "ok"},
 			},
-		})
-	}))
+			"structuredContent": map[string]interface{}{
+				"submit_id":  "vid-1",
+				"gen_status": "querying",
+			},
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
@@ -61,6 +49,14 @@ func TestMCPToolCallExecutorCallsConfiguredProvider(t *testing.T) {
 	structured := result.Output["structuredContent"].(map[string]interface{})
 	if structured["submit_id"] != "vid-1" {
 		t.Fatalf("submit_id = %v, want vid-1", structured["submit_id"])
+	}
+	meta := result.Output["meta"].(map[string]interface{})
+	if meta["trace"] != "trace-1" {
+		t.Fatalf("generic MCP output meta = %#v", meta)
+	}
+	raw := result.Output["raw"].(map[string]interface{})
+	if raw["content"] == nil || raw["structuredContent"] == nil || raw["_meta"] == nil {
+		t.Fatalf("generic MCP output raw result = %#v", raw)
 	}
 }
 
@@ -99,19 +95,52 @@ func TestMCPToolCallExecutorRequiresProviderID(t *testing.T) {
 	}
 }
 
+func TestMCPToolCallExecutorAppliesJobTimeoutToHangingStdioProvider(t *testing.T) {
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{
+			ID:         "hanging",
+			Transport:  "stdio",
+			Command:    os.Args[0],
+			Args:       []string{"-test.run=TestMCPToolCallExecutorHangingStdioHelperProcess"},
+			Env:        map[string]string{"GO_WANT_HANGING_MCP_HELPER": "1"},
+			TimeoutSec: 2,
+			Enabled:    true,
+		}}, nil
+	})
+	started := time.Now()
+	_, err := executor.Execute(context.Background(), Job{
+		Command:    CommandLocalMCPToolCall,
+		TimeoutSec: 1,
+		Payload: map[string]interface{}{
+			"providerId": "hanging",
+			"toolName":   "hanging.never",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("Execute error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 1500*time.Millisecond {
+		t.Fatalf("job timeout did not bound stdio MCP operation, elapsed=%v", elapsed)
+	}
+}
+
+func TestMCPToolCallExecutorHangingStdioHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HANGING_MCP_HELPER") != "1" {
+		return
+	}
+	signal.Ignore(syscall.SIGTERM)
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
 func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 	callCount := 0
 	promptText := validMCPVideoPrompt("开场流程被点亮")
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
+	mcp := newMCPProtocolTestServer(t, func(toolName string, args map[string]interface{}) map[string]interface{} {
+		if toolName != "runway.generate_video" {
+			t.Fatalf("tool = %v, want runway.generate_video", toolName)
 		}
-		params := req["params"].(map[string]interface{})
-		if params["name"] != "runway.generate_video" {
-			t.Fatalf("tool = %v, want runway.generate_video", params["name"])
-		}
-		args := params["arguments"].(map[string]interface{})
 		if args["prompt"] != promptText {
 			t.Fatalf("prompt = %#v, want clear prompt", args["prompt"])
 		}
@@ -119,17 +148,13 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 			t.Fatalf("duration = %#v, want 5", args["duration"])
 		}
 		callCount++
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"submit_id":  "vid-1",
-					"gen_status": "querying",
-				},
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"submit_id":  "vid-1",
+				"gen_status": "querying",
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
@@ -204,31 +229,21 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 func TestMCPToolCallExecutorDefersRemainingRequestsWhenGenerationIsPending(t *testing.T) {
 	callCount := 0
 	promptText := validMCPVideoPrompt("第一个片段开始排队")
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
+	mcp := newMCPProtocolTestServer(t, func(toolName string, args map[string]interface{}) map[string]interface{} {
+		if toolName != "jimeng.generate_video" {
+			t.Fatalf("tool = %v, want jimeng.generate_video", toolName)
 		}
-		params := req["params"].(map[string]interface{})
-		if params["name"] != "jimeng.generate_video" {
-			t.Fatalf("tool = %v, want jimeng.generate_video", params["name"])
-		}
-		args := params["arguments"].(map[string]interface{})
 		if args["prompt"] != promptText {
 			t.Fatalf("prompt = %#v, want promptText fallback", args["prompt"])
 		}
 		callCount++
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"submit_id":  "vid-pending",
-					"gen_status": "querying",
-				},
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"submit_id":  "vid-pending",
+				"gen_status": "querying",
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
@@ -288,21 +303,15 @@ func TestMCPToolCallExecutorDefersRemainingRequestsWhenGenerationIsPending(t *te
 }
 
 func TestMCPToolCallExecutorDefersBatchWhenGenerateCallTimesOut(t *testing.T) {
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, func(_ string, _ map[string]interface{}) map[string]interface{} {
 		time.Sleep(200 * time.Millisecond)
-		var req map[string]interface{}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"submit_id":  "vid-late",
-					"gen_status": "success",
-				},
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"submit_id":  "vid-late",
+				"gen_status": "success",
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
@@ -369,51 +378,38 @@ func TestMCPToolCallExecutorDownloadsGeneratedVideoIntoShotFusionPlan(t *testing
 		t.Fatalf("write source video: %v", err)
 	}
 
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		params := req["params"].(map[string]interface{})
-		switch params["name"] {
+	mcp := newMCPProtocolTestServer(t, func(toolName string, args map[string]interface{}) map[string]interface{} {
+		switch toolName {
 		case "jimeng.generate_video":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"jsonrpc": "2.0",
-				"id":      req["id"],
-				"result": map[string]interface{}{
-					"structuredContent": map[string]interface{}{
-						"submit_id":  "vid-1",
-						"gen_status": "querying",
-					},
+			return map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"submit_id":  "vid-1",
+					"gen_status": "querying",
 				},
-			})
+			}
 		case "jimeng.query_result":
-			args := params["arguments"].(map[string]interface{})
 			if args["submit_id"] != "vid-1" {
 				t.Fatalf("query submit_id = %#v, want vid-1", args["submit_id"])
 			}
 			if strings.TrimSpace(args["download_dir"].(string)) == "" {
 				t.Fatalf("query_result should receive download_dir: %#v", args)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"jsonrpc": "2.0",
-				"id":      req["id"],
-				"result": map[string]interface{}{
-					"structuredContent": map[string]interface{}{
-						"submit_id":  "vid-1",
-						"gen_status": "success",
-						"result_json": map[string]interface{}{
-							"videos": []map[string]interface{}{
-								{"path": sourceVideo, "width": 1920, "height": 1080, "duration": 5.0},
-							},
+			return map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"submit_id":  "vid-1",
+					"gen_status": "success",
+					"result_json": map[string]interface{}{
+						"videos": []map[string]interface{}{
+							{"path": sourceVideo, "width": 1920, "height": 1080, "duration": 5.0},
 						},
 					},
 				},
-			})
+			}
 		default:
-			t.Fatalf("unexpected tool call: %#v", params["name"])
+			t.Fatalf("unexpected tool call: %#v", toolName)
+			return nil
 		}
-	}))
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {
@@ -472,16 +468,10 @@ func TestMCPToolCallExecutorPackagesDeterministicIPArollWithoutAIGCPreflight(t *
 		t.Fatalf("write source video: %v", err)
 	}
 
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
+	mcp := newMCPProtocolTestServer(t, func(toolName string, args map[string]interface{}) map[string]interface{} {
+		if toolName != "ip_avatar_3d.render_talking_video" {
+			t.Fatalf("tool = %#v", toolName)
 		}
-		params := req["params"].(map[string]interface{})
-		if params["name"] != "ip_avatar_3d.render_talking_video" {
-			t.Fatalf("tool = %#v", params["name"])
-		}
-		args := params["arguments"].(map[string]interface{})
 		if args["script"] != "今天聊聊 AI 视频为什么需要连续 A-roll。" {
 			t.Fatalf("script = %#v", args["script"])
 		}
@@ -491,20 +481,16 @@ func TestMCPToolCallExecutorPackagesDeterministicIPArollWithoutAIGCPreflight(t *
 		if _, exists := args["prompt"]; exists {
 			t.Fatalf("deterministic IP renderer must not receive an AIGC prompt: %#v", args)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"status":      "ready",
-					"success":     true,
-					"sourceType":  "ip_aroll_video",
-					"durationSec": 12,
-					"videoPath":   sourceVideo,
-				},
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"status":      "ready",
+				"success":     true,
+				"sourceType":  "ip_aroll_video",
+				"durationSec": 12,
+				"videoPath":   sourceVideo,
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {
@@ -564,28 +550,20 @@ func TestMCPToolCallExecutorDefersAfterDefaultReadyGenerationBudget(t *testing.T
 	}
 
 	callCount := 0
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
+	mcp := newMCPProtocolTestServer(t, func(_ string, _ map[string]interface{}) map[string]interface{} {
 		callCount++
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"submit_id":  "vid-ready",
-					"gen_status": "success",
-					"result_json": map[string]interface{}{
-						"videos": []map[string]interface{}{
-							{"path": sourceVideo, "width": 1920, "height": 1080, "duration": 5.0},
-						},
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"submit_id":  "vid-ready",
+				"gen_status": "success",
+				"result_json": map[string]interface{}{
+					"videos": []map[string]interface{}{
+						{"path": sourceVideo, "width": 1920, "height": 1080, "duration": 5.0},
 					},
 				},
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {
@@ -635,31 +613,23 @@ func TestMCPToolCallExecutorDefersWhenBatchTimeoutIsReached(t *testing.T) {
 	}
 
 	callCount := 0
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
+	mcp := newMCPProtocolTestServer(t, func(_ string, _ map[string]interface{}) map[string]interface{} {
 		callCount++
 		if callCount == 2 {
 			time.Sleep(250 * time.Millisecond)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"submit_id":  "vid-ready",
-					"gen_status": "success",
-					"result_json": map[string]interface{}{
-						"videos": []map[string]interface{}{
-							{"path": sourceVideo, "width": 1920, "height": 1080, "duration": 5.0},
-						},
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"submit_id":  "vid-ready",
+				"gen_status": "success",
+				"result_json": map[string]interface{}{
+					"videos": []map[string]interface{}{
+						{"path": sourceVideo, "width": 1920, "height": 1080, "duration": 5.0},
 					},
 				},
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {
@@ -701,39 +671,27 @@ func TestMCPToolCallExecutorDefersWhenBatchTimeoutIsReached(t *testing.T) {
 
 func TestMCPToolCallExecutorMarksFailedQueryResultWithoutWaiting(t *testing.T) {
 	dataDir := t.TempDir()
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		params := req["params"].(map[string]interface{})
-		switch params["name"] {
+	mcp := newMCPProtocolTestServer(t, func(toolName string, _ map[string]interface{}) map[string]interface{} {
+		switch toolName {
 		case "jimeng.generate_video":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"jsonrpc": "2.0",
-				"id":      req["id"],
-				"result": map[string]interface{}{
-					"structuredContent": map[string]interface{}{
-						"submit_id":  "vid-failed",
-						"gen_status": "querying",
-					},
+			return map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"submit_id":  "vid-failed",
+					"gen_status": "querying",
 				},
-			})
+			}
 		case "jimeng.query_result":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"jsonrpc": "2.0",
-				"id":      req["id"],
-				"result": map[string]interface{}{
-					"isError": true,
-					"content": []map[string]interface{}{
-						{"type": "text", "text": "generation failed: post-TNS check did not pass"},
-					},
+			return map[string]interface{}{
+				"isError": true,
+				"content": []map[string]interface{}{
+					{"type": "text", "text": "generation failed: post-TNS check did not pass"},
 				},
-			})
+			}
 		default:
-			t.Fatalf("unexpected tool call: %#v", params["name"])
+			t.Fatalf("unexpected tool call: %#v", toolName)
+			return nil
 		}
-	}))
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {
@@ -773,22 +731,15 @@ func TestMCPToolCallExecutorMarksFailedQueryResultWithoutWaiting(t *testing.T) {
 }
 
 func TestMCPToolCallExecutorDefersProviderBusyExternalBatch(t *testing.T) {
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"isError": true,
-				"content": []map[string]interface{}{
-					{"type": "text", "text": "RuntimeError: ExceedConcurrencyLimit"},
-				},
+	mcp := newMCPProtocolTestServer(t, func(_ string, _ map[string]interface{}) map[string]interface{} {
+		return map[string]interface{}{
+			"_meta":   map[string]interface{}{"trace": "busy-trace"},
+			"isError": true,
+			"content": []map[string]interface{}{
+				{"type": "text", "text": "RuntimeError: ExceedConcurrencyLimit"},
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
@@ -837,6 +788,9 @@ func TestMCPToolCallExecutorDefersProviderBusyExternalBatch(t *testing.T) {
 	if mcpResult["isError"] != true {
 		t.Fatalf("mcpResult isError = %#v, want true", mcpResult["isError"])
 	}
+	if mcpResult["meta"].(map[string]interface{})["trace"] != "busy-trace" || mcpResult["raw"] == nil {
+		t.Fatalf("batch mcpResult must preserve meta/raw: %#v", mcpResult)
+	}
 }
 
 func TestMCPArgumentsFromExternalRequestNormalizesResolution(t *testing.T) {
@@ -856,25 +810,16 @@ func TestMCPArgumentsFromExternalRequestNormalizesResolution(t *testing.T) {
 func TestMCPToolCallExecutorRoutesImageExternalRequestToGenerateImage(t *testing.T) {
 	var toolName string
 	var toolArgs map[string]interface{}
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		params := req["params"].(map[string]interface{})
-		toolName, _ = params["name"].(string)
-		toolArgs, _ = params["arguments"].(map[string]interface{})
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"submit_id":  "img-1",
-					"gen_status": "querying",
-				},
+	mcp := newMCPProtocolTestServer(t, func(calledTool string, arguments map[string]interface{}) map[string]interface{} {
+		toolName = calledTool
+		toolArgs = arguments
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"submit_id":  "img-1",
+				"gen_status": "querying",
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
@@ -936,22 +881,14 @@ func TestMCPToolCallExecutorRoutesImageExternalRequestToGenerateImage(t *testing
 }
 
 func TestMCPToolCallExecutorReportsMissingReadyVideoAssets(t *testing.T) {
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"isError": true,
-				"content": []map[string]interface{}{
-					{"type": "text", "text": "dreamina generation failed: CreditPreDeductNotEnough"},
-				},
+	mcp := newMCPProtocolTestServer(t, func(_ string, _ map[string]interface{}) map[string]interface{} {
+		return map[string]interface{}{
+			"isError": true,
+			"content": []map[string]interface{}{
+				{"type": "text", "text": "dreamina generation failed: CreditPreDeductNotEnough"},
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
@@ -1012,20 +949,12 @@ func TestMCPToolCallExecutorReportsMissingReadyVideoAssets(t *testing.T) {
 }
 
 func TestMCPToolCallExecutorFailsStrictBatchWhenReadyVideoIsMissing(t *testing.T) {
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
+	mcp := newMCPProtocolTestServer(t, func(_ string, _ map[string]interface{}) map[string]interface{} {
+		return map[string]interface{}{
+			"isError": true,
+			"content": []map[string]interface{}{{"type": "text", "text": "local render failed"}},
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"isError": true,
-				"content": []map[string]interface{}{{"type": "text", "text": "local render failed"}},
-			},
-		})
-	}))
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
@@ -1058,10 +987,11 @@ func TestMCPToolCallExecutorFailsStrictBatchWhenReadyVideoIsMissing(t *testing.T
 
 func TestMCPToolCallExecutorBlocksUnclearVideoPromptBeforeProviderCall(t *testing.T) {
 	callCount := 0
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, func(_ string, _ map[string]interface{}) map[string]interface{} {
 		callCount++
 		t.Fatalf("provider should not be called when prompt QA fails")
-	}))
+		return nil
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
@@ -1107,10 +1037,11 @@ func TestMCPToolCallExecutorBlocksUnclearVideoPromptBeforeProviderCall(t *testin
 
 func TestMCPToolCallExecutorBlocksMissingUsableReferencesBeforeProviderCall(t *testing.T) {
 	callCount := 0
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, func(_ string, _ map[string]interface{}) map[string]interface{} {
 		callCount++
 		t.Fatalf("provider should not be called when reference QA fails")
-	}))
+		return nil
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
@@ -1157,31 +1088,21 @@ func TestMCPToolCallExecutorPassesAIGCLayerPromptToJiMeng(t *testing.T) {
 	callCount := 0
 	aigcPrompt := validMCPVideoPrompt("AIGC 视频层提示词被正确投放给即梦")
 	wrongLayerPrompt := "HyperFrames 文字层：只负责字幕、标题、UI 卡片和精确中文渲染。"
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, func(toolName string, args map[string]interface{}) map[string]interface{} {
 		callCount++
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
+		if toolName != "jimeng.generate_video" {
+			t.Fatalf("tool = %v, want jimeng.generate_video", toolName)
 		}
-		params := req["params"].(map[string]interface{})
-		if params["name"] != "jimeng.generate_video" {
-			t.Fatalf("tool = %v, want jimeng.generate_video", params["name"])
-		}
-		args := params["arguments"].(map[string]interface{})
 		if args["prompt"] != aigcPrompt {
 			t.Fatalf("prompt = %#v, want AIGC layer prompt", args["prompt"])
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"submit_id":  "vid-aigc-layer",
-					"gen_status": "querying",
-				},
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"submit_id":  "vid-aigc-layer",
+				"gen_status": "querying",
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
@@ -1222,28 +1143,18 @@ func TestMCPToolCallExecutorPassesAIGCLayerPromptToJiMeng(t *testing.T) {
 func TestMCPToolCallExecutorAllowsClearTimedVideoPrompt(t *testing.T) {
 	callCount := 0
 	promptText := validMCPVideoPrompt("创作桌流程变清楚")
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mcp := newMCPProtocolTestServer(t, func(_ string, args map[string]interface{}) map[string]interface{} {
 		callCount++
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		params := req["params"].(map[string]interface{})
-		args := params["arguments"].(map[string]interface{})
 		if args["prompt"] != promptText {
 			t.Fatalf("prompt = %#v, want clear prompt", args["prompt"])
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"submit_id":  "vid-clear",
-					"gen_status": "querying",
-				},
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"submit_id":  "vid-clear",
+				"gen_status": "querying",
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {

@@ -2,8 +2,10 @@ package localrunner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +71,154 @@ func TestLoopRegistersOnlyExecutableCapabilities(t *testing.T) {
 	}
 }
 
+func TestLoopRegistersMCPToolCatalogAndHeartbeatsOnlyRevisionChanges(t *testing.T) {
+	client := &fakeClient{
+		register: RegisterRunnerResponse{RunnerID: "runner_001", SessionID: "session_001", HeartbeatIntervalSec: 15, PollIntervalSec: 3},
+	}
+	reg := localtool.NewRegistry()
+	reg.Register(localtool.ExecutorFunc(func(context.Context, localtool.Job) (*localtool.Result, error) {
+		return &localtool.Result{Output: map[string]interface{}{}}, nil
+	}), localtool.CommandLocalMCPToolCall)
+	source := &fakeCatalogSource{fingerprint: "config-a", catalog: MCPToolCatalog{
+		Revision: strings.Repeat("a", 64),
+		Tools: []MCPToolAdvertisement{{
+			ProviderID: "studio", LogicalToolName: "studio.render", RemoteToolName: "render",
+			InputSchema: map[string]interface{}{"type": "object"},
+		}},
+	}}
+	loop := NewLoop(client, reg, LoopOptions{
+		PollInterval: time.Millisecond, MCPToolCatalogSource: source, MCPCatalogRefreshInterval: time.Nanosecond,
+	})
+
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	mcpCapability := findCapability(client.registerReq.Capabilities, localtool.CommandLocalMCPToolCall)
+	if mcpCapability == nil || mcpCapability.CatalogRevision != source.catalog.Revision || len(mcpCapability.MCPTools) != 1 {
+		t.Fatalf("register catalog missing: %#v", client.registerReq.Capabilities)
+	}
+	if len(client.heartbeats) != 1 || client.heartbeats[0].Capabilities != nil {
+		t.Fatalf("unchanged revision should not resend capabilities: %#v", client.heartbeats)
+	}
+
+	source.catalog = MCPToolCatalog{Revision: strings.Repeat("b", 64), Tools: []MCPToolAdvertisement{}}
+	source.fingerprint = "config-b"
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(client.heartbeats) != 2 || client.heartbeats[1].Capabilities == nil {
+		t.Fatalf("changed revision must replace capabilities: %#v", client.heartbeats)
+	}
+	cleared := findCapability(*client.heartbeats[1].Capabilities, localtool.CommandLocalMCPToolCall)
+	if cleared == nil || cleared.CatalogRevision != source.catalog.Revision || len(cleared.MCPTools) != 0 {
+		t.Fatalf("empty catalog should explicitly clear advertised tools: %#v", client.heartbeats[1])
+	}
+}
+
+func findCapability(capabilities []Capability, command string) *Capability {
+	for index := range capabilities {
+		if capabilities[index].Command == command {
+			return &capabilities[index]
+		}
+	}
+	return nil
+}
+
+type fakeCatalogSource struct {
+	catalog     MCPToolCatalog
+	diagnostics []MCPProviderDiagnostic
+	fingerprint string
+	discoveries int
+}
+
+func (f *fakeCatalogSource) Discover(context.Context) (MCPToolCatalog, []MCPProviderDiagnostic) {
+	f.discoveries++
+	return f.catalog, f.diagnostics
+}
+
+func (f *fakeCatalogSource) Fingerprint(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return f.fingerprint, nil
+}
+
+func TestMCPCatalogRefreshUsesTenMinuteTTLAndConfigurationFingerprint(t *testing.T) {
+	client := &fakeClient{register: RegisterRunnerResponse{RunnerID: "runner_001", SessionID: "session_001", PollIntervalSec: 3}}
+	reg := localtool.NewRegistry()
+	reg.Register(localtool.ExecutorFunc(func(context.Context, localtool.Job) (*localtool.Result, error) { return nil, nil }), localtool.CommandLocalMCPToolCall)
+	source := &fakeCatalogSource{fingerprint: "config-v1", catalog: MCPToolCatalog{Revision: strings.Repeat("a", 64)}}
+	loop := NewLoop(client, reg, LoopOptions{MCPToolCatalogSource: source})
+	if loop.options.MCPCatalogRefreshInterval < 10*time.Minute {
+		t.Fatalf("default catalog TTL=%v, want at least 10m", loop.options.MCPCatalogRefreshInterval)
+	}
+	now := time.Unix(1_700_000_000, 0)
+	loop.now = func() time.Time { return now }
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for range 18 {
+		now = now.Add(30 * time.Second)
+		if err := loop.RunOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if source.discoveries != 1 {
+		t.Fatalf("30s ticks spawned discovery %d times, want once", source.discoveries)
+	}
+	source.fingerprint = "config-v2"
+	now = now.Add(30 * time.Second)
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.discoveries != 2 {
+		t.Fatalf("configuration change did not refresh immediately: %d", source.discoveries)
+	}
+	now = now.Add(loop.options.MCPCatalogRefreshInterval + time.Second)
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.discoveries != 3 {
+		t.Fatalf("TTL expiry did not refresh: %d", source.discoveries)
+	}
+}
+
+func TestMCPCatalogDiscoveryFailureBacksOffAndHonorsCancellation(t *testing.T) {
+	client := &fakeClient{register: RegisterRunnerResponse{RunnerID: "runner_001", SessionID: "session_001"}}
+	source := &fakeCatalogSource{
+		fingerprint: "broken-v1",
+		catalog:     MCPToolCatalog{Revision: strings.Repeat("a", 64)},
+		diagnostics: []MCPProviderDiagnostic{{Code: "TOOLS_LIST_FAILED", Message: "offline"}},
+	}
+	loop := NewLoop(client, localtool.NewRegistry(), LoopOptions{MCPToolCatalogSource: source})
+	now := time.Unix(1_700_000_000, 0)
+	loop.now = func() time.Time { return now }
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(30 * time.Second)
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.discoveries != 1 {
+		t.Fatalf("failed discovery ignored backoff: %d", source.discoveries)
+	}
+	now = now.Add(2 * time.Minute)
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.discoveries != 2 {
+		t.Fatalf("failed discovery did not retry after backoff: %d", source.discoveries)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	loop.catalogNextRefreshAt = time.Time{}
+	loop.refreshMCPToolCatalog(cancelled)
+	if source.discoveries != 2 {
+		t.Fatalf("cancelled context triggered discovery: %d", source.discoveries)
+	}
+}
+
 func TestLoopFailsUnsupportedCommand(t *testing.T) {
 	client := &fakeClient{
 		register: RegisterRunnerResponse{RunnerID: "runner_001", SessionID: "session_001", HeartbeatIntervalSec: 15, PollIntervalSec: 3},
@@ -87,7 +237,7 @@ func TestLoopFailsUnsupportedCommand(t *testing.T) {
 	}
 }
 
-func TestLoopDropsTerminalPendingReportErrors(t *testing.T) {
+func TestLoopRetainsPendingReportWhenCloudReturnsForbidden(t *testing.T) {
 	client := &fakeClient{
 		register: RegisterRunnerResponse{RunnerID: "runner_001", SessionID: "session_001", HeartbeatIntervalSec: 15, PollIntervalSec: 3},
 		failErr:  &HTTPStatusError{Method: http.MethodPost, Path: "/api/local-jobs/local_job_stale/fail", StatusCode: http.StatusForbidden},
@@ -108,18 +258,56 @@ func TestLoopDropsTerminalPendingReportErrors(t *testing.T) {
 	}
 
 	if err := loop.RunOnce(context.Background()); err != nil {
-		t.Fatalf("run once should drop terminal pending report without failing: %v", err)
+		t.Fatalf("run once should retain and retry pending report without failing: %v", err)
 	}
 
 	reports, err := loop.pendingReports.List()
 	if err != nil {
 		t.Fatalf("list pending reports: %v", err)
 	}
-	if len(reports) != 0 {
-		t.Fatalf("terminal pending report should be removed, got %#v", reports)
+	if len(reports) != 1 {
+		t.Fatalf("unconfirmed forbidden report must be retained, got %#v", reports)
 	}
 	if client.failedJobID != "local_job_stale" {
 		t.Fatalf("pending failure should have been retried before removal: %#v", client)
+	}
+}
+
+func TestLoopReportsMCPIsErrorAsFailureWithBoundedDiagnostics(t *testing.T) {
+	client := &fakeClient{}
+	registry := localtool.NewRegistry()
+	registry.Register(localtool.ExecutorFunc(func(context.Context, localtool.Job) (*localtool.Result, error) {
+		return &localtool.Result{Output: map[string]interface{}{
+			"isError":           true,
+			"content":           []interface{}{map[string]interface{}{"type": "text", "text": "provider rejected request"}},
+			"structuredContent": map[string]interface{}{"reason": "policy"},
+			"meta":              map[string]interface{}{"trace": "trace-1"},
+			"raw": map[string]interface{}{
+				strings.Repeat("oversized-key", maxMCPDiagnosticBytes): strings.Repeat("x", maxMCPDiagnosticBytes*2),
+			},
+		}}, nil
+	}), localtool.CommandLocalMCPToolCall)
+	loop := NewLoop(client, registry, LoopOptions{DataDir: t.TempDir()})
+
+	if err := loop.executeAndReport(context.Background(), localtool.Job{ID: "mcp-error", Command: localtool.CommandLocalMCPToolCall}); err != nil {
+		t.Fatalf("MCP failure report: %v", err)
+	}
+	if client.completedJobID != "" {
+		t.Fatalf("MCP isError must not POST complete: %#v", client.completed)
+	}
+	if client.failedJobID != "mcp-error" || client.failed.Error["code"] != "MCP_TOOL_ERROR" {
+		t.Fatalf("MCP isError was not POSTed to fail: %#v", client.failed)
+	}
+	diagnostic, ok := client.failed.Diagnostics["mcpResult"].(map[string]interface{})
+	if !ok || diagnostic["content"] == nil || diagnostic["structuredContent"] == nil || diagnostic["meta"] == nil || diagnostic["raw"] == nil {
+		t.Fatalf("MCP diagnostics lost protocol fields: %#v", client.failed.Diagnostics)
+	}
+	encoded, err := json.Marshal(client.failed.Diagnostics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > maxMCPDiagnosticBytes+1024 {
+		t.Fatalf("MCP diagnostics are unbounded: bytes=%d", len(encoded))
 	}
 }
 
@@ -127,6 +315,7 @@ type fakeClient struct {
 	register       RegisterRunnerResponse
 	claim          *localtool.Job
 	registerReq    RegisterRunnerRequest
+	heartbeats     []HeartbeatRequest
 	completedJobID string
 	completed      CompleteJobRequest
 	failedJobID    string
@@ -140,7 +329,8 @@ func (f *fakeClient) Register(_ context.Context, req RegisterRunnerRequest) (*Re
 	return &f.register, nil
 }
 
-func (f *fakeClient) Heartbeat(context.Context, string, HeartbeatRequest) error {
+func (f *fakeClient) Heartbeat(_ context.Context, _ string, req HeartbeatRequest) error {
+	f.heartbeats = append(f.heartbeats, req)
 	return nil
 }
 

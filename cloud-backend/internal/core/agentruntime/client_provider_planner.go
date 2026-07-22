@@ -27,12 +27,13 @@ func (p *ClientProviderPlanner) GeneratePlan(ctx context.Context, req StartRunRe
 	if p == nil || p.tools == nil {
 		return nil, fmt.Errorf("client provider planner is not configured")
 	}
+	requestTools := toolProviderForRequest(req, p.tools)
 	provider := clientTextProviderFromRequest(req)
 	if provider == nil {
 		return p.fallbackPlan(ctx, req, fmt.Errorf("client text model provider is not configured"))
 	}
 	llm := NewLLMPlanner(
-		p.tools,
+		requestTools,
 		NewOpenAIPlannerClient(providerConfigFromMap(provider)),
 		LLMPlannerOptions{MaxTools: p.maxTools},
 	)
@@ -51,6 +52,24 @@ func (p *ClientProviderPlanner) RepairPlan(ctx context.Context, plan *AgentPlan,
 		return repairer.RepairPlan(ctx, plan, guardError)
 	}
 	return nil, fmt.Errorf("client provider planner has no repair fallback")
+}
+
+func (p *ClientProviderPlanner) RepairPlanForRequest(ctx context.Context, req StartRunRequest, plan *AgentPlan, guardError string) (*AgentPlan, error) {
+	if p == nil {
+		return nil, fmt.Errorf("client provider planner is not configured")
+	}
+	if provider := clientTextProviderFromRequest(req); provider != nil {
+		llm := NewLLMPlanner(
+			toolProviderForRequest(req, p.tools),
+			NewOpenAIPlannerClient(providerConfigFromMap(provider)),
+			LLMPlannerOptions{MaxTools: p.maxTools},
+		)
+		return llm.RepairPlanForRequest(ctx, req, plan, guardError)
+	}
+	if repairer, ok := p.fallback.(RequestScopedPlanRepairer); ok {
+		return repairer.RepairPlanForRequest(ctx, req, plan, guardError)
+	}
+	return nil, fmt.Errorf("client provider planner has no request-scoped repair path")
 }
 
 func (p *ClientProviderPlanner) fallbackPlan(ctx context.Context, req StartRunRequest, llmErr error) (*AgentPlan, error) {

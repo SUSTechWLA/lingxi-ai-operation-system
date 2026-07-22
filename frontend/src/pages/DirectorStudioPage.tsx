@@ -491,13 +491,13 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus, init
       <main className="min-w-0 flex-1 lg:p-5 lg:pr-6">
         <TopBar preflight={preflight} serviceStatus={serviceStatus} run={run} />
         {error && (
-          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="mt-4 rounded-lg border border-danger-line bg-danger-soft px-4 py-3 text-sm text-danger-ink">
             <div className="flex items-center gap-2 font-semibold">
               <FiShield /> {error}
             </div>
             {errorDetail && (
-              <details className="mt-3 border-t border-red-200 pt-3">
-                <summary className="cursor-pointer text-xs font-semibold text-red-500 hover:text-red-700">高级详情</summary>
+              <details className="mt-3 border-t border-danger-line pt-3">
+                <summary className="cursor-pointer text-xs font-semibold text-danger-ink hover:text-danger-ink">高级详情</summary>
                 <div className="mt-2 space-y-1.5 text-xs">
                   <div><span className="font-bold">错误码：</span>{errorDetail.code}</div>
                   {errorDetail.nodeId && <div><span className="font-bold">节点ID：</span>{errorDetail.nodeId}</div>}
@@ -587,7 +587,7 @@ function JiMengProjectNotice({ ready, selectedProfile, onOpenSettings }: { ready
         {!availableForProfile ? (
           <span className="text-xs font-semibold text-ink-soft">当前入口不需要自动 AIGC 生成；切换到影视 / AIGC 入口后会使用该配置。</span>
         ) : ready ? (
-          <span className="text-xs font-semibold text-green-700">本地即梦生成能力已可用于当前入口。</span>
+          <span className="text-xs font-semibold text-success-ink">本地即梦生成能力已可用于当前入口。</span>
         ) : (
           <span className="text-xs font-semibold text-primary-dark">打开设置后安装 CLI、注册 MCP 并完成登录。</span>
         )}
@@ -610,17 +610,17 @@ function canUseJiMengForProfile(profile: VideoCreationProfile): boolean {
 function DirectorSidebar({ active, setActive, user, serviceStatus, preflight, onLogout }: { active: DirectorNavKey; setActive: (key: DirectorNavKey) => void; user: AuthUser; serviceStatus: Props['serviceStatus']; preflight: PreflightResponse | null; onLogout: () => void }) {
   const localStatus = localServiceStatusDisplay(serviceStatus, preflight?.capabilityMenu.localRunner.available)
   const localStatusClassName = localStatus.tone === 'ok'
-    ? 'bg-green-50 text-green-700'
+    ? 'bg-success-soft text-success-ink'
     : localStatus.tone === 'error'
-      ? 'bg-red-50 text-red-700'
-      : 'bg-stone-50 text-ink-muted'
+      ? 'bg-danger-soft text-danger-ink'
+      : 'bg-neutral-soft text-ink-muted'
 
   return (
     <aside className="glass flex w-full shrink-0 flex-col rounded-xl p-4 lg:sticky lg:top-5 lg:h-[calc(100vh-40px)] lg:w-72">
       <div className="flex items-center gap-3">
         <div className="relative h-10 w-10 overflow-hidden rounded-lg shadow-glow">
           <img src={APP_ICON_PATH} alt="躺营" className="h-full w-full object-cover" />
-          <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-white bg-success" />
+          <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-background-card bg-success" />
         </div>
         <div>
           <div className="text-base font-black text-ink">躺营导演台</div>
@@ -661,7 +661,7 @@ function DirectorSidebar({ active, setActive, user, serviceStatus, preflight, on
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
           <div className={clsx('rounded-lg px-3 py-2', localStatusClassName)}>{localStatus.label}</div>
-          <div className="rounded-lg bg-amber-50 px-3 py-2 text-primary-dark">v0.1.0 内测</div>
+          <div className="rounded-lg bg-warning-soft px-3 py-2 text-warning-ink">v0.1.0 内测</div>
         </div>
       </div>
     </aside>
@@ -703,21 +703,21 @@ function ModelProviderNotice({ status, onOpenSettings }: { status: ModelProvider
     : `缺少 ${missingText || '基础模型'} Provider，请在设置中填写接口地址、模型名和 Token。`
 
   return (
-    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <div className="mt-4 rounded-lg border border-warning-line bg-warning-soft px-4 py-3 text-sm text-warning-ink">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-background-card text-amber-700 ring-1 ring-amber-200">
+          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-background-card text-warning-ink ring-1 ring-warning-line">
             <FiKey />
           </span>
           <div className="min-w-0">
             <div className="font-black">{title}</div>
-            <div className="mt-1 text-xs leading-5 text-amber-800">{message}</div>
+            <div className="mt-1 text-xs leading-5 text-warning-ink">{message}</div>
           </div>
         </div>
         <button
           type="button"
           onClick={onOpenSettings}
-          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-amber-700 px-4 py-2 text-xs font-black text-white hover:bg-amber-800"
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-warning px-4 py-2 text-xs font-black text-on-warning transition hover:bg-primary-dark hover:text-on-primary-dark"
         >
           <FiSettings /> 打开设置
         </button>
@@ -824,13 +824,13 @@ function OverviewPage(props: {
               onClick={isStopAction ? onStop : onStart}
               className={clsx(
                 'flex items-center gap-2 rounded-lg px-6 py-2.5 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50',
-                isStopAction ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-primary text-on-primary shadow-glow hover:bg-primary-dark hover:text-on-primary-dark',
+                isStopAction ? 'bg-danger text-on-danger hover:brightness-90' : 'bg-primary text-on-primary shadow-glow hover:bg-primary-dark hover:text-on-primary-dark',
               )}
             >
               {isStopAction ? <FiSquare /> : <FiPlay />} {primaryAction.label}
             </button>
             {preflight?.blockers?.length ? (
-              <span className="text-xs font-semibold text-red-700">当前入口还有配置未完成，请查看下方体检问题或打开设置处理。</span>
+              <span className="text-xs font-semibold text-danger-ink">当前入口还有配置未完成，请查看下方体检问题或打开设置处理。</span>
             ) : !preflight ? (
               <span className="text-xs font-semibold text-primary-dark">正在体检当前视频入口...</span>
             ) : null}
@@ -869,10 +869,10 @@ function OverviewPage(props: {
         </section>
       )}
       {staleNames.length > 0 && (
-        <div className="card border-red-200 bg-red-50/80 p-5">
-          <h3 className="text-base font-black text-red-800">下游产物已过期，需要重新生成</h3>
+        <div className="card border-danger-line bg-danger-soft/80 p-5">
+          <h3 className="text-base font-black text-danger-ink">下游产物已过期，需要重新生成</h3>
           <div className="mt-3 flex flex-wrap gap-2">
-            {staleNames.map((name) => <span key={name} className="rounded-full bg-background-card px-3 py-1 text-xs font-bold text-red-700 ring-1 ring-red-200">{name}</span>)}
+            {staleNames.map((name) => <span key={name} className="rounded-full bg-background-card px-3 py-1 text-xs font-bold text-danger-ink ring-1 ring-danger-line">{name}</span>)}
           </div>
         </div>
       )}
@@ -913,7 +913,7 @@ function EnvironmentChecklistPanel({ items, onOpenSettings }: { items: Environme
               <div className="min-w-0">
                 <div className="text-sm font-black text-ink">{item.label}</div>
                 <p className="mt-1 text-xs leading-5 text-ink-muted">{item.detail}</p>
-                {item.blockerCode ? <div className="mt-2 font-mono text-[10px] font-bold text-red-600">{item.blockerCode}</div> : null}
+                {item.blockerCode ? <div className="mt-2 font-mono text-[10px] font-bold text-danger-ink">{item.blockerCode}</div> : null}
               </div>
               <StatusBadge status={environmentStatusToBadge(item.status)} label={environmentStatusLabel(item.status)} />
             </div>
@@ -934,9 +934,9 @@ function EnvironmentChecklistPanel({ items, onOpenSettings }: { items: Environme
 }
 
 function environmentItemTone(status: EnvironmentChecklistItem['status']) {
-  if (status === 'passed') return 'border-green-100 bg-green-50/70'
-  if (status === 'blocked') return 'border-red-200 bg-red-50/75'
-  if (status === 'warning') return 'border-amber-200 bg-amber-50/75'
+  if (status === 'passed') return 'border-success-line bg-success-soft/70'
+  if (status === 'blocked') return 'border-danger-line bg-danger-soft/75'
+  if (status === 'warning') return 'border-warning-line bg-warning-soft/75'
   return 'border-line bg-background-card'
 }
 
@@ -1008,9 +1008,9 @@ function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
         </div>
         <div className="flex items-center gap-3 text-xs font-semibold text-ink-soft">
           <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-primary" /> 生成中</span>
-          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" /> 待审核</span>
-          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-green-500" /> 已通过</span>
-          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-stone-300" /> 等待中</span>
+          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-warning" /> 待审核</span>
+          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-success" /> 已通过</span>
+          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-neutral-muted" /> 等待中</span>
         </div>
       </div>
       <div className="flex items-center gap-1 overflow-x-auto px-1 py-1">
@@ -1019,7 +1019,7 @@ function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
           return (
             <Fragment key={item.id}>
               {index > 0 && (
-                <span className="shrink-0 text-stone-300 text-sm font-bold px-1">→</span>
+                <span className="shrink-0 text-neutral-ink text-sm font-bold px-1">→</span>
               )}
               <div
                 className={clsx(
@@ -1064,14 +1064,14 @@ function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
 
   if (allDone) {
     return (
-      <div className="col-span-12 rounded-xl border border-green-200 bg-green-50 px-5 py-4 transition-all">
+      <div className="col-span-12 rounded-xl border border-success-line bg-success-soft px-5 py-4 transition-all">
         <div className="flex items-center gap-3">
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-green-500 text-white">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-success text-on-success">
             <FiCheck />
           </span>
           <div>
-            <p className="text-sm font-black text-green-800">全部阶段已完成</p>
-            <p className="text-xs text-green-600 mt-0.5">所有审核已通过，可在产物页查看和导出最终视频。</p>
+            <p className="text-sm font-black text-success-ink">全部阶段已完成</p>
+            <p className="text-xs text-success-ink mt-0.5">所有审核已通过，可在产物页查看和导出最终视频。</p>
           </div>
         </div>
       </div>
@@ -1080,16 +1080,16 @@ function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
 
   if (blockedStage) {
     return (
-      <div className="col-span-12 rounded-xl border border-red-200 bg-red-50 px-5 py-4 transition-all">
+      <div className="col-span-12 rounded-xl border border-danger-line bg-danger-soft px-5 py-4 transition-all">
         <div className="flex items-center gap-3">
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-red-500 text-white">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-danger text-on-danger">
             <FiX />
           </span>
           <div>
-            <p className="text-sm font-black text-red-800">
+            <p className="text-sm font-black text-danger-ink">
               【{blockedStage.displayName}】执行失败或被阻断
             </p>
-            <p className="text-xs text-red-600 mt-0.5">请切到追踪页查看错误详情，或在审核页重新生成当前阶段。</p>
+            <p className="text-xs text-danger-ink mt-0.5">请切到追踪页查看错误详情，或在审核页重新生成当前阶段。</p>
           </div>
         </div>
       </div>
@@ -1117,16 +1117,16 @@ function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
 
   if (reviewStage) {
     return (
-      <div className="col-span-12 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 transition-all">
+      <div className="col-span-12 rounded-xl border border-warning-line bg-warning-soft px-5 py-4 transition-all">
         <div className="flex items-center gap-3">
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-amber-500 text-white">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-warning text-on-warning">
             <FiShield />
           </span>
           <div>
-            <p className="text-sm font-black text-amber-800">
+            <p className="text-sm font-black text-warning-ink">
               【{reviewStage.displayName}】产物已输出，等待你的确认
             </p>
-            <p className="text-xs text-amber-600 mt-0.5">请审核下方内容，确认后下游阶段将自动继续执行。</p>
+            <p className="text-xs text-warning-ink mt-0.5">请审核下方内容，确认后下游阶段将自动继续执行。</p>
           </div>
         </div>
       </div>
@@ -1135,14 +1135,14 @@ function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
 
   // No stages active yet
   return (
-    <div className="col-span-12 rounded-xl border border-stone-200 bg-stone-50 px-5 py-4 transition-all">
+    <div className="col-span-12 rounded-xl border border-neutral-line bg-neutral-soft px-5 py-4 transition-all">
       <div className="flex items-center gap-3">
-        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-stone-400 text-white">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-neutral text-on-neutral">
           <FiCpu />
         </span>
         <div>
-          <p className="text-sm font-black text-stone-700">等待任务启动</p>
-          <p className="text-xs text-stone-500 mt-0.5">在概览页输入主题并启动项目，审核内容将显示在这里。</p>
+          <p className="text-sm font-black text-neutral-ink">等待任务启动</p>
+          <p className="text-xs text-neutral-ink mt-0.5">在概览页输入主题并启动项目，审核内容将显示在这里。</p>
         </div>
       </div>
     </div>
@@ -1254,7 +1254,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
                           >
                             <div className="flex items-center justify-between gap-2">
                               <span className="font-black">{String(index + 1).padStart(2, '0')}</span>
-                              <span className={clsx('h-2 w-2 shrink-0 rounded-full', pending ? 'bg-primary' : rejected ? 'bg-red-500' : 'bg-green-500')} />
+                              <span className={clsx('h-2 w-2 shrink-0 rounded-full', pending ? 'bg-primary' : rejected ? 'bg-danger' : 'bg-success')} />
                             </div>
                             <div className="mt-1 truncate font-black text-ink" title={reviewDisplayTitle(item)}>{reviewDisplayTitle(item)}</div>
                             <div className="mt-0.5 truncate text-[11px]" title={item.tool || item.id}>{reviewStatusLabel(item)}</div>
@@ -1339,10 +1339,10 @@ function TracePage({ traceNodes, run }: { traceNodes: DirectorTraceNode[]; run: 
               className={clsx(
                 'rounded-lg border p-4 text-left transition hover:-translate-y-0.5 min-w-0 overflow-hidden',
                 selected?.id === node.id ? 'border-primary bg-primary-soft shadow-card' : 'border-line bg-background-card/70',
-                traceNodeHasError(node) && 'border-red-300 bg-red-50/60',
+                traceNodeHasError(node) && 'border-danger-line bg-danger-soft/60',
               )}>
               <div className="flex items-center justify-between gap-2 min-w-0">
-                <span className={clsx('grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-black', traceNodeHasError(node) ? 'bg-red-600 text-white' : 'bg-ink text-background-card')}>
+                <span className={clsx('grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-black', traceNodeHasError(node) ? 'bg-danger text-on-danger' : 'bg-ink text-background-card')}>
                   {String(index + 1).padStart(2, '0')}
                 </span>
                 <StatusBadge status={node.status} />
@@ -1353,7 +1353,7 @@ function TracePage({ traceNodes, run }: { traceNodes: DirectorTraceNode[]; run: 
                 {node.rawType && <span className="shrink-0 rounded bg-ink/10 px-1 py-0.5 text-[10px] font-bold text-ink-soft">{node.rawType}</span>}
               </div>
               {node.duration !== '-' && <div className="mt-1 text-[10px] text-ink-muted">{node.duration}</div>}
-              {node.error && <div className="mt-2 truncate text-[11px] font-semibold text-red-600" title={node.error}>⚠ {node.error.slice(0, 50)}</div>}
+              {node.error && <div className="mt-2 truncate text-[11px] font-semibold text-danger-ink" title={node.error}>⚠ {node.error.slice(0, 50)}</div>}
             </button>
           )) : <EmptyState text="还没有执行 trace。启动项目后，每个步骤会显示在这里。" />}
         </div>
@@ -1361,7 +1361,7 @@ function TracePage({ traceNodes, run }: { traceNodes: DirectorTraceNode[]; run: 
       <aside className="col-span-12 space-y-5 xl:col-span-4">
         <section className="card p-6">
             <div className="flex min-w-0 items-center gap-3">
-              <div className={clsx('rounded-lg p-3', selectedHasError ? 'bg-red-50 text-red-600' : 'bg-primary-soft text-primary-dark')}>
+              <div className={clsx('rounded-lg p-3', selectedHasError ? 'bg-danger-soft text-danger-ink' : 'bg-primary-soft text-primary-dark')}>
                 {selectedHasError ? <FiShield /> : <FiActivity />}
               </div>
             <div className="min-w-0">
@@ -1381,9 +1381,9 @@ function TracePage({ traceNodes, run }: { traceNodes: DirectorTraceNode[]; run: 
             <DebugField label="输出" value={selected?.output || '-'} />
           </div>
           {selected?.error && (
-            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4">
-              <div className="text-xs font-black text-red-700 mb-2">错误信息</div>
-              <pre className="whitespace-pre-wrap break-words text-xs text-red-600">{selected.error}</pre>
+            <div className="mt-4 rounded-lg border border-danger-line bg-danger-soft p-4">
+              <div className="text-xs font-black text-danger-ink mb-2">错误信息</div>
+              <pre className="whitespace-pre-wrap break-words text-xs text-danger-ink">{selected.error}</pre>
             </div>
           )}
         </section>
@@ -1393,9 +1393,9 @@ function TracePage({ traceNodes, run }: { traceNodes: DirectorTraceNode[]; run: 
             {traceNodes.length ? traceNodes.map((node) => (
               <div key={node.id}
                 onClick={() => setSelectedId(node.id)}
-                className={clsx('cursor-pointer rounded-lg p-3 ring-1 transition min-w-0 overflow-hidden', traceNodeHasError(node) ? 'bg-red-50 ring-red-200' : 'bg-background-card ring-line', selected?.id === node.id && 'ring-primary bg-primary-soft')}>
+                className={clsx('cursor-pointer rounded-lg p-3 ring-1 transition min-w-0 overflow-hidden', traceNodeHasError(node) ? 'bg-danger-soft ring-danger-line' : 'bg-background-card ring-line', selected?.id === node.id && 'ring-primary bg-primary-soft')}>
                 <div className="flex items-center justify-between gap-2 min-w-0">
-                  <span className={clsx('truncate font-bold', traceNodeHasError(node) ? 'text-red-700' : 'text-ink')} title={node.tool}>{node.tool}</span>
+                  <span className={clsx('truncate font-bold', traceNodeHasError(node) ? 'text-danger-ink' : 'text-ink')} title={node.tool}>{node.tool}</span>
                   <StatusBadge status={node.status} />
                 </div>
                 <div className="mt-1 truncate text-ink-soft">{node.output || node.rawName}</div>
@@ -1519,7 +1519,7 @@ function AssetsPage({ artifacts, projectId, selectedProfile, onArtifactsChanged 
 
   return (
     <div className="space-y-5">
-      {staleCount > 0 && <div className="rounded-lg bg-amber-50 p-4 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">⚠ 有 {staleCount} 个下游产物已过期。上游产物被修改、驳回或重新生成后，下游产物需要重新生成才能使用。</div>}
+      {staleCount > 0 && <div className="rounded-lg bg-warning-soft p-4 text-sm font-semibold text-warning-ink ring-1 ring-warning-line">⚠ 有 {staleCount} 个下游产物已过期。上游产物被修改、驳回或重新生成后，下游产物需要重新生成才能使用。</div>}
       {materialDependencyCount > 0 && (
         <div className="rounded-lg border border-primary/25 bg-background-card p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1659,7 +1659,7 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
   return (
     <section className="space-y-4">
       <div className="card overflow-hidden p-0">
-        <div className="border-b border-primary/15 bg-[linear-gradient(180deg,#fffaf0,#fffdf7)] p-5">
+        <div className="border-b border-primary/15 bg-background-card p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2 text-xs font-black text-ink-muted">
@@ -1673,7 +1673,7 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
               <p className="mt-2 max-w-4xl text-sm leading-6 text-ink-muted">{copy.description}</p>
               <div className={clsx(
                 'mt-3 inline-flex max-w-full flex-wrap items-center gap-2 rounded-lg px-3 py-2 text-xs font-black ring-1',
-                usingAutoMode ? 'bg-green-50 text-green-700 ring-green-100' : 'bg-amber-50 text-amber-800 ring-amber-100',
+                usingAutoMode ? 'bg-success-soft text-success-ink ring-success-line' : 'bg-warning-soft text-warning-ink ring-warning-line',
               )}>
                 <FiCpu />
                 <span>{usingAutoMode ? modeDetection.label : `手动查看：${shotWorkspaceModeLabel(mode)}`}</span>
@@ -1712,7 +1712,7 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
                 </div>
                 <span className={clsx(
                   'rounded-full px-3 py-1 text-xs font-black ring-1',
-                  globalReady ? 'bg-green-50 text-green-700 ring-green-100' : 'bg-amber-50 text-amber-800 ring-amber-100',
+                  globalReady ? 'bg-success-soft text-success-ink ring-success-line' : 'bg-warning-soft text-warning-ink ring-warning-line',
                 )}>{globalReady ? '已同步' : '待补充'}</span>
               </div>
             </div>
@@ -1762,8 +1762,8 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
                 {qaStatusLabel ? <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">{qaStatusLabel}</span> : null}
                 {openGroup.production.attemptCount > 0 ? <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">尝试 {openGroup.production.attemptCount}</span> : null}
                 {openGroup.production.acceptedCandidateId ? <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">已采纳版本</span> : null}
-                {sourceTypeLabel ? <span className={clsx('rounded px-2 py-1 ring-1', openGroup.production.isFallback ? 'bg-amber-50 text-amber-800 ring-amber-100' : 'bg-background-card ring-line')}>{sourceTypeLabel}</span> : null}
-                <span className={clsx('rounded px-2 py-1 ring-1', openGroup.production.canEnterAssembly ? 'bg-green-50 text-green-700 ring-green-100' : 'bg-background-card ring-line')}>{activeStatusLabel}</span>
+                {sourceTypeLabel ? <span className={clsx('rounded px-2 py-1 ring-1', openGroup.production.isFallback ? 'bg-warning-soft text-warning-ink ring-warning-line' : 'bg-background-card ring-line')}>{sourceTypeLabel}</span> : null}
+                <span className={clsx('rounded px-2 py-1 ring-1', openGroup.production.canEnterAssembly ? 'bg-success-soft text-success-ink ring-success-line' : 'bg-background-card ring-line')}>{activeStatusLabel}</span>
                 <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">产物 {openGroup.artifactCounts.total}</span>
                 <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">参考 {openGroup.artifactCounts.references}</span>
                 <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">媒体 {openGroup.artifactCounts.media}</span>
@@ -1771,7 +1771,7 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
               {openGroup.production.lockedDimensions.length ? (
                 <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] font-bold text-ink-muted">
                   {openGroup.production.lockedDimensions.map((dimension) => (
-                    <span key={dimension} className="rounded bg-green-50 px-2 py-1 text-green-700 ring-1 ring-green-100">lock {dimension}</span>
+                    <span key={dimension} className="rounded bg-success-soft px-2 py-1 text-success-ink ring-1 ring-success-line">lock {dimension}</span>
                   ))}
                 </div>
               ) : null}
@@ -1820,8 +1820,8 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
             onUpload={uploadShotAsset}
             onRequestRevised={handleRequestRevised}
           />
-          {message ? <p className="mt-4 text-sm font-semibold text-green-700">{message}</p> : null}
-          {error ? <p className="mt-4 text-sm font-semibold text-red-600">{error}</p> : null}
+          {message ? <p className="mt-4 text-sm font-semibold text-success-ink">{message}</p> : null}
+          {error ? <p className="mt-4 text-sm font-semibold text-danger-ink">{error}</p> : null}
         </div>
       ) : null}
     </section>
@@ -2241,7 +2241,7 @@ function ShotPrototypePanel({
             <div className="flex items-center gap-2">
               <span className={clsx(
                 'grid h-7 w-7 place-items-center rounded-lg font-mono text-xs font-black ring-1',
-                completed ? 'bg-green-50 text-green-700 ring-green-100' : 'bg-primary-soft text-primary-dark ring-primary/15',
+                completed ? 'bg-success-soft text-success-ink ring-success-line' : 'bg-primary-soft text-primary-dark ring-primary/15',
               )}>{index}</span>
               <h5 className="text-base font-black text-ink">{title}</h5>
             </div>
@@ -2250,7 +2250,7 @@ function ShotPrototypePanel({
           <div className="flex items-center gap-2">
             <span className={clsx(
               'rounded-full px-3 py-1 text-[11px] font-black ring-1',
-              completed ? 'bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line',
+              completed ? 'bg-success-soft text-success-ink ring-success-line' : 'bg-background-card text-primary-dark ring-line',
             )}>{completed ? '已完成' : '展开处理'}</span>
             <FiChevronRight className="mt-1 text-primary transition group-open:rotate-90" />
           </div>
@@ -2264,7 +2264,7 @@ function ShotPrototypePanel({
             onClick={() => setCompleted((current) => !current)}
             className={clsx(
               'inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-black ring-1',
-              completed ? 'bg-green-50 text-green-700 ring-green-100 hover:bg-background-card' : 'bg-primary text-on-primary ring-primary shadow-sm',
+              completed ? 'bg-success-soft text-success-ink ring-success-line hover:bg-background-card' : 'bg-primary text-on-primary ring-primary shadow-sm',
             )}
           >
             <FiCheck /> {completed ? '取消完成' : '完成本步骤'}
@@ -2386,7 +2386,7 @@ function ContinuityChecklist({ group, requestEntries }: { group: DirectorShotRev
     <div className="space-y-2">
       {rows.map((row) => (
         <div key={row.label} className="flex items-start gap-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
-          <span className={clsx('mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs', row.ready ? 'bg-green-50 text-green-700 ring-1 ring-green-100' : 'bg-amber-50 text-amber-800 ring-1 ring-amber-100')}>
+          <span className={clsx('mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs', row.ready ? 'bg-success-soft text-success-ink ring-1 ring-success-line' : 'bg-warning-soft text-warning-ink ring-1 ring-warning-line')}>
             {row.ready ? <FiCheck /> : <FiSquare />}
           </span>
           <div className="min-w-0">
@@ -2960,7 +2960,7 @@ function ShotLayerTimeline({
         label: '全局参考',
         time: 'lock',
         detail: referenceStrategyLine(mode, group, requestEntries),
-        tone: 'bg-green-50',
+        tone: 'bg-success-soft',
       },
       {
         label: 'HyperFrames 字幕',
@@ -2986,7 +2986,7 @@ function ShotLayerTimeline({
         label: 'AIGC 插入点',
         time: 'b-roll',
         detail: firstRequestLine(requestEntries, ['visualText', 'prompt']) || '仅在画面单调处插入素材，服务口播内容，不要求跨 shot 一致性',
-        tone: 'bg-green-50',
+        tone: 'bg-success-soft',
       },
       {
         label: 'FFmpeg 合成',
@@ -3392,7 +3392,7 @@ function SelectionFloatingAssistant({
         placeholder={mode === 'aigc_shot' ? '例如：加强镜头推进和主角情绪，但保持场景一致。' : '例如：改成 2 秒出现的数据卡片，别影响口播节奏。'}
         className="mt-3 h-20 w-full resize-none rounded-lg border border-line bg-background-card p-2 text-xs leading-5 text-ink outline-none focus:border-primary"
       />
-      {error ? <p className="mt-2 text-xs font-semibold text-red-600">{error}</p> : null}
+      {error ? <p className="mt-2 text-xs font-semibold text-danger-ink">{error}</p> : null}
       <div className="mt-3 flex flex-wrap justify-end gap-2">
         <button type="button" onClick={() => setInstruction('更明确时间线、动作变化和素材边界。')} className="rounded-lg bg-background-card px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft">
           时间线
@@ -3517,7 +3517,7 @@ function ShotRequestSummaryCard({
           </div>
           <span className={clsx(
             'rounded-full px-3 py-1 text-[11px] font-black',
-            approved ? 'bg-green-50 text-green-700 ring-1 ring-green-100' : 'bg-primary-soft text-primary-dark',
+            approved ? 'bg-success-soft text-success-ink ring-1 ring-success-line' : 'bg-primary-soft text-primary-dark',
           )}>{approved ? '已通过，内容已锁定' : '展开处理'}</span>
         </div>
       </summary>
@@ -3540,7 +3540,7 @@ function ShotRequestSummaryCard({
               disabled={approved}
               className={clsx(
                 'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-                approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
+                approved ? 'cursor-not-allowed bg-success-soft text-success-ink ring-success-line' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
               )}
             >
               <FiCheck /> {approved ? '已通过，内容已锁定' : '通过并锁定'}
@@ -3554,7 +3554,7 @@ function ShotRequestSummaryCard({
             disabled={approved}
             onChange={(event) => setPromptInstruction(event.target.value)}
             placeholder={mode === 'aigc_shot' ? '例如：加强镜头从中景推到近景，主角表情更压抑，保持道具位置。' : '例如：改成 2 秒 b-roll，背景更现代，右侧留给字幕。'}
-            className="mt-2 min-h-20 w-full resize-y rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+            className="mt-2 min-h-20 w-full resize-y rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-success-soft"
             aria-label={`${request.requestId} 提示词生成要求`}
           />
           <button
@@ -3563,7 +3563,7 @@ function ShotRequestSummaryCard({
             onClick={() => setPromptDraft(regeneratePromptDraft(request, referenceDrafts, promptInstruction, promptDraft, mode))}
             className={clsx(
               'mt-2 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-              approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
+              approved ? 'cursor-not-allowed bg-success-soft text-success-ink ring-success-line' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
             )}
           >
             <FiRefreshCw /> 按要求重新生成提示词
@@ -3578,7 +3578,7 @@ function ShotRequestSummaryCard({
             onChange={(event) => setPromptDraft(safePromptText(event.target.value))}
             onSelect={(event) => setPromptSelection(textareaSelectionDraft(event.currentTarget, promptSourceLabel))}
             onMouseUp={(event) => setPromptSelection(textareaSelectionDraft(event.currentTarget, promptSourceLabel))}
-            className="mt-3 min-h-36 w-full resize-y rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink outline-none selection:bg-primary-soft focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+            className="mt-3 min-h-36 w-full resize-y rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink outline-none selection:bg-primary-soft focus:border-primary disabled:cursor-not-allowed disabled:bg-success-soft"
             aria-label={`${request.requestId} 可编辑提示词`}
           />
           {promptSelection ? (
@@ -3613,7 +3613,7 @@ function ShotRequestSummaryCard({
             onClick={() => setReferenceDrafts((current) => [...current, newReferenceDraft(current.length + 1)])}
             className={clsx(
               'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-              approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
+              approved ? 'cursor-not-allowed bg-success-soft text-success-ink ring-success-line' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
             )}
           >
             <FiUpload /> 新增参考图
@@ -3629,7 +3629,7 @@ function ShotRequestSummaryCard({
                     disabled={approved}
                     onChange={(event) => updateReferenceDraft(setReferenceDrafts, index, { label: event.target.value })}
                     placeholder="参考图名称"
-                    className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+                    className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-success-soft"
                     aria-label={`参考图 ${index + 1} 名称`}
                   />
                   <input
@@ -3637,11 +3637,11 @@ function ShotRequestSummaryCard({
                     disabled={approved}
                     onChange={(event) => updateReferenceDraft(setReferenceDrafts, index, { role: event.target.value })}
                     placeholder="类型，如 storyboard"
-                    className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+                    className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-success-soft"
                     aria-label={`参考图 ${index + 1} 类型`}
                   />
                   {isInternalStorageRef(ref.storageRef) ? (
-                    <div className="rounded-lg border border-line bg-green-50 px-3 py-2 text-xs font-semibold text-green-700">
+                    <div className="rounded-lg border border-line bg-success-soft px-3 py-2 text-xs font-semibold text-success-ink">
                       已选择参考图
                     </div>
                   ) : (
@@ -3650,7 +3650,7 @@ function ShotRequestSummaryCard({
                       disabled={approved}
                       onChange={(event) => updateReferenceDraft(setReferenceDrafts, index, { storageRef: event.target.value })}
                       placeholder="图片 URL 或上传后自动登记"
-                      className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+                      className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-success-soft"
                       aria-label={`参考图 ${index + 1} 来源`}
                     />
                   )}
@@ -3660,7 +3660,7 @@ function ShotRequestSummaryCard({
                     onClick={() => setReferenceDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index))}
                     className={clsx(
                       'rounded-lg px-3 py-2 text-xs font-black ring-1',
-                      approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
+                      approved ? 'cursor-not-allowed bg-success-soft text-success-ink ring-success-line' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
                     )}
                   >
                     移除
@@ -4017,7 +4017,7 @@ function ShotAssetSlotCard({
           <p className="rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">当前 shot 的提示词还未生成；生成后会在这里展示，可直接复制到外部网站。</p>
         ) : null}
         {slot.kind === 'prompt' && requests.length > 0 ? (
-          <p className="rounded-lg bg-green-50 p-3 text-xs leading-5 text-green-700 ring-1 ring-green-100">
+          <p className="rounded-lg bg-success-soft p-3 text-xs leading-5 text-success-ink ring-1 ring-success-line">
             已整理该 shot 的生成任务。展开下方素材卡，查看参考图，必要时编辑提示词后再复制使用。
           </p>
         ) : null}
@@ -4048,7 +4048,7 @@ function ShotAssetSlotCard({
           )
         })}
         {hideMaterializedArtifacts && materializedArtifacts.length > 0 ? (
-          <p className="rounded-lg bg-green-50 p-3 text-xs leading-5 text-green-700 ring-1 ring-green-100">已生成的 HyperFrames / 字幕产物已在本步骤上方展示，可直接播放或按时间轴校对。</p>
+          <p className="rounded-lg bg-success-soft p-3 text-xs leading-5 text-success-ink ring-1 ring-success-line">已生成的 HyperFrames / 字幕产物已在本步骤上方展示，可直接播放或按时间轴校对。</p>
         ) : slot.kind === 'overlay' && materializedArtifacts.length > 0 ? (
           <HyperFramesOutputPreview artifacts={materializedArtifacts} mode={mode} projectId={projectId} durationSec={durationSec} />
         ) : materializedArtifacts.map((artifact) => (
@@ -4207,7 +4207,7 @@ function ImagePreviewDialog({
       onMouseDown={onClose}
     >
       <div
-        className="grid max-h-[92vh] w-[min(1180px,calc(100vw-24px))] overflow-hidden rounded-lg bg-background p-3 shadow-card ring-1 ring-white/20 lg:grid-cols-[minmax(0,1fr)_360px]"
+        className="grid max-h-[92vh] w-[min(1180px,calc(100vw-24px))] overflow-hidden rounded-lg bg-background p-3 shadow-card ring-1 ring-line lg:grid-cols-[minmax(0,1fr)_360px]"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex min-h-[360px] items-center justify-center overflow-hidden rounded-lg bg-black/90">
@@ -4320,7 +4320,7 @@ function VideoPreviewDialog({
       onMouseDown={onClose}
     >
       <div
-        className="w-[min(1280px,calc(100vw-24px))] overflow-hidden rounded-lg bg-black shadow-card ring-1 ring-white/20"
+        className="w-[min(1280px,calc(100vw-24px))] overflow-hidden rounded-lg bg-brand-panel shadow-card ring-1 ring-line"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-3 bg-background px-4 py-3">
@@ -4487,7 +4487,7 @@ function ShotArtifactPreview({
               <button
                 type="button"
                 onClick={() => setDialogOpen(true)}
-                className="absolute bottom-2 right-2 inline-flex items-center gap-1.5 rounded-lg bg-ink/80 px-2.5 py-1.5 text-[11px] font-black text-background-card shadow-sm ring-1 ring-white/15 hover:bg-primary hover:text-on-primary focus:outline-none focus:ring-2 focus:ring-white"
+                className="absolute bottom-2 right-2 inline-flex items-center gap-1.5 rounded-lg bg-ink/80 px-2.5 py-1.5 text-[11px] font-black text-background-card shadow-sm ring-1 ring-line hover:bg-primary hover:text-on-primary focus:outline-none focus:ring-2 focus:ring-primary"
                 aria-label={`放大播放 ${artifact.name}`}
               >
                 <FiPlayCircle /> 放大播放
@@ -4654,9 +4654,9 @@ function SubtitleCuePanel({
       {loading ? (
         <p className="mt-3 rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">正在读取字幕内容...</p>
       ) : error && !displayedCues.length ? (
-        <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800 ring-1 ring-amber-100">字幕正文暂不可预览。可以先校对口播、时间线和 HyperFrames 层。</p>
+        <p className="mt-3 rounded-lg bg-warning-soft p-3 text-xs leading-5 text-warning-ink ring-1 ring-warning-line">字幕正文暂不可预览。可以先校对口播、时间线和 HyperFrames 层。</p>
       ) : error && displayedCues.length ? (
-        <div className="mt-3 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800 ring-1 ring-amber-100">
+        <div className="mt-3 rounded-lg bg-warning-soft p-3 text-xs leading-5 text-warning-ink ring-1 ring-warning-line">
           当前先显示口播稿校对视图，便于核对字幕节奏；读取到字幕正文后会自动替换。
         </div>
       ) : null}
@@ -4699,7 +4699,7 @@ function ReadableArtifactTextPanel({
       {loading ? (
         <p className="mt-3 rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">正在读取文本内容...</p>
       ) : error ? (
-        <p className="mt-3 rounded-lg bg-red-50 p-3 text-xs font-semibold leading-5 text-red-600 ring-1 ring-red-100">{error}</p>
+        <p className="mt-3 rounded-lg bg-danger-soft p-3 text-xs font-semibold leading-5 text-danger-ink ring-1 ring-danger-line">{error}</p>
       ) : text ? (
         <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-background-card p-3 text-xs leading-5 text-ink ring-1 ring-line">{text}</pre>
       ) : (
@@ -5110,10 +5110,10 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
               }}
             />
           ) : (
-            <div className="relative h-[410px] bg-[linear-gradient(135deg,#1A0B02,#2B1606_42%,#8B4A12_74%,#E89412)] p-10 text-white">
+            <div className="relative h-[410px] bg-brand-panel p-10 text-on-brand-panel">
               <div className="relative z-10 flex h-full flex-col justify-between">
-                <div><span className="rounded-full bg-white/15 px-4 py-2 text-xs font-bold ring-1 ring-white/20">智能视频创作工作台</span><h3 className="mt-10 max-w-lg text-5xl font-black">等待最终视频</h3><p className="mt-5 text-lg text-amber-100">{videoPreviewLoading ? '正在读取本地视频文件...' : videoPreviewError || '生成完成后会在这里出现播放器'}</p></div>
-                <div className="flex items-center gap-4 rounded-lg bg-black/25 p-4 ring-1 ring-white/10"><FiPlayCircle className="text-3xl" /><div className="h-1 flex-1 overflow-hidden rounded-full bg-white/20"><div className="h-full w-[28%] rounded-full bg-primary-light" /></div><span className="text-sm">0:00 / {formatSeconds(durationSec)}</span></div>
+                <div><span className="rounded-full bg-on-brand-panel/10 px-4 py-2 text-xs font-bold ring-1 ring-on-brand-panel/20">智能视频创作工作台</span><h3 className="mt-10 max-w-lg text-5xl font-black">等待最终视频</h3><p className="mt-5 text-lg text-on-brand-panel/75">{videoPreviewLoading ? '正在读取本地视频文件...' : videoPreviewError || '生成完成后会在这里出现播放器'}</p></div>
+                <div className="flex items-center gap-4 rounded-lg bg-background/35 p-4 ring-1 ring-on-brand-panel/15"><FiPlayCircle className="text-3xl" /><div className="h-1 flex-1 overflow-hidden rounded-full bg-on-brand-panel/20"><div className="h-full w-[28%] rounded-full bg-primary-light" /></div><span className="text-sm">0:00 / {formatSeconds(durationSec)}</span></div>
               </div>
             </div>
           )}
@@ -5122,8 +5122,8 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
       <aside className="space-y-5 xl:col-span-5">
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">导出操作</h3>
-          {!videoReady && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">最终视频尚未生成</div>}
-          {videoPreviewError && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">{videoPreviewError}</div>}
+          {!videoReady && <div className="mb-3 rounded-lg bg-warning-soft p-3 text-xs font-semibold text-warning-ink ring-1 ring-warning-line">最终视频尚未生成</div>}
+          {videoPreviewError && <div className="mb-3 rounded-lg bg-warning-soft p-3 text-xs font-semibold text-warning-ink ring-1 ring-warning-line">{videoPreviewError}</div>}
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"><button disabled={!videoPreviewUrl} onClick={() => { void previewVideoRef.current?.play().catch(() => undefined) }} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-on-primary shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} onClick={() => { void openFinalVideoFolder() }} className="flex items-center justify-center gap-2 rounded-lg bg-background-card px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
           <button disabled={!videoReady} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-on-primary-dark disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> {packageReady ? '下载交付包' : '导出交付包'}</button>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -5134,7 +5134,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">诊断包</h3>
           <p className="mt-2 text-sm leading-6 text-ink-muted">导出 beta-diagnostics.zip，包含脱敏环境、日志、MCP 状态、artifact manifest 和 QA 报告索引。</p>
-          {diagnosticsError ? <div className="mt-3 rounded-lg bg-red-50 p-3 text-xs font-semibold text-red-700 ring-1 ring-red-200">{diagnosticsError}</div> : null}
+          {diagnosticsError ? <div className="mt-3 rounded-lg bg-danger-soft p-3 text-xs font-semibold text-danger-ink ring-1 ring-danger-line">{diagnosticsError}</div> : null}
           {diagnosticsPath ? <div className="mt-3 truncate rounded-lg bg-background-card p-3 font-mono text-[11px] text-ink-soft ring-1 ring-line" title={diagnosticsPath}>{diagnosticsPath}</div> : null}
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button disabled={diagnosticsLoading} onClick={() => { void exportDiagnostics() }} className="flex items-center justify-center gap-2 rounded-lg bg-background-card px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiArchive /> {diagnosticsLoading ? '导出中...' : '导出诊断包'}</button>
@@ -5161,9 +5161,9 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
           {publishLoading ? (
             <div className="rounded-lg bg-background-card p-5 text-sm font-semibold text-ink-muted ring-1 ring-line">正在读取发布文案产物...</div>
           ) : publishError ? (
-            <div className="rounded-lg bg-red-50 p-5 text-sm font-semibold text-red-700 ring-1 ring-red-200">{publishError}</div>
+            <div className="rounded-lg bg-danger-soft p-5 text-sm font-semibold text-danger-ink ring-1 ring-danger-line">{publishError}</div>
           ) : !publishReady ? (
-            <div className="rounded-lg bg-amber-50 p-5 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">
+            <div className="rounded-lg bg-warning-soft p-5 text-sm font-semibold text-warning-ink ring-1 ring-warning-line">
               {publishLocalOnlyPointer ? '发布文案产物已生成，但正文只返回了本地索引，当前客户端无法读取完整文案。' : '等待 publish_copy_generator 根据口播稿生成标题、简介和关键词。'}
             </div>
           ) : publishCopies.map((copy) => (
@@ -5432,7 +5432,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, mode = 'voice_vi
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold">{artifact.id}</td>
                   <td className="whitespace-nowrap px-4 py-3">
                     <div className="font-semibold text-ink">{artifact.name}</div>
-                    {provenance ? <div className={clsx('mt-1 text-[11px] font-bold', provenance.isFallback ? 'text-amber-700' : 'text-ink-soft')}>{provenance.label}</div> : null}
+                    {provenance ? <div className={clsx('mt-1 text-[11px] font-bold', provenance.isFallback ? 'text-warning-ink' : 'text-ink-soft')}>{provenance.label}</div> : null}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{displayNameForArtifact(artifact.kind)}</td>
                   <td className="whitespace-nowrap px-4 py-3">
@@ -5464,7 +5464,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, mode = 'voice_vi
                               <div className="truncate text-sm font-black text-ink">{artifact.name}</div>
                               <div className="mt-1 text-[11px] font-semibold text-ink-soft">{artifactDetailStatus(artifact)}</div>
                               {provenance ? (
-                                <div className={clsx('mt-2 rounded-lg px-3 py-2 text-xs font-semibold ring-1', provenance.isFallback ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-background-card text-ink-muted ring-line')}>
+                                <div className={clsx('mt-2 rounded-lg px-3 py-2 text-xs font-semibold ring-1', provenance.isFallback ? 'bg-warning-soft text-warning-ink ring-warning-line' : 'bg-background-card text-ink-muted ring-line')}>
                                   {provenance.detail}
                                 </div>
                               ) : null}
@@ -5481,7 +5481,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, mode = 'voice_vi
                             {viewerLoading ? (
                               <p className="text-sm text-ink-muted">正在加载产物正文...</p>
                             ) : viewerError ? (
-                              <p className="text-sm font-semibold text-red-600">{viewerError}</p>
+                              <p className="text-sm font-semibold text-danger-ink">{viewerError}</p>
                             ) : content !== null && content !== undefined ? (
                               <ReviewContent text={artifactContentText(content)} />
                             ) : (
@@ -5756,7 +5756,7 @@ function ExternalGenerationRequestPanel({
               disabled={approved}
               className={clsx(
                 'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-                approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
+                approved ? 'cursor-not-allowed bg-success-soft text-success-ink ring-success-line' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
               )}
             >
               <FiCheck /> {approved ? '已通过，内容已锁定' : '通过并锁定'}
@@ -5770,7 +5770,7 @@ function ExternalGenerationRequestPanel({
             disabled={disabled || approved}
             onChange={(event) => setPromptInstruction(event.target.value)}
             placeholder={mode === 'aigc_shot' ? '例如：加强镜头从中景推到近景，主角表情更压抑，保持道具位置。' : '例如：改成 2 秒 b-roll，背景更现代，右侧留给字幕。'}
-            className="mt-2 min-h-20 w-full resize-y rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+            className="mt-2 min-h-20 w-full resize-y rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-success-soft"
             aria-label={`${request.requestId} 提示词生成要求`}
           />
           <button
@@ -5779,7 +5779,7 @@ function ExternalGenerationRequestPanel({
             onClick={() => setPromptDraft(regeneratePromptDraft(request, referenceDrafts, promptInstruction, promptDraft, mode))}
             className={clsx(
               'mt-2 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-              disabled || approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
+              disabled || approved ? 'cursor-not-allowed bg-success-soft text-success-ink ring-success-line' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
             )}
           >
             <FiRefreshCw /> 按要求重新生成提示词
@@ -5794,7 +5794,7 @@ function ExternalGenerationRequestPanel({
             onChange={(event) => setPromptDraft(safePromptText(event.target.value))}
             onSelect={(event) => setPromptSelection(textareaSelectionDraft(event.currentTarget, promptSourceLabel))}
             onMouseUp={(event) => setPromptSelection(textareaSelectionDraft(event.currentTarget, promptSourceLabel))}
-            className="mt-3 min-h-36 w-full resize-y rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink outline-none selection:bg-primary-soft focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+            className="mt-3 min-h-36 w-full resize-y rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink outline-none selection:bg-primary-soft focus:border-primary disabled:cursor-not-allowed disabled:bg-success-soft"
             aria-label={`${request.requestId} 可编辑提示词`}
           />
           {promptSelection ? (
@@ -5828,7 +5828,7 @@ function ExternalGenerationRequestPanel({
             onClick={() => setReferenceDrafts((current) => [...current, newReferenceDraft(current.length + 1)])}
             className={clsx(
               'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
-              disabled || approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
+              disabled || approved ? 'cursor-not-allowed bg-success-soft text-success-ink ring-success-line' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
             )}
           >
             <FiUpload /> 新增参考图
@@ -5844,7 +5844,7 @@ function ExternalGenerationRequestPanel({
                     disabled={disabled || approved}
                     onChange={(event) => updateReferenceDraft(setReferenceDrafts, index, { label: event.target.value })}
                     placeholder="参考图名称"
-                    className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+                    className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-success-soft"
                     aria-label={`参考图 ${index + 1} 名称`}
                   />
                   <input
@@ -5852,11 +5852,11 @@ function ExternalGenerationRequestPanel({
                     disabled={disabled || approved}
                     onChange={(event) => updateReferenceDraft(setReferenceDrafts, index, { role: event.target.value })}
                     placeholder="类型，如 storyboard"
-                    className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+                    className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-success-soft"
                     aria-label={`参考图 ${index + 1} 类型`}
                   />
                   {isInternalStorageRef(ref.storageRef) ? (
-                    <div className="rounded-lg border border-line bg-green-50 px-3 py-2 text-xs font-semibold text-green-700">
+                    <div className="rounded-lg border border-line bg-success-soft px-3 py-2 text-xs font-semibold text-success-ink">
                       已选择参考图
                     </div>
                   ) : (
@@ -5865,7 +5865,7 @@ function ExternalGenerationRequestPanel({
                       disabled={disabled || approved}
                       onChange={(event) => updateReferenceDraft(setReferenceDrafts, index, { storageRef: event.target.value })}
                       placeholder="图片 URL 或上传后自动登记"
-                      className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+                      className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-success-soft"
                       aria-label={`参考图 ${index + 1} 来源`}
                     />
                   )}
@@ -5875,7 +5875,7 @@ function ExternalGenerationRequestPanel({
                     onClick={() => setReferenceDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index))}
                     className={clsx(
                       'rounded-lg px-3 py-2 text-xs font-black ring-1',
-                      disabled || approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
+                      disabled || approved ? 'cursor-not-allowed bg-success-soft text-success-ink ring-success-line' : 'bg-background-card text-primary-dark ring-line hover:bg-primary-soft',
                     )}
                   >
                     移除
@@ -5900,7 +5900,7 @@ function ExternalGenerationRequestPanel({
           </div>
         ) : null}
       </div>
-      {message ? <p className="mt-3 text-xs font-semibold text-green-700">{message}</p> : null}
+      {message ? <p className="mt-3 text-xs font-semibold text-success-ink">{message}</p> : null}
     </div>
   )
 }
@@ -6286,7 +6286,7 @@ function StatusBadge({ status, label }: { status: DirectorArtifactStatus | Direc
 }
 
 function InfoCard({ icon, title, value, desc, tone }: { icon: React.ReactNode; title: string; value: string; desc: string; tone: 'primary' | 'green' | 'blue' | 'violet' }) {
-  const toneMap = { primary: 'bg-primary-soft text-primary-dark', green: 'bg-green-50 text-green-700', blue: 'bg-background-mist text-primary-dark', violet: 'bg-primary-soft text-violet' }
+  const toneMap = { primary: 'bg-primary-soft text-primary-dark', green: 'bg-success-soft text-success-ink', blue: 'bg-background-mist text-primary-dark', violet: 'bg-primary-soft text-violet' }
   return <div className="card p-5"><div className="flex items-center gap-3"><div className={`rounded-lg p-3 ${toneMap[tone]}`}>{icon}</div><div><p className="text-sm text-ink-soft">{title}</p><p className="font-black text-ink">{value}</p></div></div><p className="mt-4 text-sm leading-6 text-ink-muted">{desc}</p></div>
 }
 
@@ -6295,7 +6295,7 @@ function Panel({ title, items }: { title: string; items: string[] }) {
 }
 
 function ActionButton({ color, icon, label, disabled, onClick, loading = false, loadingLabel = '' }: { color: 'green' | 'red' | 'amber' | 'violet'; icon: React.ReactNode; label: string; disabled: boolean; onClick: () => void; loading?: boolean; loadingLabel?: string }) {
-  const map = { green: 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100', red: 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100', amber: 'border-amber-200 bg-amber-50 text-primary-dark hover:bg-amber-100', violet: 'border-violet-200 bg-violet-50 text-violet hover:bg-violet-100' }
+  const map = { green: 'border-success-line bg-success-soft text-success-ink hover:bg-success-muted', red: 'border-danger-line bg-danger-soft text-danger-ink hover:bg-danger-muted', amber: 'border-warning-line bg-warning-soft text-warning-ink hover:bg-warning-muted', violet: 'border-line bg-primary-soft text-violet hover:bg-background-mist' }
   return (
     <button
       disabled={disabled}
@@ -6323,7 +6323,7 @@ function DebugField({ label, value, mono }: { label: string; value: string; mono
 }
 
 function StatusPill({ ok, label }: { ok: boolean; label: string }) {
-  return <div className={clsx('flex items-center gap-2 rounded-lg px-4 py-3 text-sm font-bold ring-1', ok ? 'bg-green-50 text-green-700 ring-green-200' : 'bg-red-50 text-red-700 ring-red-200')}><span className={clsx('h-2 w-2 rounded-full', ok ? 'bg-green-500' : 'bg-red-500')} /> {label}</div>
+  return <div className={clsx('flex items-center gap-2 rounded-lg px-4 py-3 text-sm font-bold ring-1', ok ? 'bg-success-soft text-success-ink ring-success-line' : 'bg-danger-soft text-danger-ink ring-danger-line')}><span className={clsx('h-2 w-2 rounded-full', ok ? 'bg-success' : 'bg-danger')} /> {label}</div>
 }
 
 function EmptyState({ text }: { text: string }) {
@@ -6360,23 +6360,23 @@ function stageIcon(status: DirectorStageStatus) {
 function stageTone(status: DirectorStageStatus) {
   if (status === 'review') return 'border-primary bg-primary-soft'
   if (status === 'running' || status === 'active') return 'border-line bg-primary-soft'
-  if (status === 'done') return 'border-green-200 bg-green-50'
-  if (status === 'blocked' || status === 'failed') return 'border-red-100 bg-red-50/60'
+  if (status === 'done') return 'border-success-line bg-success-soft'
+  if (status === 'blocked' || status === 'failed') return 'border-danger-line bg-danger-soft/60'
   return 'border-line bg-background-card/65'
 }
 
 function stageIconTone(status: DirectorStageStatus) {
-  if (status === 'done') return 'bg-green-600 text-white'
+  if (status === 'done') return 'bg-success text-on-success'
   if (status === 'review') return 'bg-primary text-on-primary'
   if (status === 'running' || status === 'active') return 'bg-primary text-on-primary'
-  if (status === 'blocked' || status === 'failed') return 'bg-red-500 text-white'
-  return 'bg-stone-200 text-stone-600'
+  if (status === 'blocked' || status === 'failed') return 'bg-danger text-on-danger'
+  return 'bg-neutral-muted text-neutral-ink'
 }
 
 function statusBadgeTone(status: DirectorArtifactStatus | DirectorStageStatus) {
-  if (status === 'done' || status === 'valid') return 'bg-green-50 text-green-700 ring-green-200'
-  if (status === 'review') return 'bg-amber-50 text-primary-dark ring-amber-200'
+  if (status === 'done' || status === 'valid') return 'bg-success-soft text-success-ink ring-success-line'
+  if (status === 'review') return 'bg-warning-soft text-warning-ink ring-warning-line'
   if (status === 'running' || status === 'active') return 'bg-primary-soft text-primary-dark ring-line'
-  if (status === 'blocked' || status === 'stale' || status === 'failed' || status === 'missing') return 'bg-red-50 text-red-700 ring-red-200'
-  return 'bg-stone-50 text-stone-600 ring-stone-200'
+  if (status === 'blocked' || status === 'stale' || status === 'failed' || status === 'missing') return 'bg-danger-soft text-danger-ink ring-danger-line'
+  return 'bg-neutral-soft text-neutral-ink ring-neutral-line'
 }

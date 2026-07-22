@@ -2,10 +2,7 @@ package localtool
 
 import (
 	"context"
-	"encoding/json"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,28 +18,19 @@ func TestIPArollMCPOutputFeedsHyperFramesComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatal(err)
+	mcp := newMCPProtocolTestServer(t, func(toolName string, _ map[string]interface{}) map[string]interface{} {
+		if toolName != "ip_avatar_3d.render_talking_video" {
+			t.Fatalf("unexpected MCP tool: %#v", toolName)
 		}
-		params := request["params"].(map[string]interface{})
-		if params["name"] != "ip_avatar_3d.render_talking_video" {
-			t.Fatalf("unexpected MCP tool: %#v", params["name"])
-		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      request["id"],
-			"result": map[string]interface{}{
-				"structuredContent": map[string]interface{}{
-					"status":      "ready",
-					"sourceType":  "ip_aroll_video",
-					"durationSec": 15,
-					"videoPath":   sourceVideo,
-				},
+		return map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"status":      "ready",
+				"sourceType":  "ip_aroll_video",
+				"durationSec": 15,
+				"videoPath":   sourceVideo,
 			},
-		})
-	}))
+		}
+	})
 	defer mcp.Close()
 
 	mcpExecutor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {

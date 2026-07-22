@@ -56,6 +56,13 @@ func (c *PlanCompiler) WithDirectors(directors DirectorRegistry) *PlanCompiler {
 	return c
 }
 
+func (c *PlanCompiler) withToolCatalog(tools ToolCatalog) *PlanCompiler {
+	if c == nil {
+		return nil
+	}
+	return &PlanCompiler{tools: tools, directors: c.directors}
+}
+
 func (c *PlanCompiler) Compile(plan *AgentPlan) (*model.DAGRequest, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("agent plan is required")
@@ -65,8 +72,8 @@ func (c *PlanCompiler) Compile(plan *AgentPlan) (*model.DAGRequest, error) {
 		return nil, fmt.Errorf("agent plan has no steps")
 	}
 
-	// Detect missing quality checkers and auto-insert them.
-	steps := c.injectQualityGates(plan.Steps)
+	// PreparePlan inserts policy-required verification steps before Guard runs.
+	steps := plan.Steps
 
 	var err error
 	steps, err = c.applyDirectors(steps, plan.Domain)
@@ -131,6 +138,8 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 	c.wireIPArollDirectorToScript(plan)
 	deduplicateCanonicalProfileSteps(plan)
 	repairInvalidOutputReferences(plan.Steps, c.manifestsByPlan(plan))
+	plan.Steps = c.injectQualityGates(plan.Steps)
+	stableTopologicalOrderPlanSteps(plan)
 	normalizePreparedPlanDependencies(plan)
 	c.expandPreparedPlanBudget(plan)
 	return plan
@@ -269,10 +278,10 @@ func normalizePreparedPlanDependencies(plan *AgentPlan) {
 	if plan == nil {
 		return
 	}
-	indexByID := make(map[string]int, len(plan.Steps))
-	for i, step := range plan.Steps {
+	knownStepIDs := make(map[string]bool, len(plan.Steps))
+	for _, step := range plan.Steps {
 		if step.ID != "" {
-			indexByID[step.ID] = i
+			knownStepIDs[step.ID] = true
 		}
 	}
 	for i := range plan.Steps {
@@ -280,55 +289,123 @@ func normalizePreparedPlanDependencies(plan *AgentPlan) {
 		seen := map[string]bool{}
 		depCandidates := make([]string, 0, len(step.DependsOn)+4)
 		depCandidates = append(depCandidates, step.DependsOn...)
-		depCandidates = append(depCandidates, referencedStepIDs(step.Arguments)...)
+		for _, referenceID := range referencedStepIDs(step.Arguments) {
+			if dependencyID, ok := resolvePlanReferenceDependency(referenceID, knownStepIDs); ok {
+				depCandidates = append(depCandidates, dependencyID)
+			}
+		}
 		deps := make([]string, 0, len(depCandidates))
 		for _, dep := range depCandidates {
 			dep = strings.TrimSpace(dep)
-			if dep == "" || dep == step.ID || seen[dep] {
-				continue
-			}
-			depIndex, ok := indexByID[dep]
-			if !ok || depIndex >= i {
+			if dep == "" || seen[dep] {
 				continue
 			}
 			seen[dep] = true
 			deps = append(deps, dep)
 		}
-		step.DependsOn = deps
+		if len(deps) == 0 {
+			step.DependsOn = nil
+		} else {
+			step.DependsOn = deps
+		}
 	}
+}
+
+// stableTopologicalOrderPlanSteps reorders a valid dependency graph using the
+// current plan order as a deterministic tie-break. Dependencies referenced in
+// arguments are real graph edges. Unknown dependencies, duplicate IDs, and
+// cycles leave the original order untouched so PlanGuard can report them
+// instead of normalization silently erasing the evidence.
+func stableTopologicalOrderPlanSteps(plan *AgentPlan) bool {
+	if plan == nil || len(plan.Steps) < 2 {
+		return true
+	}
+	steps := plan.Steps
+	indexByID := make(map[string]int, len(steps))
+	knownStepIDs := make(map[string]bool, len(steps))
+	for i, step := range steps {
+		if step.ID == "" {
+			return false
+		}
+		if _, exists := indexByID[step.ID]; exists {
+			return false
+		}
+		indexByID[step.ID] = i
+		knownStepIDs[step.ID] = true
+	}
+	indegree := make([]int, len(steps))
+	dependents := make([][]int, len(steps))
+	for stepIndex, step := range steps {
+		seenDependencies := map[string]bool{}
+		dependencies := append([]string(nil), step.DependsOn...)
+		for _, referenceID := range referencedStepIDs(step.Arguments) {
+			if dependencyID, ok := resolvePlanReferenceDependency(referenceID, knownStepIDs); ok {
+				dependencies = append(dependencies, dependencyID)
+			}
+		}
+		for _, dependency := range dependencies {
+			dependency = strings.TrimSpace(dependency)
+			if dependency == "" || seenDependencies[dependency] {
+				continue
+			}
+			seenDependencies[dependency] = true
+			dependencyIndex, exists := indexByID[dependency]
+			if !exists {
+				return false
+			}
+			indegree[stepIndex]++
+			dependents[dependencyIndex] = append(dependents[dependencyIndex], stepIndex)
+		}
+	}
+	orderedIndices := make([]int, 0, len(steps))
+	emitted := make([]bool, len(steps))
+	for len(orderedIndices) < len(steps) {
+		next := -1
+		for i := range steps {
+			if !emitted[i] && indegree[i] == 0 {
+				next = i
+				break
+			}
+		}
+		if next < 0 {
+			return false
+		}
+		emitted[next] = true
+		orderedIndices = append(orderedIndices, next)
+		for _, dependent := range dependents[next] {
+			indegree[dependent]--
+		}
+	}
+	ordered := make([]AgentStep, len(steps))
+	for i, originalIndex := range orderedIndices {
+		ordered[i] = steps[originalIndex]
+	}
+	plan.Steps = ordered
+	return true
+}
+
+func resolvePlanReferenceDependency(referenceID string, knownStepIDs map[string]bool) (string, bool) {
+	if knownStepIDs[referenceID] {
+		return referenceID, true
+	}
+	for _, suffix := range []string{"_review_before", "_review", "_exec"} {
+		if base := strings.TrimSuffix(referenceID, suffix); base != referenceID && knownStepIDs[base] {
+			return base, true
+		}
+	}
+	return "", false
 }
 
 func referencedStepIDs(value interface{}) []string {
 	seen := map[string]bool{}
 	refs := make([]string, 0)
-	var walk func(interface{})
-	walk = func(current interface{}) {
-		switch typed := current.(type) {
-		case string:
-			refStepID, _, ok := outputReference(typed)
-			if ok && refStepID != "" && !seen[refStepID] {
-				seen[refStepID] = true
-				refs = append(refs, refStepID)
-			}
-		case []interface{}:
-			for _, item := range typed {
-				walk(item)
-			}
-		case []string:
-			for _, item := range typed {
-				walk(item)
-			}
-		case map[string]interface{}:
-			for _, item := range typed {
-				walk(item)
-			}
-		case map[string]string:
-			for _, item := range typed {
-				walk(item)
-			}
+	for _, reference := range argumentReferences(value) {
+		if reference.StepID == "" || seen[reference.StepID] {
+			continue
 		}
+		seen[reference.StepID] = true
+		refs = append(refs, reference.StepID)
 	}
-	walk(value)
 	return refs
 }
 
@@ -563,7 +640,7 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 			if proposalField != "" {
 				scriptArgs["proposal"] = stepOutputRef(proposalAnchor, proposalField)
 			}
-		} else if knowledgeAnchor, _ := c.lastProducerStepForFields(plan, []string{"facts", "sources", "summary", "knowledge"}, []string{"knowledge_researcher", "news_search", "fact_checker"}); knowledgeAnchor != "" {
+		} else if knowledgeAnchor := c.lastKnowledgeProducerStep(plan); knowledgeAnchor != "" {
 			insertAfter = knowledgeAnchor
 			scriptDeps = dependencyListUnique(knowledgeAnchor, profileAnchor)
 		}
@@ -716,6 +793,19 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 	generationField := preferredOutputField(c.manifestFor("shot_generation_planner"), "shotGenerationPlans")
 	c.completeVideoOutputPlanFromAnchors(plan, scriptAnchor, scriptField, visualAnchor, "shotList", generationAnchor, generationField)
 	return true
+}
+
+func (c *PlanCompiler) lastKnowledgeProducerStep(plan *AgentPlan) string {
+	if plan == nil {
+		return ""
+	}
+	last := ""
+	for _, step := range plan.Steps {
+		if _, ok := knowledgeProducerForStep(step, c.manifestFor(step.Tool)); ok {
+			last = step.ID
+		}
+	}
+	return last
 }
 
 func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnchor string) {
@@ -1339,36 +1429,41 @@ func removeCinematicLegacyTalkingHeadSteps(plan *AgentPlan) {
 	if plan == nil || len(plan.Steps) == 0 {
 		return
 	}
+	removedStepIDs := make(map[string]bool)
 	out := plan.Steps[:0]
 	for _, step := range plan.Steps {
 		switch step.Tool {
 		case "visual_alignment_planner", "shot_splitter":
+			removedStepIDs[step.ID] = true
 			continue
 		default:
 			out = append(out, step)
 		}
 	}
 	plan.Steps = out
-	removeArgumentRefsToMissingSteps(plan)
+	removeReferencesToRemovedSteps(plan, removedStepIDs)
 }
 
-func removeArgumentRefsToMissingSteps(plan *AgentPlan) {
-	if plan == nil {
+func removeReferencesToRemovedSteps(plan *AgentPlan, removedStepIDs map[string]bool) {
+	if plan == nil || len(removedStepIDs) == 0 {
 		return
-	}
-	known := make(map[string]bool, len(plan.Steps))
-	for _, step := range plan.Steps {
-		if step.ID != "" {
-			known[step.ID] = true
-		}
 	}
 	for i := range plan.Steps {
 		step := &plan.Steps[i]
-		for key, value := range step.Arguments {
-			refStepID, _, ok := outputReference(value)
-			if ok && !known[refStepID] {
-				delete(step.Arguments, key)
+		filteredDependencies := step.DependsOn[:0]
+		for _, dependency := range step.DependsOn {
+			if !removedStepIDs[dependency] {
+				filteredDependencies = append(filteredDependencies, dependency)
 			}
+		}
+		step.DependsOn = filteredDependencies
+		for key, value := range step.Arguments {
+			pruned, keep := pruneRemovedStepReferences(value, removedStepIDs)
+			if !keep {
+				delete(step.Arguments, key)
+				continue
+			}
+			step.Arguments[key] = pruned
 		}
 	}
 }
@@ -2370,18 +2465,21 @@ func removeDisabledAIGCSteps(plan *AgentPlan) {
 	if plan == nil || !aigcGenerationDisabled(plan) {
 		return
 	}
+	removedStepIDs := make(map[string]bool)
 	out := plan.Steps[:0]
 	for _, step := range plan.Steps {
 		if step.Tool == "keyframe_prompt_generator" {
+			removedStepIDs[step.ID] = true
 			continue
 		}
 		if step.Tool == "mcp_generation_runner" && stringArg(step.Arguments, "stage") != "ip_aroll_generation" {
+			removedStepIDs[step.ID] = true
 			continue
 		}
 		out = append(out, step)
 	}
 	plan.Steps = out
-	removeArgumentRefsToMissingSteps(plan)
+	removeReferencesToRemovedSteps(plan, removedStepIDs)
 }
 
 func requestedProjectID(plan *AgentPlan) string {
@@ -2535,7 +2633,12 @@ func knowledgeProducerForStep(step AgentStep, manifest *tool.ToolManifest) (know
 	if manifest == nil || len(manifest.Output) == 0 {
 		return knowledgeProducer{}, false
 	}
-	itemRefs := refsForOutputFields(step.ID, manifest, "facts", "evidence", "searchResults", "knowledge", "context", "summary", "results")
+	// A generic `summary` output is common to orchestration tools such as audio
+	// planners and MCP runners. Treating every summary as research context can
+	// create a false dependency from an upstream script step to its own
+	// downstream consumers. Knowledge producers must expose a knowledge-specific
+	// payload instead.
+	itemRefs := refsForOutputFields(step.ID, manifest, "facts", "evidence", "searchResults", "knowledge", "context", "results")
 	sourceRefs := refsForOutputFields(step.ID, manifest, "sources", "citations", "references")
 	evidenceRefs := refsForOutputFields(step.ID, manifest, "evidence", "searchResults", "results")
 	if len(itemRefs) == 0 && len(sourceRefs) == 0 && len(evidenceRefs) == 0 {
@@ -2623,92 +2726,179 @@ func isContentGenerationTool(toolName string, manifest *tool.ToolManifest) bool 
 // injectQualityGates scans the plan steps and auto-inserts quality checker steps
 // after production tools that don't already have an explicit quality check in the plan.
 func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
-	// Build tool presence set to avoid duplicates.
-	toolSet := make(map[string]bool, len(steps))
-	for _, s := range steps {
-		toolSet[s.Tool] = true
+	base := stripSyntheticQualityGates(steps)
+	usedStepIDs := make(map[string]bool, len(base)*3)
+	for _, step := range base {
+		usedStepIDs[step.ID] = true
 	}
 
-	var out []AgentStep
-	out = make([]AgentStep, 0, len(steps)*3)
+	explicitCheckerByProduction := make(map[string]AgentStep)
+	claimedCheckerIDs := make(map[string]bool)
+	for _, production := range base {
+		manifest := c.manifestFor(production.Tool)
+		checkerTool, hasChecker := qualityCheckerFor(production.Tool, manifest)
+		if !hasChecker || manifest == nil || !manifest.QualityPolicy.Required {
+			continue
+		}
+		if checker, ok := qualityCheckerDependingOn(base, checkerTool, production.ID, claimedCheckerIDs); ok {
+			explicitCheckerByProduction[production.ID] = checker
+			claimedCheckerIDs[checker.ID] = true
+		}
+	}
 
-	for _, step := range steps {
+	out := make([]AgentStep, 0, len(base)*3)
+	qualityCheckerIDs := make(map[string]bool, len(explicitCheckerByProduction))
+	for _, checker := range explicitCheckerByProduction {
+		qualityCheckerIDs[checker.ID] = true
+	}
+
+	for _, step := range base {
+		if qualityCheckerIDs[step.ID] {
+			continue
+		}
 		out = append(out, step)
 
 		manifest := c.manifestFor(step.Tool)
-		checkerName, hasChecker := qualityCheckerFor(step.Tool, manifest)
-		if !hasChecker || toolSet[checkerName] {
+		checkerTool, hasChecker := qualityCheckerFor(step.Tool, manifest)
+		if !hasChecker || manifest == nil || !manifest.QualityPolicy.Required {
 			continue
 		}
 
-		// Check if the production tool's manifest has qualityPolicy.Required.
-		if manifest == nil || !manifest.QualityPolicy.Required {
-			// Quality checker is recommended but not required by manifest; skip auto-insert.
-			continue
-		}
-
-		// Auto-insert a quality check step.
-		checkerStep := AgentStep{
-			ID:              checkerName,
-			Intent:          fmt.Sprintf("自动质量检查：%s 的输出", step.Tool),
-			Tool:            checkerName,
-			DependsOn:       []string{step.ID},
-			Arguments:       buildQualityCheckArgs(step),
-			ExpectedOutput:  []string{"passed", "score", "issues", "repairSuggestions"},
-			ProduceArtifact: true,
+		checkerStep, explicit := explicitCheckerByProduction[step.ID]
+		if !explicit {
+			checkerStepID := uniqueQualityStepID(checkerTool, step.ID+"_"+checkerTool, usedStepIDs)
+			checkerStep = AgentStep{
+				ID:              checkerStepID,
+				Intent:          fmt.Sprintf("自动质量检查：%s 的输出", step.Tool),
+				Tool:            checkerTool,
+				DependsOn:       []string{step.ID},
+				Arguments:       buildQualityCheckArgs(step),
+				ExpectedOutput:  []string{"passed", "score", "issues", "repairSuggestions"},
+				ProduceArtifact: true,
+			}
+			usedStepIDs[checkerStepID] = true
 		}
 		out = append(out, checkerStep)
-		toolSet[checkerName] = true
 
-		// Auto-insert a quality gate step that blocks downstream when quality fails.
-		// Uses __quality_gate__ marker tool compiled as a CONTROL node below.
-		minScore := manifest.QualityPolicy.MinScore
-		if minScore <= 0 {
-			minScore = 85
-		}
-		gateID := step.ID + "_quality_gate"
-		gateStep := AgentStep{
-			ID:        gateID,
-			Intent:    fmt.Sprintf("质量门禁：%s 评分需 >=%d", checkerName, minScore),
-			Tool:      "__quality_gate__",
-			DependsOn: []string{checkerName},
-			Arguments: map[string]interface{}{
-				"checkerStep":           checkerName,
-				"qualityCheckerNode":    compiledToolOutputNodeID(checkerName, c.manifestFor(checkerName)),
-				"productionStep":        step.ID,
-				"productionTool":        step.Tool,
-				"productionSourceNode":  compiledToolSourceNodeID(step.ID, manifest),
-				"minScore":              minScore,
-				"autoApproveWhenPassed": true,
-				"autoRepair":            manifest.QualityPolicy.AutoRepair,
-				"maxRepairAttempts":     manifest.QualityPolicy.MaxRepairAttempts,
-			},
-			ExpectedOutput:  []string{"gateResult"},
-			ProduceArtifact: false,
-		}
+		preferredGateID := step.ID + "_quality_gate"
+		gateID := uniqueQualityStepID(preferredGateID, preferredGateID+"_internal", usedStepIDs)
+		gateStep := buildRequiredQualityGate(gateID, step, manifest, checkerStep.ID, checkerTool, c.manifestFor(checkerTool))
 		out = append(out, gateStep)
-		toolSet[gateID] = true
+		usedStepIDs[gateID] = true
 	}
 
-	// Rewire downstream dependencies through quality gates.
-	// Any step that depends on a production step with a quality gate
-	// must wait for the gate instead of the production step directly.
-	for i := range out {
-		s := &out[i]
-		for j, dep := range s.DependsOn {
-			for _, prev := range out {
-				if prev.Tool == "__quality_gate__" {
-					prod, _ := prev.Arguments["productionStep"].(string)
-					checker, _ := prev.Arguments["checkerStep"].(string)
-					if prod != "" && dep == prod && s.ID != checker && s.Tool != checker {
-						s.DependsOn[j] = prev.ID
-					}
+	// Only steps positioned after a rebuilt gate are downstream. Rewire them
+	// through the gate while preserving the checker -> production dependency.
+	for gateIndex, gate := range out {
+		if gate.Tool != "__quality_gate__" {
+			continue
+		}
+		productionID, _ := gate.Arguments["productionStep"].(string)
+		checkerID, _ := gate.Arguments["checkerStep"].(string)
+		for i := gateIndex + 1; i < len(out); i++ {
+			for j, dependency := range out[i].DependsOn {
+				if dependency == productionID || dependency == checkerID {
+					out[i].DependsOn[j] = gate.ID
 				}
 			}
 		}
 	}
-
+	for i := range out {
+		if len(out[i].DependsOn) == 0 {
+			out[i].DependsOn = nil
+		}
+	}
 	return out
+}
+
+func stripSyntheticQualityGates(steps []AgentStep) []AgentStep {
+	productionByGateID := make(map[string]string)
+	for _, step := range steps {
+		if step.Tool != "__quality_gate__" {
+			continue
+		}
+		productionID, _ := step.Arguments["productionStep"].(string)
+		productionByGateID[step.ID] = productionID
+	}
+	out := make([]AgentStep, 0, len(steps))
+	for _, step := range steps {
+		if step.Tool == "__quality_gate__" {
+			continue
+		}
+		cloned := step
+		cloned.DependsOn = nil
+		if step.DependsOn != nil {
+			cloned.DependsOn = make([]string, 0, len(step.DependsOn))
+		}
+		for _, dependency := range step.DependsOn {
+			if productionID, wasGate := productionByGateID[dependency]; wasGate {
+				if productionID != "" && !containsString(cloned.DependsOn, productionID) {
+					cloned.DependsOn = append(cloned.DependsOn, productionID)
+				}
+				continue
+			}
+			if !containsString(cloned.DependsOn, dependency) {
+				cloned.DependsOn = append(cloned.DependsOn, dependency)
+			}
+		}
+		out = append(out, cloned)
+	}
+	return out
+}
+
+func qualityCheckerDependingOn(steps []AgentStep, checkerTool, productionStep string, claimed map[string]bool) (AgentStep, bool) {
+	for _, candidate := range steps {
+		if candidate.Tool != checkerTool || claimed[candidate.ID] {
+			continue
+		}
+		for _, dependency := range candidate.DependsOn {
+			if dependency == productionStep {
+				return candidate, true
+			}
+		}
+	}
+	return AgentStep{}, false
+}
+
+func uniqueQualityStepID(preferred, fallback string, used map[string]bool) string {
+	if !used[preferred] {
+		return preferred
+	}
+	if !used[fallback] {
+		return fallback
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := fmt.Sprintf("%s_%d", fallback, suffix)
+		if !used[candidate] {
+			return candidate
+		}
+	}
+}
+
+func buildRequiredQualityGate(gateID string, production AgentStep, manifest *tool.ToolManifest, checkerStepID, checkerTool string, checkerManifest *tool.ToolManifest) AgentStep {
+	minScore := manifest.QualityPolicy.MinScore
+	if minScore <= 0 {
+		minScore = 85
+	}
+	return AgentStep{
+		ID:        gateID,
+		Intent:    fmt.Sprintf("质量门禁：%s 评分需 >=%d", checkerTool, minScore),
+		Tool:      "__quality_gate__",
+		DependsOn: []string{checkerStepID},
+		Arguments: map[string]interface{}{
+			"checkerStep":           checkerStepID,
+			"qualityCheckerNode":    compiledToolOutputNodeID(checkerStepID, checkerManifest),
+			"productionStep":        production.ID,
+			"productionTool":        production.Tool,
+			"productionSourceNode":  compiledToolSourceNodeID(production.ID, manifest),
+			"minScore":              minScore,
+			"autoApproveWhenPassed": true,
+			"autoRepair":            manifest.QualityPolicy.AutoRepair,
+			"maxRepairAttempts":     manifest.QualityPolicy.MaxRepairAttempts,
+		},
+		ExpectedOutput:  []string{"gateResult"},
+		ProduceArtifact: false,
+	}
 }
 
 func compiledToolSourceNodeID(stepID string, manifest *tool.ToolManifest) string {
@@ -2990,11 +3180,19 @@ func buildToolNode(nodeID string, step AgentStep, manifest *tool.ToolManifest) m
 
 	nodeName := step.Tool
 	inputTool := step.Tool
-	if requiresExternalBridge(manifest) {
+	if isRequestScopedMCPProviderTool(manifest) {
+		nodeName = LocalMCPGatewayToolName
+		inputTool = LocalMCPGatewayToolName
+	} else if requiresExternalBridge(manifest) {
 		nodeName = "external"
 		inputTool = "external"
 	}
-	input := map[string]interface{}{"tool": inputTool, "parameters": params}
+	contractArguments, _ := cloneArgumentValue(args).(map[string]interface{})
+	input := map[string]interface{}{
+		"tool":              inputTool,
+		"parameters":        params,
+		"contractArguments": contractArguments,
+	}
 	if manifest != nil {
 		input["capabilityTool"] = manifest.Name
 		input["skillPackageId"] = manifest.SkillPackageID
@@ -3024,6 +3222,12 @@ func requiresExternalBridge(manifest *tool.ToolManifest) bool {
 	return toolType == "external" || strings.Contains(toolType, "prompt_tool") || toolType == "http" || toolType == "grpc"
 }
 
+func isRequestScopedMCPProviderTool(manifest *tool.ToolManifest) bool {
+	return isMCPProviderTool(manifest) && manifest.ProviderBinding != nil &&
+		strings.TrimSpace(manifest.ProviderBinding.TargetRunnerID) != "" &&
+		strings.TrimSpace(manifest.ProviderBinding.CatalogRevision) != ""
+}
+
 func applyMCPProviderToolPayload(params, args map[string]interface{}, step AgentStep, manifest *tool.ToolManifest) {
 	if params == nil || manifest == nil {
 		return
@@ -3050,9 +3254,21 @@ func applyMCPProviderToolPayload(params, args map[string]interface{}, step Agent
 	params["localCommand"] = "LOCAL_MCP_TOOL_CALL"
 	params["providerId"] = providerID
 	params["toolName"] = remoteToolName
+	params["remoteToolName"] = remoteToolName
 	params["logicalToolName"] = logicalToolName
 	params["input"] = copyMap(args)
 	params["arguments"] = copyMap(args)
+	if manifest.ProviderBinding != nil {
+		if manifest.ProviderBinding.TargetRunnerID != "" {
+			params["targetRunnerId"] = manifest.ProviderBinding.TargetRunnerID
+		}
+		if manifest.ProviderBinding.CatalogRevision != "" {
+			params["catalogRevision"] = manifest.ProviderBinding.CatalogRevision
+		}
+		if manifest.ProviderBinding.DeviceID != "" {
+			params["deviceId"] = manifest.ProviderBinding.DeviceID
+		}
+	}
 	if manifest.Timeout > 0 {
 		params["timeout"] = manifest.Timeout
 		params["timeoutSec"] = manifest.Timeout

@@ -56,10 +56,11 @@ func main() {
 			DeviceID:     *deviceID,
 		})
 		runnerLoop := localrunner.NewLoop(runnerClient, registry, localrunner.LoopOptions{
-			DeviceID:      *deviceID,
-			RunnerVersion: "1.0.0",
-			WorkspaceRoot: "local://aios/projects",
-			DataDir:       server.Paths().DataDir,
+			DeviceID:             *deviceID,
+			RunnerVersion:        "1.0.0",
+			WorkspaceRoot:        "local://aios/projects",
+			DataDir:              server.Paths().DataDir,
+			MCPToolCatalogSource: localrunner.NewMCPToolCatalogDiscoverer(localrunner.MCPProviderLoader(server.ReadMCPProviders)),
 		})
 		go func() {
 			if err := runnerLoop.Run(ctx); err != nil && err != context.Canceled {

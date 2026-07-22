@@ -2,12 +2,20 @@ package localrunner
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localtool"
+)
+
+const (
+	maxMCPDiagnosticBytes = 64 << 10
+	maxMCPDiagnosticDepth = 12
+	maxMCPDiagnosticItems = 64
 )
 
 type CloudClient interface {
@@ -20,31 +28,52 @@ type CloudClient interface {
 }
 
 type LoopOptions struct {
-	DeviceID      string
-	RunnerVersion string
-	WorkspaceRoot string
-	DataDir       string
-	PollInterval  time.Duration
+	DeviceID                  string
+	RunnerVersion             string
+	WorkspaceRoot             string
+	DataDir                   string
+	PollInterval              time.Duration
+	MCPToolCatalogSource      MCPToolCatalogSource
+	MCPCatalogRefreshInterval time.Duration
+}
+
+type MCPToolCatalogSource interface {
+	Discover(context.Context) (MCPToolCatalog, []MCPProviderDiagnostic)
+}
+
+type mcpToolCatalogFingerprinter interface {
+	Fingerprint(context.Context) (string, error)
 }
 
 type Loop struct {
-	client         CloudClient
-	registry       *localtool.Registry
-	options        LoopOptions
-	runnerID       string
-	sessionID      string
-	pendingReports *PendingReportStore
+	client               CloudClient
+	registry             *localtool.Registry
+	options              LoopOptions
+	runnerID             string
+	sessionID            string
+	pendingReports       *PendingReportStore
+	capabilities         []Capability
+	catalogRevision      string
+	catalogDiscoveredAt  time.Time
+	catalogFingerprint   string
+	catalogNextRefreshAt time.Time
+	catalogFailures      int
+	now                  func() time.Time
 }
 
 func NewLoop(client CloudClient, registry *localtool.Registry, options LoopOptions) *Loop {
 	if options.PollInterval <= 0 {
 		options.PollInterval = 3 * time.Second
 	}
+	if options.MCPCatalogRefreshInterval <= 0 {
+		options.MCPCatalogRefreshInterval = 10 * time.Minute
+	}
 	return &Loop{
 		client:         client,
 		registry:       registry,
 		options:        options,
 		pendingReports: NewPendingReportStore(options.DataDir),
+		now:            time.Now,
 	}
 }
 
@@ -84,10 +113,14 @@ func (l *Loop) RunOnce(ctx context.Context) error {
 	if err := l.ensureRegistered(ctx); err != nil {
 		return err
 	}
-	if err := l.client.Heartbeat(ctx, l.runnerID, HeartbeatRequest{
+	heartbeat := HeartbeatRequest{
 		SessionID: l.sessionID,
 		Status:    "online",
-	}); err != nil {
+	}
+	if capabilities := l.refreshMCPToolCatalog(ctx); capabilities != nil {
+		heartbeat.Capabilities = &capabilities
+	}
+	if err := l.client.Heartbeat(ctx, l.runnerID, heartbeat); err != nil {
 		log.Printf("heartbeat error: %v", err)
 		// Heartbeat failures are non-fatal; don't break the loop.
 	}
@@ -107,12 +140,28 @@ func (l *Loop) ensureRegistered(ctx context.Context) error {
 		return nil
 	}
 	probe := Probe(ctx, l.options.WorkspaceRoot)
+	l.capabilities = l.executableCapabilities(probe)
+	if l.options.MCPToolCatalogSource != nil {
+		fingerprint, fingerprintErr := l.mcpCatalogFingerprint(ctx)
+		catalog, diagnostics := l.options.MCPToolCatalogSource.Discover(ctx)
+		l.logMCPDiagnostics(diagnostics)
+		l.capabilities = withMCPToolCatalog(l.capabilities, catalog)
+		l.catalogRevision = catalog.Revision
+		now := l.currentTime()
+		l.catalogDiscoveredAt = now
+		l.catalogFingerprint = fingerprint
+		if fingerprintErr != nil || catalogDiscoveryFailed(diagnostics) {
+			l.scheduleCatalogFailure(now)
+		} else {
+			l.scheduleCatalogSuccess(now)
+		}
+	}
 	resp, err := l.client.Register(ctx, RegisterRunnerRequest{
 		DeviceID:      l.options.DeviceID,
 		RunnerVersion: l.options.RunnerVersion,
 		Platform:      probe.Platform,
 		WorkspaceRoot: l.options.WorkspaceRoot,
-		Capabilities:  l.executableCapabilities(probe),
+		Capabilities:  l.capabilities,
 	})
 	if err != nil {
 		return err
@@ -123,6 +172,110 @@ func (l *Loop) ensureRegistered(ctx context.Context) error {
 		l.options.PollInterval = time.Duration(resp.PollIntervalSec) * time.Second
 	}
 	return nil
+}
+
+func (l *Loop) refreshMCPToolCatalog(ctx context.Context) []Capability {
+	if l.options.MCPToolCatalogSource == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil
+	}
+	now := l.currentTime()
+	fingerprint, fingerprintErr := l.mcpCatalogFingerprint(ctx)
+	if fingerprintErr != nil {
+		if !now.Before(l.catalogNextRefreshAt) {
+			l.catalogFingerprint = fingerprint
+			l.scheduleCatalogFailure(now)
+		}
+		return nil
+	}
+	configurationChanged := fingerprint != "" && fingerprint != l.catalogFingerprint
+	if !configurationChanged && !l.catalogNextRefreshAt.IsZero() && now.Before(l.catalogNextRefreshAt) {
+		return nil
+	}
+	catalog, diagnostics := l.options.MCPToolCatalogSource.Discover(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil
+	}
+	l.catalogDiscoveredAt = now
+	l.catalogFingerprint = fingerprint
+	l.logMCPDiagnostics(diagnostics)
+	if catalogDiscoveryFailed(diagnostics) {
+		l.scheduleCatalogFailure(now)
+	} else {
+		l.scheduleCatalogSuccess(now)
+	}
+	if catalog.Revision == l.catalogRevision {
+		return nil
+	}
+	l.catalogRevision = catalog.Revision
+	l.capabilities = withMCPToolCatalog(l.capabilities, catalog)
+	return append([]Capability(nil), l.capabilities...)
+}
+
+func (l *Loop) currentTime() time.Time {
+	if l.now != nil {
+		return l.now()
+	}
+	return time.Now()
+}
+
+func (l *Loop) mcpCatalogFingerprint(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	fingerprinter, ok := l.options.MCPToolCatalogSource.(mcpToolCatalogFingerprinter)
+	if !ok {
+		return "", nil
+	}
+	return fingerprinter.Fingerprint(ctx)
+}
+
+func (l *Loop) scheduleCatalogSuccess(now time.Time) {
+	l.catalogFailures = 0
+	l.catalogNextRefreshAt = now.Add(l.options.MCPCatalogRefreshInterval)
+}
+
+func (l *Loop) scheduleCatalogFailure(now time.Time) {
+	l.catalogFailures++
+	backoff := time.Minute
+	for i := 1; i < l.catalogFailures && backoff < l.options.MCPCatalogRefreshInterval; i++ {
+		backoff *= 2
+	}
+	if backoff > l.options.MCPCatalogRefreshInterval {
+		backoff = l.options.MCPCatalogRefreshInterval
+	}
+	l.catalogNextRefreshAt = now.Add(backoff)
+}
+
+func catalogDiscoveryFailed(diagnostics []MCPProviderDiagnostic) bool {
+	for _, diagnostic := range diagnostics {
+		switch diagnostic.Code {
+		case "PROVIDER_CONFIG_UNAVAILABLE", "TOOLS_LIST_FAILED", "CATALOG_PAYLOAD_LIMIT":
+			return true
+		}
+	}
+	return false
+}
+
+func withMCPToolCatalog(capabilities []Capability, catalog MCPToolCatalog) []Capability {
+	result := append([]Capability(nil), capabilities...)
+	for index := range result {
+		if localtool.NormalizeCommand(result[index].Command) != localtool.CommandLocalMCPToolCall {
+			continue
+		}
+		result[index].CatalogRevision = catalog.Revision
+		result[index].MCPTools = append([]MCPToolAdvertisement(nil), catalog.Tools...)
+		break
+	}
+	return result
+}
+
+func (l *Loop) logMCPDiagnostics(diagnostics []MCPProviderDiagnostic) {
+	for _, diagnostic := range diagnostics {
+		log.Printf("MCP catalog diagnostic provider=%q code=%s: %s", diagnostic.ProviderID, diagnostic.Code, diagnostic.Message)
+	}
 }
 
 func (l *Loop) executableCapabilities(probe ProbeResult) []Capability {
@@ -265,6 +418,22 @@ func (l *Loop) executeAndReport(ctx context.Context, job localtool.Job) error {
 	if result != nil && result.Output != nil {
 		output = result.Output
 	}
+	if localtool.NormalizeCommand(job.Command) == localtool.CommandLocalMCPToolCall && mcpResultIsError(output) {
+		failReq := FailJobRequest{
+			Success: false, Retryable: true,
+			Error: map[string]interface{}{
+				"code":    "MCP_TOOL_ERROR",
+				"message": mcpResultErrorMessage(output),
+			},
+			Diagnostics: boundedMCPResultDiagnostics(output),
+		}
+		_ = l.pendingReports.Save(PendingReport{JobID: job.ID, Type: "fail", Fail: &failReq})
+		reportErr := l.client.FailJob(ctx, job.ID, failReq)
+		if reportErr == nil {
+			_ = l.pendingReports.Remove(job.ID, "fail")
+		}
+		return reportErr
+	}
 	completeReq := CompleteJobRequest{Success: true, Output: output}
 	_ = l.pendingReports.Save(PendingReport{JobID: job.ID, Type: "complete", Complete: &completeReq})
 	reportErr := l.client.CompleteJob(ctx, job.ID, completeReq)
@@ -293,7 +462,7 @@ func (l *Loop) flushPendingReports(ctx context.Context) error {
 				_ = l.pendingReports.Remove(report.JobID, "complete")
 				continue
 			}
-			if err := l.client.CompleteJob(ctx, report.JobID, *report.Complete); err == nil || isTerminalPendingReportError(err) {
+			if err := l.client.CompleteJob(ctx, report.JobID, *report.Complete); err == nil {
 				_ = l.pendingReports.Remove(report.JobID, "complete")
 			}
 		case "fail":
@@ -301,7 +470,7 @@ func (l *Loop) flushPendingReports(ctx context.Context) error {
 				_ = l.pendingReports.Remove(report.JobID, "fail")
 				continue
 			}
-			if err := l.client.FailJob(ctx, report.JobID, *report.Fail); err == nil || isTerminalPendingReportError(err) {
+			if err := l.client.FailJob(ctx, report.JobID, *report.Fail); err == nil {
 				_ = l.pendingReports.Remove(report.JobID, "fail")
 			}
 		default:
@@ -311,18 +480,117 @@ func (l *Loop) flushPendingReports(ctx context.Context) error {
 	return nil
 }
 
-func isTerminalPendingReportError(err error) bool {
-	if err == nil {
-		return false
+func mcpResultIsError(output map[string]interface{}) bool {
+	isError, _ := output["isError"].(bool)
+	return isError
+}
+
+func mcpResultErrorMessage(output map[string]interface{}) string {
+	if message, ok := output["error"].(string); ok && strings.TrimSpace(message) != "" {
+		return strings.TrimSpace(message)
 	}
-	var statusErr *HTTPStatusError
-	if !errors.As(err, &statusErr) {
-		return false
+	if content, ok := output["content"].([]interface{}); ok {
+		for _, item := range content {
+			if block, ok := item.(map[string]interface{}); ok {
+				if text, ok := block["text"].(string); ok && strings.TrimSpace(text) != "" {
+					return strings.TrimSpace(text)
+				}
+			}
+		}
 	}
-	switch statusErr.StatusCode {
-	case 403, 404, 409:
-		return true
+	return "MCP tool returned isError=true"
+}
+
+func boundedMCPResultDiagnostics(output map[string]interface{}) map[string]interface{} {
+	selected := make(map[string]interface{}, 4)
+	for _, key := range []string{"content", "structuredContent", "meta", "raw"} {
+		if value, ok := output[key]; ok {
+			selected[key] = value
+		}
+	}
+	// Reserve JSON/container overhead in addition to the recursively-accounted
+	// values so the encoded diagnostic remains below the public limit.
+	budget := maxMCPDiagnosticBytes - (16 << 10)
+	sanitized, _ := boundedDiagnosticValue(selected, 0, &budget).(map[string]interface{})
+	if sanitized == nil {
+		sanitized = map[string]interface{}{}
+	}
+	return map[string]interface{}{"mcpResult": sanitized, "truncated": budget <= 0}
+}
+
+func boundedDiagnosticValue(value interface{}, depth int, budget *int) interface{} {
+	if *budget <= 0 {
+		return "<truncated>"
+	}
+	if depth >= maxMCPDiagnosticDepth {
+		*budget -= len("<max-depth>")
+		return "<max-depth>"
+	}
+	switch typed := value.(type) {
+	case nil, bool, float64, float32, int, int64, int32, uint, uint64, json.Number:
+		return typed
+	case string:
+		limit := len(typed)
+		if limit > 4096 {
+			limit = 4096
+		}
+		if limit > *budget {
+			limit = *budget
+		}
+		*budget -= limit
+		if limit < len(typed) {
+			return typed[:limit] + "<truncated>"
+		}
+		return typed
+	case []byte:
+		return boundedDiagnosticValue(string(typed), depth+1, budget)
+	case []interface{}:
+		limit := len(typed)
+		if limit > maxMCPDiagnosticItems {
+			limit = maxMCPDiagnosticItems
+		}
+		result := make([]interface{}, 0, limit+1)
+		for index := 0; index < limit && *budget > 0; index++ {
+			result = append(result, boundedDiagnosticValue(typed[index], depth+1, budget))
+		}
+		if limit < len(typed) {
+			result = append(result, "<truncated-items>")
+		}
+		return result
+	case map[string]interface{}:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if len(keys) > maxMCPDiagnosticItems {
+			keys = keys[:maxMCPDiagnosticItems]
+		}
+		result := make(map[string]interface{}, len(keys))
+		for index, key := range keys {
+			if *budget <= 0 {
+				break
+			}
+			safeKey := key
+			if len(safeKey) > 128 {
+				safeKey = safeKey[:128] + "<truncated-key>"
+			}
+			if _, exists := result[safeKey]; exists {
+				safeKey = fmt.Sprintf("%s#%d", safeKey, index)
+			}
+			*budget -= len(safeKey)
+			result[safeKey] = boundedDiagnosticValue(typed[key], depth+1, budget)
+		}
+		return result
 	default:
-		return false
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprintf("<unsupported:%T>", typed)
+		}
+		var generic interface{}
+		if err := json.Unmarshal(encoded, &generic); err != nil {
+			return boundedDiagnosticValue(string(encoded), depth+1, budget)
+		}
+		return boundedDiagnosticValue(generic, depth+1, budget)
 	}
 }

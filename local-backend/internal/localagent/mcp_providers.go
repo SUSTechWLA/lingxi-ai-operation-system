@@ -11,10 +11,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localmcp"
+	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localtool"
 )
 
 const (
@@ -85,6 +87,7 @@ type registerMCPRequest struct {
 	Command       string            `json:"command"`
 	Args          []string          `json:"args"`
 	Env           map[string]string `json:"env"`
+	Headers       map[string]string `json:"headers"`
 	WorkingDir    string            `json:"workingDir"`
 	ToolPrefix    string            `json:"toolPrefix"`
 	ToolNameMap   map[string]string `json:"toolNameMap"`
@@ -107,14 +110,19 @@ func (s *Server) handleMCPProviders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, LocalMCPProviderSettingsResponse{Providers: providers})
+		writeJSON(w, http.StatusOK, LocalMCPProviderSettingsResponse{Providers: sanitizeMCPProviders(providers)})
 	case http.MethodPut:
 		var req LocalMCPProviderSettingsResponse
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid MCP provider payload")
 			return
 		}
-		providers, err := normalizeMCPProviders(req.Providers)
+		existing, err := s.readMCPProviders()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		providers, err := normalizeMCPProviders(mergeMCPProviderSecrets(existing, req.Providers))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -123,7 +131,7 @@ func (s *Server) handleMCPProviders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, LocalMCPProviderSettingsResponse{Providers: providers})
+		writeJSON(w, http.StatusOK, LocalMCPProviderSettingsResponse{Providers: sanitizeMCPProviders(providers)})
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -167,7 +175,7 @@ func (s *Server) handleJiMengSetupStatus(w http.ResponseWriter, r *http.Request)
 	}
 	for _, provider := range providers {
 		if provider.ID == jimengProviderID {
-			copy := provider
+			copy := sanitizeMCPProvider(provider)
 			resp.MCPProvider = &copy
 			resp.MCPStartCommand = mcpStartCommand(provider)
 			break
@@ -175,11 +183,12 @@ func (s *Server) handleJiMengSetupStatus(w http.ResponseWriter, r *http.Request)
 	}
 	if resp.MCPProvider != nil {
 		checkCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		result, err := s.callJiMengMCPTool(checkCtx, "jimeng.check_status", map[string]interface{}{})
+		result, err := s.executeRegisteredMCPTool(checkCtx, jimengProviderID, "jimeng.check_status", map[string]interface{}{})
 		cancel()
 		if err == nil && result != nil {
-			resp.DreaminaAvailable = boolFromMap(result.StructuredContent, "available", "loggedIn")
-			resp.DreaminaVersion = stringFromMap(result.StructuredContent, "version", "dreaminaVersion")
+			structured, _ := result["structuredContent"].(map[string]interface{})
+			resp.DreaminaAvailable = boolFromMap(structured, "available", "loggedIn")
+			resp.DreaminaVersion = stringFromMap(structured, "version", "dreaminaVersion")
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -262,6 +271,7 @@ func (s *Server) handleJiMengRegisterMCP(w http.ResponseWriter, r *http.Request)
 		Command:       command,
 		Args:          args,
 		Env:           req.Env,
+		Headers:       req.Headers,
 		WorkingDir:    req.WorkingDir,
 		ToolPrefix:    toolPrefix,
 		ToolNameMap:   req.ToolNameMap,
@@ -271,6 +281,7 @@ func (s *Server) handleJiMengRegisterMCP(w http.ResponseWriter, r *http.Request)
 		ApprovalMode:  req.ApprovalMode,
 		Enabled:       true,
 	}
+	provider = mergeMCPProviderSecrets(providers, []localmcp.ProviderConfig{provider})[0]
 	normalized, err := normalizeMCPProviders([]localmcp.ProviderConfig{provider})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -284,7 +295,7 @@ func (s *Server) handleJiMengRegisterMCP(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":          "ok",
-		"provider":        provider,
+		"provider":        sanitizeMCPProvider(provider),
 		"mcpStartCommand": mcpStartCommand(provider),
 	})
 }
@@ -294,7 +305,7 @@ func (s *Server) handleJiMengLoginHeadless(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	result, err := s.callJiMengMCPTool(r.Context(), "jimeng.login_headless", map[string]interface{}{})
+	result, err := s.executeRegisteredMCPTool(r.Context(), jimengProviderID, "jimeng.login_headless", map[string]interface{}{})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -319,7 +330,7 @@ func (s *Server) handleJiMengCheckLogin(w http.ResponseWriter, r *http.Request) 
 	if req.Poll <= 0 {
 		req.Poll = 30
 	}
-	result, err := s.callJiMengMCPTool(r.Context(), "jimeng.check_login", map[string]interface{}{
+	result, err := s.executeRegisteredMCPTool(r.Context(), jimengProviderID, "jimeng.check_login", map[string]interface{}{
 		"device_code": req.DeviceCode,
 		"poll":        req.Poll,
 	})
@@ -337,15 +348,17 @@ func (s *Server) mcpProviderStatus(ctx context.Context) ([]LocalMCPProviderStatu
 	}
 	statuses := make([]LocalMCPProviderStatus, 0, len(providers))
 	for _, provider := range providers {
-		status := LocalMCPProviderStatus{ProviderConfig: provider}
+		status := LocalMCPProviderStatus{ProviderConfig: sanitizeMCPProvider(provider)}
 		if provider.Enabled {
 			checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			client := localmcp.NewClient(provider, nil)
 			tools, err := client.ListTools(checkCtx)
-			_ = client.Close()
+			closeErr := client.Close()
 			cancel()
 			if err != nil {
 				status.Error = err.Error()
+			} else if closeErr != nil {
+				status.Error = closeErr.Error()
 			} else {
 				status.Reachable = true
 				status.Tools = tools
@@ -356,21 +369,21 @@ func (s *Server) mcpProviderStatus(ctx context.Context) ([]LocalMCPProviderStatu
 	return statuses, nil
 }
 
-func (s *Server) callJiMengMCPTool(ctx context.Context, toolName string, args map[string]interface{}) (*localmcp.ToolCallResult, error) {
-	providers, err := s.readMCPProviders()
+func (s *Server) executeRegisteredMCPTool(ctx context.Context, providerID, toolName string, args map[string]interface{}) (map[string]interface{}, error) {
+	executor := localtool.NewMCPToolCallExecutor(s.readMCPProviders)
+	result, err := executor.Execute(ctx, localtool.Job{
+		Command:    localtool.CommandLocalMCPToolCall,
+		TimeoutSec: 120,
+		Payload: map[string]interface{}{
+			"providerId": providerID,
+			"toolName":   toolName,
+			"arguments":  args,
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
-	for _, provider := range providers {
-		if provider.ID == jimengProviderID && provider.Enabled {
-			callCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			defer cancel()
-			client := localmcp.NewClient(provider, nil)
-			defer client.Close()
-			return client.CallTool(callCtx, toolName, args)
-		}
-	}
-	return nil, errors.New("JiMeng MCP provider is not registered")
+	return result.Output, nil
 }
 
 func (s *Server) readMCPProviders() ([]localmcp.ProviderConfig, error) {
@@ -416,7 +429,17 @@ func (s *Server) writeMCPProviders(providers []localmcp.ProviderConfig) error {
 	if err != nil {
 		return err
 	}
-	return writeIndentedJSON(s.mcpProvidersPath(), LocalMCPProviderSettingsResponse{Providers: normalized})
+	return writeMCPProviderJSON(s.mcpProvidersPath(), LocalMCPProviderSettingsResponse{Providers: normalized})
+}
+
+func writeMCPProviderJSON(path string, value interface{}) error {
+	var data bytes.Buffer
+	enc := json.NewEncoder(&data)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(value); err != nil {
+		return err
+	}
+	return atomicWritePrivateFile(path, data.Bytes())
 }
 
 func (s *Server) mcpProvidersPath() string {
@@ -441,14 +464,31 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 		provider.Command = strings.TrimSpace(provider.Command)
 		provider.WorkingDir = strings.TrimSpace(provider.WorkingDir)
 		provider.ToolPrefix = strings.TrimSpace(provider.ToolPrefix)
-		provider.ApprovalMode = strings.TrimSpace(provider.ApprovalMode)
+		provider.ApprovalMode = strings.ToLower(strings.TrimSpace(provider.ApprovalMode))
 		provider.Args = compactArgs(provider.Args)
 		provider.Env = compactEnv(provider.Env)
+		provider.HasEnv = false
+		provider.EnvKeys = nil
+		provider.Headers = compactHeaders(provider.Headers)
+		provider.HasHeaders = false
+		provider.HeaderKeys = nil
 		provider.ToolNameMap = compactToolNameMap(provider.ToolNameMap)
 		provider.EnabledTools = compactStringList(provider.EnabledTools)
 		provider.DisabledTools = compactStringList(provider.DisabledTools)
 		if provider.ID == "" {
 			return nil, errors.New("provider id is required")
+		}
+		if provider.ApprovalMode == "" {
+			provider.ApprovalMode = localmcp.ApprovalModeBeforeExecute
+		}
+		switch provider.ApprovalMode {
+		case localmcp.ApprovalModeNone, localmcp.ApprovalModeBeforeExecute, localmcp.ApprovalModeAlways:
+		default:
+			return nil, fmt.Errorf(
+				"provider %q approvalMode %q is unsupported; allowed values are none, before_execute, and always",
+				provider.ID,
+				provider.ApprovalMode,
+			)
 		}
 		if seen[provider.ID] {
 			return nil, fmt.Errorf("duplicate provider id %q", provider.ID)
@@ -485,6 +525,54 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 	return out, nil
 }
 
+func mergeMCPProviderSecrets(existing, incoming []localmcp.ProviderConfig) []localmcp.ProviderConfig {
+	type secrets struct {
+		env     map[string]string
+		headers map[string]string
+	}
+	existingSecrets := make(map[string]secrets, len(existing))
+	for _, provider := range existing {
+		existingSecrets[strings.TrimSpace(provider.ID)] = secrets{env: provider.Env, headers: provider.Headers}
+	}
+	merged := append([]localmcp.ProviderConfig(nil), incoming...)
+	for index := range merged {
+		stored := existingSecrets[strings.TrimSpace(merged[index].ID)]
+		if merged[index].Env == nil {
+			merged[index].Env = stored.env
+		}
+		if merged[index].Headers == nil {
+			merged[index].Headers = stored.headers
+		}
+	}
+	return merged
+}
+
+func sanitizeMCPProviders(providers []localmcp.ProviderConfig) []localmcp.ProviderConfig {
+	sanitized := make([]localmcp.ProviderConfig, len(providers))
+	for index, provider := range providers {
+		sanitized[index] = sanitizeMCPProvider(provider)
+	}
+	return sanitized
+}
+
+func sanitizeMCPProvider(provider localmcp.ProviderConfig) localmcp.ProviderConfig {
+	provider.HasEnv = len(provider.Env) > 0
+	provider.EnvKeys = make([]string, 0, len(provider.Env))
+	for key := range provider.Env {
+		provider.EnvKeys = append(provider.EnvKeys, key)
+	}
+	sort.Strings(provider.EnvKeys)
+	provider.Env = nil
+	provider.HasHeaders = len(provider.Headers) > 0
+	provider.HeaderKeys = make([]string, 0, len(provider.Headers))
+	for key := range provider.Headers {
+		provider.HeaderKeys = append(provider.HeaderKeys, key)
+	}
+	sort.Strings(provider.HeaderKeys)
+	provider.Headers = nil
+	return provider
+}
+
 func compactArgs(args []string) []string {
 	return compactStringList(args)
 }
@@ -507,6 +595,24 @@ func compactEnv(env map[string]string) map[string]string {
 	}
 	out := make(map[string]string, len(env))
 	for key, value := range env {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func compactHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	for key, value := range headers {
 		key = strings.TrimSpace(key)
 		if key == "" {
 			continue

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/workflow"
 )
@@ -61,7 +62,12 @@ func (h *WorkflowHandler) CreateRun(c *gin.Context) {
 		fail(c, 400, "invalid request: "+err.Error())
 		return
 	}
-	run, err := h.runSvc.CreateRun(c.Request.Context(), projectID, req.TemplateID, req.TemplateVersion, req.Input)
+	userID, authenticated := auth.UserIDFromContext(c.Request.Context())
+	if !authenticated || userID == "" {
+		fail(c, 401, "authenticated user is required")
+		return
+	}
+	run, err := h.runSvc.CreateRun(c.Request.Context(), userID, projectID, req.TemplateID, req.TemplateVersion, req.Input)
 	if err != nil {
 		fail(c, 500, err.Error())
 		return

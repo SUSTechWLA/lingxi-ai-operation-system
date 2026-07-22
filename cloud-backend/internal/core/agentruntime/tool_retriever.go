@@ -35,19 +35,22 @@ type ToolRetrieveRequest struct {
 type RetrieveRequest = ToolRetrieveRequest
 
 type ToolCandidate struct {
-	Name         string                   `json:"name"`
-	Description  string                   `json:"description,omitempty"`
-	Capabilities []string                 `json:"capabilities,omitempty"`
-	Tags         []string                 `json:"tags,omitempty"`
-	Reason       string                   `json:"reason"`
-	Score        float64                  `json:"score"`
-	InputSchema  map[string]tool.ParamDef `json:"inputSchema,omitempty"`
-	OutputSchema map[string]tool.ParamDef `json:"outputSchema,omitempty"`
-	CostLevel    string                   `json:"costLevel,omitempty"`
-	RiskLevel    string                   `json:"riskLevel,omitempty"`
-	Type         string                   `json:"type,omitempty"`
-	Trace        ToolCandidateTrace       `json:"trace,omitempty"`
-	Manifest     *tool.ToolManifest       `json:"-"`
+	Name                 string                   `json:"name"`
+	Description          string                   `json:"description,omitempty"`
+	Capabilities         []string                 `json:"capabilities,omitempty"`
+	Tags                 []string                 `json:"tags,omitempty"`
+	Reason               string                   `json:"reason"`
+	Score                float64                  `json:"score"`
+	InputSchema          map[string]interface{}   `json:"inputSchema"`
+	OutputSchema         map[string]interface{}   `json:"outputSchema,omitempty"`
+	LegacyParameters     map[string]tool.ParamDef `json:"parameters,omitempty"`
+	LegacyOutput         map[string]tool.ParamDef `json:"output,omitempty"`
+	ProviderCapabilities map[string]interface{}   `json:"providerCapabilities,omitempty"`
+	CostLevel            string                   `json:"costLevel,omitempty"`
+	RiskLevel            string                   `json:"riskLevel,omitempty"`
+	Type                 string                   `json:"type,omitempty"`
+	Trace                ToolCandidateTrace       `json:"trace,omitempty"`
+	Manifest             *tool.ToolManifest       `json:"-"`
 }
 
 type HybridToolRetriever struct {
@@ -99,20 +102,43 @@ func (r *HybridToolRetriever) Retrieve(ctx context.Context, req ToolRetrieveRequ
 		if score <= 0 {
 			continue
 		}
+		inputSchema, err := canonicalToolSchema(manifest.InputSchema, manifest.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s input schema: %w", manifest.Name, err)
+		}
+		outputSchema, err := canonicalToolSchema(manifest.OutputSchema, manifest.Output)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s output schema: %w", manifest.Name, err)
+		}
+		legacyParameters, err := cloneLegacyParamDefs(manifest.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s legacy parameters: %w", manifest.Name, err)
+		}
+		legacyOutput, err := cloneLegacyParamDefs(manifest.Output)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s legacy output: %w", manifest.Name, err)
+		}
+		providerCapabilities, err := cloneJSONMap(manifest.ProviderCapabilities)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s provider capabilities: %w", manifest.Name, err)
+		}
 		candidates = append(candidates, ToolCandidate{
-			Name:         manifest.Name,
-			Description:  manifest.Description,
-			Capabilities: append([]string(nil), manifest.Capabilities...),
-			Tags:         append([]string(nil), manifest.Tags...),
-			Reason:       strings.Join(reasonParts, "; "),
-			Score:        score,
-			InputSchema:  manifest.Parameters,
-			OutputSchema: manifest.Output,
-			CostLevel:    manifest.CostLevel,
-			RiskLevel:    manifest.RiskLevel,
-			Type:         manifest.Type,
-			Trace:        trace,
-			Manifest:     manifest,
+			Name:                 manifest.Name,
+			Description:          manifest.Description,
+			Capabilities:         append([]string(nil), manifest.Capabilities...),
+			Tags:                 append([]string(nil), manifest.Tags...),
+			Reason:               strings.Join(reasonParts, "; "),
+			Score:                score,
+			InputSchema:          inputSchema,
+			OutputSchema:         outputSchema,
+			LegacyParameters:     legacyParameters,
+			LegacyOutput:         legacyOutput,
+			ProviderCapabilities: providerCapabilities,
+			CostLevel:            manifest.CostLevel,
+			RiskLevel:            manifest.RiskLevel,
+			Type:                 manifest.Type,
+			Trace:                trace,
+			Manifest:             manifest,
 		})
 	}
 

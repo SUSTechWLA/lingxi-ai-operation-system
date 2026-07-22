@@ -4,14 +4,88 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/tangying-ai/aios-core/internal/core/auth"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
+
+func TestDeliverTerminalCallbacksClaimsEachPhaseExactlyOnceConcurrently(t *testing.T) {
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_concurrent", NodeID: "node_concurrent", Status: JobCompleted,
+		Output:              map[string]interface{}{"assetId": "asset-1"},
+		ResultCallbackState: CallbackPending, FollowupCallbackState: CallbackPending,
+	}}
+	sink := &concurrentNodeResultSink{}
+	var artifactMu sync.Mutex
+	artifactCalls := 0
+	artifactKey := ""
+	handler := NewHandler(service, sink).WithArtifactSyncCallback(func(ctx context.Context, _ *LocalJob, _ map[string]interface{}) error {
+		artifactMu.Lock()
+		artifactCalls++
+		artifactKey, _ = CallbackIdempotencyKeyFromContext(ctx)
+		artifactMu.Unlock()
+		return nil
+	})
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			err := handler.deliverTerminalCallbacks(context.Background(), JobMutationIdentity{RunnerID: "runner_001"}, service.job)
+			if err != nil && !errors.Is(err, ErrCallbackBusy) {
+				errs <- err
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if got := sink.SuccessCalls(); got != 1 {
+		t.Fatalf("result sink calls=%d, want exactly one", got)
+	}
+	artifactMu.Lock()
+	gotArtifacts := artifactCalls
+	artifactMu.Unlock()
+	if gotArtifacts != 1 || artifactKey != "local-job:local_job_concurrent:callback:followup" {
+		t.Fatalf("artifact callback calls=%d key=%q, want exactly one stable delivery", gotArtifacts, artifactKey)
+	}
+}
+
+type concurrentNodeResultSink struct {
+	mu      sync.Mutex
+	success int
+}
+
+func (s *concurrentNodeResultSink) OnSuccess(context.Context, string, map[string]interface{}) error {
+	s.mu.Lock()
+	s.success++
+	s.mu.Unlock()
+	return nil
+}
+func (*concurrentNodeResultSink) OnFailure(context.Context, string, string) error { return nil }
+func (*concurrentNodeResultSink) OnProgress(context.Context, string, float64, string, string) error {
+	return nil
+}
+func (s *concurrentNodeResultSink) SuccessCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.success
+}
 
 func TestHandlerRegisterRunnerUsesEdgeRunProtocol(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -77,6 +151,98 @@ func TestHandlerRegisterRunnerUsesAuthenticatedUserAndDevice(t *testing.T) {
 	}
 	if service.registerReq.UserID != "user_auth" || service.registerReq.DeviceID != "device_auth" {
 		t.Fatalf("register should use authenticated identity, got %#v", service.registerReq)
+	}
+}
+
+func TestHandlerHeartbeatPreservesCapabilitiesNilAndExplicitEmpty(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{}
+	router := gin.New()
+	NewHandler(service, nil).RegisterRoutes(router)
+
+	for _, body := range []string{
+		`{"sessionId":"session_001","status":"online"}`,
+		`{"sessionId":"session_001","status":"online","capabilities":[]}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-runners/runner_001/heartbeat", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	if len(service.heartbeats) != 2 || service.heartbeats[0].Capabilities != nil {
+		t.Fatalf("omitted capabilities must remain nil: %#v", service.heartbeats)
+	}
+	if service.heartbeats[1].Capabilities == nil || len(*service.heartbeats[1].Capabilities) != 0 {
+		t.Fatalf("explicit empty capabilities must remain a clear operation: %#v", service.heartbeats)
+	}
+}
+
+func TestHandlerHeartbeatReliablyDeliversRetiredStaleMCPFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stale := &LocalJob{
+		ID: "local_job_stale", UserID: "user-a", RunnerID: "runner_001", TargetRunnerID: "runner_001",
+		NodeID: "node_stale", Command: CommandLocalMCPToolCall, Status: JobFailed,
+		ErrorMessage:        "MCP_CATALOG_STALE: target runner catalog changed; replan required",
+		Error:               map[string]interface{}{"code": "MCP_CATALOG_STALE"},
+		ResultCallbackState: CallbackPending, FollowupCallbackState: CallbackPending,
+	}
+	service := &fakeRunnerService{staleJobs: []*LocalJob{stale}}
+	sink := &fakeNodeResultSink{failureErrors: []error{errors.New("temporary DAG failure sink error")}}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+
+	heartbeat := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-runners/runner_001/heartbeat", bytes.NewBufferString(`{
+			"sessionId":"runner_session_001","status":"online","capabilities":[]
+		}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
+		req.Header.Set("X-Runner-Session-ID", "runner_session_001")
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+	if res := heartbeat(); res.Code != http.StatusInternalServerError {
+		t.Fatalf("first callback failure status=%d body=%s", res.Code, res.Body.String())
+	}
+	if stale.Status != JobFailed || stale.ResultCallbackState != CallbackPending || service.retireCalls != 1 {
+		t.Fatalf("stale terminal event was not retained for retry: job=%#v calls=%d", stale, service.retireCalls)
+	}
+	if res := heartbeat(); res.Code != http.StatusOK {
+		t.Fatalf("stale callback replay status=%d body=%s", res.Code, res.Body.String())
+	}
+	if sink.failureCalls != 2 || !strings.Contains(sink.failureError, "MCP_CATALOG_STALE") ||
+		stale.ResultCallbackState != CallbackDelivered || stale.FollowupCallbackState != CallbackDelivered {
+		t.Fatalf("stale failure was not durably delivered: sink=%#v job=%#v", sink, stale)
+	}
+}
+
+func TestHandlerClaimRetiresStaleMCPJobsBeforeReturningNextJob(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stale := &LocalJob{
+		ID: "local_job_stale", RunnerID: "runner_001", TargetRunnerID: "runner_001", NodeID: "node_stale",
+		Command: CommandLocalMCPToolCall, Status: JobFailed, ErrorMessage: "MCP_CATALOG_STALE: replan required",
+		ResultCallbackState: CallbackPending, FollowupCallbackState: CallbackPending,
+	}
+	service := &fakeRunnerService{
+		job:       &LocalJob{ID: "local_job_next", Status: JobClaimed},
+		staleJobs: []*LocalJob{stale},
+	}
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/local-runners/runner_001/jobs/claim", nil)
+	req.Header.Set("X-Runner-ID", "runner_001")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || service.claimRunnerID != "runner_001" || service.retireCalls != 1 {
+		t.Fatalf("claim did not retire stale work first: status=%d service=%#v", res.Code, service)
+	}
+	if sink.failureCalls != 1 || stale.ResultCallbackState != CallbackDelivered {
+		t.Fatalf("stale failure was not delivered before next claim: sink=%#v job=%#v", sink, stale)
 	}
 }
 
@@ -153,6 +319,278 @@ func TestHandlerCompleteJobAdvancesNodeResult(t *testing.T) {
 	}
 	if sink.successNodeID != "node_hyperframes_render" || sink.successOutput["summary"] != "视频渲染完成" {
 		t.Fatalf("node success not reported: %#v", sink)
+	}
+}
+
+func TestHandlerRejectsInvalidCanonicalLocalOutputBeforeCompletion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_contract", NodeID: "node_contract", ToolName: "native_contract", Status: JobRunning,
+	}}
+	registry := tool.NewToolRegistry()
+	registry.RegisterExternal(&tool.ToolManifest{
+		Name: "native_contract", Boundary: tool.BoundaryLocalNative,
+		OutputSchema: map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{"assetId": map[string]interface{}{"type": "string"}},
+			"required": []interface{}{"assetId"}, "additionalProperties": false,
+		},
+	})
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).WithToolManifestResolver(registry).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_contract/complete", bytes.NewBufferString(`{
+		"success":true,"output":{"unexpected":true}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	if service.completeJobID != "" {
+		t.Fatalf("invalid output was completed: %s", service.completeJobID)
+	}
+	if service.failJobID != "local_job_contract" || !strings.Contains(sink.failureError, "OUTPUT_SCHEMA_INVALID") {
+		t.Fatalf("invalid output was not failed through node sink: service=%#v sink=%#v", service, sink)
+	}
+	if sink.successNodeID != "" {
+		t.Fatalf("invalid output reported success: %#v", sink)
+	}
+}
+
+func TestHandlerValidatesMCPStructuredContentInsteadOfWrapper(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_mcp", NodeID: "node_mcp", ToolName: "mcp_asset", MCPLogicalToolName: "mcp_asset", Status: JobRunning,
+	}}
+	registry := tool.NewToolRegistry()
+	registry.RegisterExternal(&tool.ToolManifest{
+		Name: "mcp_asset", Boundary: tool.BoundaryMCPProvider,
+		OutputSchema: map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{"assetId": map[string]interface{}{"type": "string"}},
+			"required": []interface{}{"assetId"}, "additionalProperties": false,
+		},
+	})
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).WithToolManifestResolver(registry).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_mcp/complete", bytes.NewBufferString(`{
+		"success":true,
+		"output":{"content":[{"type":"text","text":"ok"}],"structuredContent":{"assetId":"asset-1"},"isError":false}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || service.completeJobID != "local_job_mcp" || sink.successNodeID != "node_mcp" {
+		t.Fatalf("valid MCP completion failed: status=%d body=%s service=%#v sink=%#v", rec.Code, rec.Body.String(), service, sink)
+	}
+}
+
+func TestHandlerValidatesDynamicMCPOutputFromBoundRunnerCatalog(t *testing.T) {
+	manifest := &tool.ToolManifest{
+		Name: "studio.render", Boundary: tool.BoundaryMCPProvider,
+		OutputSchema: map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{"assetId": map[string]interface{}{"type": "string"}},
+			"required": []interface{}{"assetId"}, "additionalProperties": false,
+		},
+	}
+	for name, output := range map[string]string{
+		"invalid_schema": `{"structuredContent":{"unexpected":true},"isError":false}`,
+		"mcp_is_error":   `{"structuredContent":{"assetId":"asset-1"},"isError":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := &fakeRunnerService{job: &LocalJob{
+				ID: "local_job_dynamic", NodeID: "node_dynamic", UserID: "user-a", ToolName: "studio.render",
+				Command: CommandLocalMCPToolCall, TargetRunnerID: "runner-a", CatalogRevision: strings.Repeat("a", 64),
+				MCPProviderID: "studio", MCPLogicalToolName: "studio.render", MCPRemoteToolName: "render", Status: JobRunning,
+			}, scopedManifest: manifest}
+			sink := &fakeNodeResultSink{}
+			router := gin.New()
+			NewHandler(service, sink).RegisterRoutes(router)
+			req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_dynamic/complete", bytes.NewBufferString(`{"success":true,"output":`+output+`}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Runner-ID", "runner-a")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnprocessableEntity || service.completeJobID != "" || service.failJobID != "local_job_dynamic" || sink.successNodeID != "" {
+				t.Fatalf("dynamic MCP failure was not fail-closed: status=%d body=%s service=%#v sink=%#v", rec.Code, rec.Body.String(), service, sink)
+			}
+			if name == "mcp_is_error" && service.failReq.Error["code"] != "MCP_TOOL_ERROR" {
+				t.Fatalf("dynamic MCP isError used wrong failure code: %#v", service.failReq.Error)
+			}
+		})
+	}
+}
+
+func TestHandlerTerminalCompletionReportDoesNotReenterOnSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_failed", NodeID: "node_failed", ToolName: "native_contract", Status: JobFailed,
+		ResultCallbackState: CallbackDelivered, FollowupCallbackState: CallbackDelivered,
+	}}
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_failed/complete", bytes.NewBufferString(`{"success":true,"output":{"result":"late"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("terminal retry status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if service.completeJobID != "" || sink.successNodeID != "" {
+		t.Fatalf("FAILED completion reentered success: service=%#v sink=%#v", service, sink)
+	}
+}
+
+func TestHandlerLateCompletionReplaysPendingFailureWithoutFlippingStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_failed_pending", NodeID: "node_failed_pending", Status: JobFailed,
+		ErrorMessage: "durable failure", ResultCallbackState: CallbackPending, FollowupCallbackState: CallbackPending,
+	}}
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_failed_pending/complete", bytes.NewBufferString(`{"success":true,"output":{"result":"late"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK || service.completeJobID != "" || service.job.Status != JobFailed {
+		t.Fatalf("late completion mutated failure: status=%d service=%#v", res.Code, service)
+	}
+	if sink.successCalls != 0 || sink.failureCalls != 1 || sink.failureError != "durable failure" {
+		t.Fatalf("late completion did not replay failure callback: %#v", sink)
+	}
+}
+
+func TestHandlerReplaysPendingCompletedCallbackAndDeliveredRetryIsNoOp(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{ID: "local_job_replay", NodeID: "node_replay", Status: JobRunning}}
+	sink := &fakeNodeResultSink{successErrors: []error{errors.New("temporary sink failure")}}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_replay/complete", bytes.NewBufferString(`{"success":true,"output":{"assetId":"asset-1"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+	if res := request(); res.Code != http.StatusInternalServerError {
+		t.Fatalf("first callback failure status=%d body=%s", res.Code, res.Body.String())
+	}
+	if service.job.Status != JobCompleted || service.job.ResultCallbackState != CallbackPending {
+		t.Fatalf("terminal result was not persisted pending callback: %#v", service.job)
+	}
+	if res := request(); res.Code != http.StatusOK {
+		t.Fatalf("pending callback replay status=%d body=%s", res.Code, res.Body.String())
+	}
+	if sink.successCalls != 2 || service.job.ResultCallbackState != CallbackDelivered || service.job.FollowupCallbackState != CallbackDelivered {
+		t.Fatalf("pending callback not delivered exactly on retry: calls=%d job=%#v", sink.successCalls, service.job)
+	}
+	if res := request(); res.Code != http.StatusOK || sink.successCalls != 2 {
+		t.Fatalf("delivered retry was not no-op: status=%d calls=%d", res.Code, sink.successCalls)
+	}
+}
+
+func TestHandlerReplaysOnlyPendingArtifactCallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{ID: "local_job_artifact", NodeID: "node_artifact", Status: JobRunning}}
+	sink := &fakeNodeResultSink{}
+	artifactCalls := 0
+	router := gin.New()
+	NewHandler(service, sink).WithArtifactSyncCallback(func(_ context.Context, _ *LocalJob, output map[string]interface{}) error {
+		artifactCalls++
+		if output["assetId"] != "asset-2" {
+			t.Fatalf("artifact replay lost persisted output: %#v", output)
+		}
+		if artifactCalls == 1 {
+			return errors.New("artifact index unavailable")
+		}
+		return nil
+	}).RegisterRoutes(router)
+
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_artifact/complete", bytes.NewBufferString(`{"success":true,"output":{"assetId":"asset-2"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+	if res := request(); res.Code != http.StatusInternalServerError {
+		t.Fatalf("first artifact callback status=%d body=%s", res.Code, res.Body.String())
+	}
+	if res := request(); res.Code != http.StatusOK {
+		t.Fatalf("artifact callback replay status=%d body=%s", res.Code, res.Body.String())
+	}
+	if sink.successCalls != 1 || artifactCalls != 2 {
+		t.Fatalf("successful sink was replayed with artifact: sink=%d artifact=%d", sink.successCalls, artifactCalls)
+	}
+}
+
+func TestHandlerReplaysPendingFailureCallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{ID: "local_job_failure", NodeID: "node_failure", Status: JobRunning}}
+	sink := &fakeNodeResultSink{failureErrors: []error{errors.New("temporary failure sink error")}}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_failure/fail", bytes.NewBufferString(`{"success":false,"error":{"code":"BROKEN","message":"preserved failure"},"retryable":true}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+	if res := request(); res.Code != http.StatusInternalServerError {
+		t.Fatalf("first failure callback status=%d body=%s", res.Code, res.Body.String())
+	}
+	if res := request(); res.Code != http.StatusOK {
+		t.Fatalf("failure callback replay status=%d body=%s", res.Code, res.Body.String())
+	}
+	if sink.failureCalls != 2 || sink.failureError != "preserved failure" || service.job.ResultCallbackState != CallbackDelivered {
+		t.Fatalf("failure replay lost state/content: sink=%#v job=%#v", sink, service.job)
+	}
+}
+
+func TestHandlerTreatsMCPIsErrorAsFailureWithoutOutputSchema(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{ID: "local_job_mcp_error", NodeID: "node_mcp_error", ToolName: "mcp_error", Status: JobRunning}}
+	registry := tool.NewToolRegistry()
+	registry.RegisterExternal(&tool.ToolManifest{Name: "mcp_error", Boundary: tool.BoundaryMCPProvider})
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).WithToolManifestResolver(registry).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_mcp_error/complete", bytes.NewBufferString(`{
+		"success":true,"output":{"isError":true,"content":[{"type":"text","text":"remote renderer failed"}]}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	if res.Code != http.StatusUnprocessableEntity || service.completeJobID != "" || service.failReq.Error["code"] != "MCP_TOOL_ERROR" {
+		t.Fatalf("MCP isError was not failed: status=%d body=%s service=%#v", res.Code, res.Body.String(), service)
+	}
+	if !strings.Contains(sink.failureError, "remote renderer failed") {
+		t.Fatalf("MCP content was not preserved for failure sink: %#v", sink)
 	}
 }
 
@@ -264,12 +702,69 @@ func TestHandlerFailJobAdvancesNodeFailure(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsAtomicMutationAuthorizationFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{mutationErr: ErrJobAccessDenied}
+	router := gin.New()
+	NewHandler(service, nil).RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_stale/progress", bytes.NewBufferString(`{"progress":0.5}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_old")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestHandlerConcurrentMutationLoserRefetchesTerminalInsteadOfForbidden(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{
+		job:         &LocalJob{ID: "local_job_race", NodeID: "node_race", Status: JobRunning},
+		mutationErr: ErrJobAccessDenied,
+		terminalOnMutationFailure: &LocalJob{
+			ID: "local_job_race", NodeID: "node_race", Status: JobCompleted,
+			Output: map[string]interface{}{"winner": true}, ResultCallbackState: CallbackPending, FollowupCallbackState: CallbackPending,
+		},
+	}
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_race/complete", bytes.NewBufferString(`{"success":true,"output":{"loser":true}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("concurrent mutation loser status=%d body=%s", res.Code, res.Body.String())
+	}
+	if sink.successCalls != 1 || sink.successOutput["winner"] != true || sink.successOutput["loser"] != nil {
+		t.Fatalf("loser did not replay authoritative terminal row: %#v", sink)
+	}
+}
+
 type fakeRunnerService struct {
-	registerReq   RegisterRunnerRequest
-	claimRunnerID string
-	completeJobID string
-	completeReq   CompleteJobRequest
-	job           *LocalJob
+	mu                        sync.Mutex
+	registerReq               RegisterRunnerRequest
+	claimRunnerID             string
+	completeJobID             string
+	completeReq               CompleteJobRequest
+	failJobID                 string
+	failReq                   FailJobRequest
+	job                       *LocalJob
+	heartbeats                []HeartbeatRequest
+	mutationErr               error
+	terminalOnMutationFailure *LocalJob
+	markErr                   error
+	scopedManifest            *tool.ToolManifest
+	scopedManifestErr         error
+	staleJobs                 []*LocalJob
+	retireCalls               int
+	retireErr                 error
+}
+
+func (f *fakeRunnerService) ResolveMCPJobManifest(_ context.Context, _ *LocalJob) (*tool.ToolManifest, error) {
+	return f.scopedManifest, f.scopedManifestErr
 }
 
 func (f *fakeRunnerService) RegisterRunner(_ context.Context, req RegisterRunnerRequest) (*RegisterRunnerResponse, error) {
@@ -282,8 +777,23 @@ func (f *fakeRunnerService) RegisterRunner(_ context.Context, req RegisterRunner
 	}, nil
 }
 
-func (f *fakeRunnerService) Heartbeat(_ context.Context, _ string, _ HeartbeatRequest) error {
+func (f *fakeRunnerService) Heartbeat(_ context.Context, _ string, req HeartbeatRequest) error {
+	f.heartbeats = append(f.heartbeats, req)
 	return nil
+}
+
+func (f *fakeRunnerService) RetireStaleMCPJobs(_ context.Context, _ JobMutationIdentity) ([]*LocalJob, error) {
+	f.retireCalls++
+	if f.retireErr != nil {
+		return nil, f.retireErr
+	}
+	jobs := make([]*LocalJob, 0, len(f.staleJobs))
+	for _, job := range f.staleJobs {
+		if job != nil && (job.ResultCallbackState != CallbackDelivered || job.FollowupCallbackState != CallbackDelivered) {
+			jobs = append(jobs, job)
+		}
+	}
+	return jobs, nil
 }
 
 func (f *fakeRunnerService) ClaimJob(_ context.Context, runnerID string) (*LocalJob, error) {
@@ -291,18 +801,100 @@ func (f *fakeRunnerService) ClaimJob(_ context.Context, runnerID string) (*Local
 	return f.job, nil
 }
 
-func (f *fakeRunnerService) ReportProgress(_ context.Context, _ string, _ ProgressRequest) error {
+func (f *fakeRunnerService) ReportProgress(_ context.Context, _ JobMutationIdentity, _ string, _ ProgressRequest) error {
+	return f.mutationErr
+}
+
+func (f *fakeRunnerService) CompleteJob(_ context.Context, _ JobMutationIdentity, jobID string, req CompleteJobRequest) (*LocalJob, error) {
+	f.completeJobID = jobID
+	f.completeReq = req
+	if f.mutationErr != nil && f.terminalOnMutationFailure != nil {
+		f.job = f.terminalOnMutationFailure
+	}
+	if f.mutationErr == nil && f.job != nil {
+		f.job.Status = JobCompleted
+		f.job.Output = req.Output
+		f.job.ResultCallbackState = CallbackPending
+		f.job.FollowupCallbackState = CallbackPending
+	}
+	return f.job, f.mutationErr
+}
+
+func (f *fakeRunnerService) FailJob(_ context.Context, _ JobMutationIdentity, jobID string, req FailJobRequest) (*LocalJob, error) {
+	f.failJobID = jobID
+	f.failReq = req
+	if f.mutationErr != nil && f.terminalOnMutationFailure != nil {
+		f.job = f.terminalOnMutationFailure
+	}
+	if f.mutationErr == nil && f.job != nil {
+		f.job.Status = JobFailed
+		f.job.Error = req.Error
+		f.job.ErrorMessage = errorMessageFromMap(req.Error)
+		f.job.ResultCallbackState = CallbackPending
+		f.job.FollowupCallbackState = CallbackPending
+	}
+	return f.job, f.mutationErr
+}
+
+func (f *fakeRunnerService) ClaimTerminalCallback(_ context.Context, _ JobMutationIdentity, jobID string, phase CallbackPhase) (*TerminalCallbackClaim, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	job := f.jobByIDLocked(jobID)
+	if job == nil {
+		return nil, ErrJobAccessDenied
+	}
+	state := &job.ResultCallbackState
+	if phase == CallbackPhaseFollowup {
+		state = &job.FollowupCallbackState
+	}
+	switch *state {
+	case CallbackDelivered:
+		return &TerminalCallbackClaim{Delivered: true, IdempotencyKey: callbackIdempotencyKey(jobID, phase)}, nil
+	case CallbackProcessing:
+		return nil, ErrCallbackBusy
+	default:
+		*state = CallbackProcessing
+		return &TerminalCallbackClaim{Token: callbackIdempotencyKey(jobID, phase) + ":token", IdempotencyKey: callbackIdempotencyKey(jobID, phase)}, nil
+	}
+}
+
+func (f *fakeRunnerService) AcknowledgeTerminalCallback(_ context.Context, jobID string, phase CallbackPhase, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	job := f.jobByIDLocked(jobID)
+	if f.markErr != nil || job == nil {
+		return f.markErr
+	}
+	if phase == CallbackPhaseResult {
+		job.ResultCallbackState = CallbackDelivered
+	} else {
+		job.FollowupCallbackState = CallbackDelivered
+	}
 	return nil
 }
 
-func (f *fakeRunnerService) CompleteJob(_ context.Context, jobID string, req CompleteJobRequest) (*LocalJob, error) {
-	f.completeJobID = jobID
-	f.completeReq = req
-	return f.job, nil
+func (f *fakeRunnerService) ReleaseTerminalCallback(_ context.Context, jobID string, phase CallbackPhase, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	job := f.jobByIDLocked(jobID)
+	if job == nil {
+		return nil
+	}
+	if phase == CallbackPhaseResult {
+		job.ResultCallbackState = CallbackPending
+	} else {
+		job.FollowupCallbackState = CallbackPending
+	}
+	return nil
 }
 
-func (f *fakeRunnerService) FailJob(_ context.Context, _ string, _ FailJobRequest) (*LocalJob, error) {
-	return f.job, nil
+func (f *fakeRunnerService) jobByIDLocked(jobID string) *LocalJob {
+	for _, job := range append(append([]*LocalJob(nil), f.staleJobs...), f.job) {
+		if job != nil && job.ID == jobID {
+			return job
+		}
+	}
+	return nil
 }
 
 func (f *fakeRunnerService) GetJob(_ context.Context, _ string) (*LocalJob, error) {
@@ -326,17 +918,33 @@ type fakeNodeResultSink struct {
 	progressValue  float64
 	progressStep   string
 	progressMsg    string
+	successCalls   int
+	failureCalls   int
+	successErrors  []error
+	failureErrors  []error
 }
 
 func (f *fakeNodeResultSink) OnSuccess(_ context.Context, nodeID string, output map[string]interface{}) error {
+	f.successCalls++
 	f.successNodeID = nodeID
 	f.successOutput = output
+	if len(f.successErrors) > 0 {
+		err := f.successErrors[0]
+		f.successErrors = f.successErrors[1:]
+		return err
+	}
 	return nil
 }
 
 func (f *fakeNodeResultSink) OnFailure(_ context.Context, nodeID string, errorMessage string) error {
+	f.failureCalls++
 	f.failureNodeID = nodeID
 	f.failureError = errorMessage
+	if len(f.failureErrors) > 0 {
+		err := f.failureErrors[0]
+		f.failureErrors = f.failureErrors[1:]
+		return err
+	}
 	return nil
 }
 

@@ -83,12 +83,15 @@ Legacy Tool 只用于暂时无法迁移的旧工具。新工具禁止走 legacy 
 flowchart LR
   U["User Request"] --> KP["KnowledgePolicy / Intent Signals"]
   KP --> C["Context Builder"]
-  C --> TC["ToolCatalog Facade"]
-  TC --> R["HybridToolRetriever"]
+  C --> RC["Authenticated Runner Catalogs"]
+  RC --> TS["Immutable Request Tool Snapshot"]
+  C --> TC["Static Tool Catalog"]
+  TC --> TS
+  TS --> R["HybridToolRetriever"]
   R --> P["Planner"]
   P --> G["PlanGuard"]
   G --> PC["PlanCompiler"]
-  PC --> LP["Cloud Plan / Local Plan"]
+  PC --> LP["Cloud Plan / Hidden MCP Gateway"]
   LP --> LR["Local Runner"]
   LR --> LT["localtool.Registry"]
   LT --> MCP["LOCAL_MCP_TOOL_CALL / localmcp.Client"]
@@ -96,6 +99,8 @@ flowchart LR
 ```
 
 新增 provider 不需要改 Planner 主流程。只注册 MCP provider 配置，`tools/list` 转成 `ToolManifest` 后进入 catalog / retriever / guard / compiler。
+
+Runner catalog 只能进入当前 user/device 的 request snapshot，禁止写入全局 registry、数据库或 Redis。隐藏 MCP gateway 必须固化 runner ID、catalog revision、provider ID、remote/logical tool name；派发阶段再次核对 exact binding，不能按“最近在线 runner”猜测路由。
 
 ## Tool Trace
 

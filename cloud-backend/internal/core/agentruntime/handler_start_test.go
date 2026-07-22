@@ -93,6 +93,26 @@ func TestStartRunMarksLinkedProjectAndReturnsCreatedRun(t *testing.T) {
 	}
 }
 
+func TestStartRunRejectsBodyUserIDWithoutAuthenticatedContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewHandler(NewRunner(
+		&fakeOrchestrator{taskID: "task-never"},
+		newMemoryRunStore(),
+		staticPlanner{plan: &AgentPlan{Goal: "x", Domain: "video_creation", Steps: []AgentStep{{ID: "s", Tool: "video_script_generator"}}}},
+		NewPlanGuard(staticToolCatalog{"video_script_generator": &tool.ToolManifest{Name: "video_script_generator"}}, nil),
+		NewPlanCompiler(staticToolCatalog{"video_script_generator": &tool.ToolManifest{Name: "video_script_generator"}}),
+	), nil, nil)
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/runs", bytes.NewBufferString(`{"userId":"attacker","message":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
 func TestStartRunReturnsRunIDBeforeSlowPlannerCompletes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

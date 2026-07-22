@@ -901,7 +901,7 @@ type fakeOrchestrator struct {
 	submitted       *model.DAGRequest
 }
 
-func (o *fakeOrchestrator) CreateTask(_ context.Context, input map[string]interface{}) (*model.Task, error) {
+func (o *fakeOrchestrator) CreateTask(_ context.Context, _ string, input map[string]interface{}) (*model.Task, error) {
 	o.createdInput = input
 	return &model.Task{ID: o.taskID, Status: model.TaskCreated, CreatedAt: time.Now()}, nil
 }

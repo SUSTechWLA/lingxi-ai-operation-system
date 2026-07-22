@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 )
@@ -26,7 +25,10 @@ func NewRunService(repo *Repository, runRepo *RunRepository, orchService *servic
 }
 
 // CreateRun creates a new WorkflowRun, compiles stages into a DAG, and submits to the orchestrator.
-func (s *RunService) CreateRun(ctx context.Context, projectID, templateID, version string, input map[string]interface{}) (*WorkflowRun, error) {
+func (s *RunService) CreateRun(ctx context.Context, userID, projectID, templateID, version string, input map[string]interface{}) (*WorkflowRun, error) {
+	if userID == "" {
+		return nil, fmt.Errorf("authenticated user is required")
+	}
 	tmpl, err := s.repo.FindByID(ctx, templateID)
 	if err != nil {
 		return nil, fmt.Errorf("template not found: %w", err)
@@ -43,11 +45,10 @@ func (s *RunService) CreateRun(ctx context.Context, projectID, templateID, versi
 	applyRunInputToDAG(&dag, input)
 
 	// Create orchestrator task
-	task, err := s.orchService.CreateTask(ctx, map[string]interface{}{
+	task, err := s.orchService.CreateTask(ctx, userID, map[string]interface{}{
 		"source":      "video-workflow",
 		"template_id": templateID,
 		"project_id":  projectID,
-		"user_id":     workflowRunUserID(ctx),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create task: %w", err)
@@ -68,7 +69,7 @@ func (s *RunService) CreateRun(ctx context.Context, projectID, templateID, versi
 	run := &WorkflowRun{
 		ID:              "wfr-" + uuid.NewString()[:8],
 		ProjectID:       projectID,
-		UserID:          workflowRunUserID(ctx),
+		UserID:          userID,
 		TemplateID:      templateID,
 		TemplateVersion: version,
 		TaskID:          task.ID,
@@ -90,13 +91,6 @@ func (s *RunService) CreateRun(ctx context.Context, projectID, templateID, versi
 		zap.String("taskId", task.ID),
 	)
 	return run, nil
-}
-
-func workflowRunUserID(ctx context.Context) string {
-	if userID, ok := auth.UserIDFromContext(ctx); ok {
-		return userID
-	}
-	return "default"
 }
 
 func applyRunInputToDAG(dag *model.DAGRequest, input map[string]interface{}) {

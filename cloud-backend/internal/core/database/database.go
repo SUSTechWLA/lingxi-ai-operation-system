@@ -11,6 +11,43 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/config"
 )
 
+const localMCPReplanMigrationSQL = `UPDATE local_jobs
+SET status='FAILED',
+    error_message='MCP_CATALOG_REPLAN_REQUIRED',
+    error_json=jsonb_build_object(
+      'code', 'MCP_CATALOG_REPLAN_REQUIRED',
+      'message', 'Legacy MCP job has no immutable runner catalog binding; create a new plan and dispatch again'
+    ),
+    diagnostics=jsonb_build_object('migration', 'mcp_catalog_binding_v1'),
+    retryable=false,
+    runner_id=NULL,
+    lease_expires_at=NULL,
+    completed_at=NOW(),
+    updated_at=NOW()
+WHERE command='LOCAL_MCP_TOOL_CALL'
+  AND status IN ('PENDING','CLAIMED','RUNNING')
+  AND (
+    BTRIM(COALESCE(catalog_revision,''))='' OR
+    BTRIM(COALESCE(mcp_provider_id,''))='' OR
+    BTRIM(COALESCE(mcp_logical_tool_name,''))='' OR
+    BTRIM(COALESCE(mcp_remote_tool_name,''))=''
+  )`
+
+const localOrphanJobMigrationSQL = `UPDATE local_jobs
+SET status='FAILED',
+    error_message='TASK_OWNER_UNRESOLVED',
+    error_json=jsonb_build_object(
+      'code', 'TASK_OWNER_UNRESOLVED',
+      'message', 'Job owner could not be resolved from durable task state; dispatch again from an authenticated workflow'
+    ),
+    retryable=false,
+    runner_id=NULL,
+    lease_expires_at=NULL,
+    completed_at=NOW(),
+    updated_at=NOW()
+WHERE status IN ('PENDING','CLAIMED','RUNNING')
+  AND BTRIM(COALESCE(user_id,''))=''`
+
 const videoProjectConfigRevisionMigration = `
 	ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS config_revision BIGINT NOT NULL DEFAULT 0;
 	CREATE OR REPLACE FUNCTION enforce_video_project_config_revision_guard() RETURNS trigger AS $$
@@ -45,6 +82,13 @@ const agentTerminalOutboxMigration = `
 		WHERE terminal_event_json IS NOT NULL AND terminal_event_id IS NULL;
 	CREATE INDEX IF NOT EXISTS idx_agent_runs_terminal_pending
 		ON agent_runs(updated_at) WHERE terminal_event_json IS NOT NULL AND terminal_event_delivered_at IS NULL;
+`
+
+const localJobCallbackOutboxMigration = `
+	ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS result_callback_claim_token VARCHAR(96);
+	ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS result_callback_lease_until TIMESTAMPTZ;
+	ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS followup_callback_claim_token VARCHAR(96);
+	ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS followup_callback_lease_until TIMESTAMPTZ;
 `
 
 type migrationExecer interface {
@@ -230,6 +274,8 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    version VARCHAR(50) DEFAULT '1.0',
 		    endpoint TEXT,
 		    timeout_ms INT DEFAULT 30000,
+		    input_schema JSONB DEFAULT '{}',
+		    output_schema JSONB DEFAULT '{}',
 		    parameters JSONB DEFAULT '{}',
 		    output JSONB DEFAULT '{}',
 		    examples JSONB DEFAULT '[]',
@@ -238,6 +284,8 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    updated_at TIMESTAMPTZ DEFAULT NOW()
 		);
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS capabilities JSONB DEFAULT '[]';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS input_schema JSONB DEFAULT '{}';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS output_schema JSONB DEFAULT '{}';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS boundary VARCHAR(32);
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS when_to_use JSONB DEFAULT '[]';
@@ -505,6 +553,12 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		CREATE TABLE IF NOT EXISTS local_jobs (
 		    id VARCHAR(64) PRIMARY KEY,
 		    runner_id VARCHAR(64),
+		    user_id VARCHAR(64),
+		    target_runner_id VARCHAR(64),
+		    catalog_revision VARCHAR(64),
+		    mcp_provider_id VARCHAR(128),
+		    mcp_logical_tool_name VARCHAR(128),
+		    mcp_remote_tool_name VARCHAR(128),
 		    project_id VARCHAR(64) NOT NULL,
 		    task_id VARCHAR(64),
 		    node_id VARCHAR(64),
@@ -524,6 +578,8 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    artifact_policy JSONB DEFAULT '{}',
 		    idempotency_key VARCHAR(128),
 		    attempt INT DEFAULT 1,
+		    result_callback_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+		    followup_callback_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
 		    claimed_at TIMESTAMPTZ,
 		    lease_expires_at TIMESTAMPTZ,
 		    completed_at TIMESTAMPTZ,
@@ -531,6 +587,12 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    updated_at TIMESTAMPTZ DEFAULT NOW()
 		);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS task_id VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS user_id VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS target_runner_id VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS catalog_revision VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS mcp_provider_id VARCHAR(128);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS mcp_logical_tool_name VARCHAR(128);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS mcp_remote_tool_name VARCHAR(128);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS node_id VARCHAR(64);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS tool_name VARCHAR(255);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS message TEXT DEFAULT '';
@@ -541,9 +603,22 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS artifact_policy JSONB DEFAULT '{}';
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS attempt INT DEFAULT 1;
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS result_callback_state VARCHAR(20) NOT NULL DEFAULT 'DELIVERED';
+		ALTER TABLE local_jobs ALTER COLUMN result_callback_state SET DEFAULT 'PENDING';
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS followup_callback_state VARCHAR(20) NOT NULL DEFAULT 'DELIVERED';
+		ALTER TABLE local_jobs ALTER COLUMN followup_callback_state SET DEFAULT 'PENDING';
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+		UPDATE local_jobs lj
+		SET user_id=task.user_id
+		FROM ai_task task
+		WHERE lj.task_id=task.id
+		  AND (lj.user_id IS NULL OR lj.user_id='')
+		  AND task.user_id IS NOT NULL
+		  AND task.user_id<>'';
 		CREATE INDEX IF NOT EXISTS idx_local_jobs_status ON local_jobs(status);
+		CREATE INDEX IF NOT EXISTS idx_local_jobs_user_status ON local_jobs(user_id, status);
+		CREATE INDEX IF NOT EXISTS idx_local_jobs_target_status ON local_jobs(target_runner_id, status);
 		CREATE INDEX IF NOT EXISTS idx_local_jobs_node ON local_jobs(node_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_local_jobs_idempotency ON local_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key <> '';
 
@@ -558,6 +633,15 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	`
 	if _, err := pool.Exec(ctx, localRunnerSchema); err != nil {
 		zap.L().Warn("Failed to run local runner migrations (non-fatal)", zap.Error(err))
+	}
+	if _, err := pool.Exec(ctx, localJobCallbackOutboxMigration); err != nil {
+		zap.L().Fatal("Failed to install required local job callback outbox schema", zap.Error(err))
+	}
+	if _, err := pool.Exec(ctx, localMCPReplanMigrationSQL); err != nil {
+		zap.L().Warn("Failed to quarantine legacy MCP jobs (non-fatal)", zap.Error(err))
+	}
+	if _, err := pool.Exec(ctx, localOrphanJobMigrationSQL); err != nil {
+		zap.L().Warn("Failed to quarantine ownerless local jobs (non-fatal)", zap.Error(err))
 	}
 
 	// Migrate: drop legacy bid tables (业务线已移除)

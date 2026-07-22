@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -62,9 +63,144 @@ func TestLLMPlanner_GeneratesAgentPlanFromTopKTools(t *testing.T) {
 	}
 }
 
+func TestLLMPlannerPromptInjectsCompletePublicRequestContextAndCanonicalToolSchema(t *testing.T) {
+	client := &fakePlannerLLM{response: `{
+		"goal":"research a launch",
+		"domain":"general",
+		"mode":"analysis",
+		"steps":[{"id":"research","intent":"retrieve knowledge","tool":"mcp_research","reason":"matches research capability","arguments":{"query":"launch"},"expectedOutput":["facts"]}],
+		"budget":{"maxToolCalls":1,"maxSteps":1,"maxReplans":0,"maxCostLevel":"low"},
+		"stopPolicy":{"stopWhenEnough":true}
+	}`}
+	canonicalInput := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"query": map[string]interface{}{"$ref": "#/$defs/query"},
+		},
+		"required":             []interface{}{"query"},
+		"additionalProperties": false,
+		"$defs": map[string]interface{}{
+			"query": map[string]interface{}{"type": "string", "oneOf": []interface{}{map[string]interface{}{"enum": []interface{}{"launch", "status"}}}},
+		},
+	}
+	tools := staticToolList{{
+		Name: "mcp_research", Description: "research launch records", Type: "mcp",
+		Capabilities: []string{"general", "research", "script_generation"}, Tags: []string{"research", "launch"},
+		InputSchema:          canonicalInput,
+		OutputSchema:         map[string]interface{}{"type": "object", "properties": map[string]interface{}{"facts": map[string]interface{}{"type": "array"}}},
+		Parameters:           map[string]tool.ParamDef{"query": {Type: "string", Required: true}},
+		Output:               map[string]tool.ParamDef{"facts": {Type: "array"}},
+		Provider:             "knowledge-mcp",
+		ProviderCapabilities: map[string]interface{}{"protocolVersion": "2025-11-25", "supportsProgress": true},
+		CostLevel:            tool.CostLow, RiskLevel: tool.RiskLow,
+	}}
+	planner := NewLLMPlanner(tools, client, LLMPlannerOptions{MaxTools: 1})
+	req := StartRunRequest{
+		Message: "research launch status",
+		Domain:  "general",
+		Mode:    "analysis",
+		Context: map[string]interface{}{
+			"retrievedKnowledge": map[string]interface{}{"facts": []interface{}{"public launch fact"}, "sources": []interface{}{"kb://launch"}},
+			"modelProvider":      map[string]interface{}{"apiKey": "sk-never-prompt", "model": "private-provider"},
+			"projectState":       map[string]interface{}{"stage": "research", "credential": "private-credential", "safe": "visible"},
+			"compactedContext": CompactedContext{
+				ProjectGoal: "verify launch", CurrentStage: "research",
+				HardConstraints: []string{"cite public sources"},
+				RoleMemories:    []RoleMemory{{RoleID: "researcher", Stage: "research", Summary: "previous public findings", KeyDecisions: []string{"use canonical MCP tool"}}},
+			},
+		},
+	}
+
+	if _, err := planner.GeneratePlan(context.Background(), req); err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	parts := strings.SplitN(client.lastUserPrompt, "\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("planner prompt has no JSON payload: %q", client.lastUserPrompt)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(parts[1]), &payload); err != nil {
+		t.Fatalf("decode planner payload: %v", err)
+	}
+	request, _ := payload["userRequest"].(map[string]interface{})
+	if request["message"] != req.Message || request["domain"] != req.Domain || request["mode"] != req.Mode {
+		t.Fatalf("request identity missing from prompt: %#v", request)
+	}
+	contextValue, _ := request["context"].(map[string]interface{})
+	wantContext := map[string]interface{}{
+		"retrievedKnowledge": req.Context["retrievedKnowledge"],
+		"compactedContext":   req.Context["compactedContext"],
+		"projectState":       map[string]interface{}{"stage": "research", "credential": "[REDACTED]", "safe": "visible"},
+	}
+	if !reflectJSONEqual(contextValue, wantContext) {
+		t.Fatalf("complete context was not injected: %#v", contextValue)
+	}
+	if strings.Contains(client.lastUserPrompt, "sk-never-prompt") || strings.Contains(client.lastUserPrompt, "private-credential") {
+		t.Fatalf("planner prompt leaked credentials: %s", client.lastUserPrompt)
+	}
+	candidates, _ := payload["candidateTools"].([]interface{})
+	candidate, _ := candidates[0].(map[string]interface{})
+	if !reflectJSONEqual(candidate["inputSchema"], canonicalInput) {
+		t.Fatalf("canonical schema missing or changed in prompt: %#v", candidate)
+	}
+	providerCapabilities, _ := candidate["providerCapabilities"].(map[string]interface{})
+	if providerCapabilities["protocolVersion"] != "2025-11-25" {
+		t.Fatalf("provider metadata missing from candidate: %#v", candidate)
+	}
+	if strings.Contains(strings.ToLower(client.lastUserPrompt), "chain-of-thought") || strings.Contains(strings.ToLower(client.lastUserPrompt), "raw reasoning") {
+		t.Fatalf("planner prompt must not request hidden reasoning: %s", client.lastUserPrompt)
+	}
+}
+
+func reflectJSONEqual(left, right interface{}) bool {
+	leftJSON, _ := json.Marshal(left)
+	rightJSON, _ := json.Marshal(right)
+	var normalizedLeft interface{}
+	var normalizedRight interface{}
+	_ = json.Unmarshal(leftJSON, &normalizedLeft)
+	_ = json.Unmarshal(rightJSON, &normalizedRight)
+	return reflect.DeepEqual(normalizedLeft, normalizedRight)
+}
+
+func TestCompactToolManifestsReturnsCanonicalIndependentRepairPayload(t *testing.T) {
+	manifest := &tool.ToolManifest{
+		Name:         "mcp_repair_tool",
+		Capabilities: []string{"repair", "mcp_provider"},
+		InputSchema: map[string]interface{}{
+			"type": "object", "$defs": map[string]interface{}{"target": map[string]interface{}{"type": "string"}},
+			"properties": map[string]interface{}{"target": map[string]interface{}{"$ref": "#/$defs/target"}},
+		},
+		OutputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"fixed": map[string]interface{}{"type": "boolean"}}},
+		Parameters:   map[string]tool.ParamDef{"target": {Type: "string", Required: true}},
+		Provider:     "repair-provider",
+		ProviderBinding: &tool.ProviderBinding{
+			ProviderID: "repair-provider", RemoteToolName: "repair", ToolNameMap: map[string]string{"mcp_repair_tool": "repair"},
+		},
+		ProviderCapabilities: map[string]interface{}{"protocolVersion": "2025-11-25"},
+	}
+
+	payload, err := compactToolManifests([]*tool.ToolManifest{manifest})
+	if err != nil {
+		t.Fatalf("compactToolManifests returned error: %v", err)
+	}
+	if len(payload) != 1 || !reflectJSONEqual(payload[0]["inputSchema"], manifest.InputSchema) {
+		t.Fatalf("repair payload lost canonical schema: %#v", payload)
+	}
+	input := payload[0]["inputSchema"].(map[string]interface{})
+	input["type"] = "mutated"
+	capabilities := payload[0]["capabilities"].([]string)
+	capabilities[0] = "mutated"
+	binding := payload[0]["providerBinding"].(*tool.ProviderBinding)
+	binding.ToolNameMap["mcp_repair_tool"] = "mutated"
+	if manifest.InputSchema["type"] != "object" || manifest.Capabilities[0] != "repair" || manifest.ProviderBinding.ToolNameMap["mcp_repair_tool"] != "repair" {
+		t.Fatalf("repair prompt payload aliases manifest registry state: %#v", manifest)
+	}
+}
+
 func TestClientProviderPlannerUsesRequestTextProvider(t *testing.T) {
 	var gotAuthorization string
 	var gotModel string
+	var gotRequestBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {
 			t.Fatalf("unexpected planner path: %s", r.URL.Path)
@@ -75,6 +211,8 @@ func TestClientProviderPlannerUsesRequestTextProvider(t *testing.T) {
 			t.Fatalf("decode planner request: %v", err)
 		}
 		gotModel, _ = body["model"].(string)
+		encodedBody, _ := json.Marshal(body)
+		gotRequestBody = string(encodedBody)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"goal\":\"生成品牌故事视频\",\"domain\":\"video_creation\",\"mode\":\"dynamic_agent\",\"steps\":[{\"id\":\"script_generation\",\"intent\":\"生成口播稿\",\"tool\":\"video_script_generator\",\"arguments\":{\"topic\":\"独立咖啡店品牌故事\"},\"expectedOutput\":[\"script\"],\"produceArtifact\":true}],\"budget\":{\"maxLLMCalls\":1,\"maxToolCalls\":1,\"maxSteps\":1,\"maxReplans\":0,\"maxCostLevel\":\"medium\"},\"stopPolicy\":{\"stopWhenEnough\":true}}"},"finish_reason":"stop"}]}`))
 	}))
@@ -95,6 +233,17 @@ func TestClientProviderPlannerUsesRequestTextProvider(t *testing.T) {
 					"model":   "client-planner-model",
 				},
 			},
+			"retrievedKnowledge": map[string]interface{}{"facts": []interface{}{"public launch fact"}},
+			"projectState": map[string]interface{}{
+				"stage": "draft",
+				"details": map[string]interface{}{
+					"token":         "tok-nested-secret",
+					"authorization": "Bearer nested-secret",
+					"cookie":        "session=private",
+					"safe":          "keep this",
+				},
+			},
+			"apiKey": "sk-top-level-secret",
 		},
 	})
 	if err != nil {
@@ -105,6 +254,14 @@ func TestClientProviderPlannerUsesRequestTextProvider(t *testing.T) {
 	}
 	if gotModel != "client-planner-model" {
 		t.Fatalf("expected planner to use client model, got %q", gotModel)
+	}
+	for _, secret := range []string{"sk-client-planner", "sk-top-level-secret", "tok-nested-secret", "Bearer nested-secret", "session=private"} {
+		if strings.Contains(gotRequestBody, secret) {
+			t.Fatalf("planner request body leaked credential %q: %s", secret, gotRequestBody)
+		}
+	}
+	if !strings.Contains(gotRequestBody, "public launch fact") || !strings.Contains(gotRequestBody, "keep this") {
+		t.Fatalf("planner request body lost safe context: %s", gotRequestBody)
 	}
 	if len(plan.Steps) != 1 || plan.Steps[0].Tool != "video_script_generator" {
 		t.Fatalf("unexpected plan: %#v", plan)

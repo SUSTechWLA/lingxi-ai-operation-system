@@ -337,30 +337,13 @@ func TestRegisterVideoCreationExternalToolsInstallsMCPGenerationRunnerManifest(t
 	}
 }
 
-func TestRegisterVideoCreationExternalToolsInstallsBundledIPAvatarMCPManifest(t *testing.T) {
+func TestRegisterVideoCreationExternalToolsDoesNotInstallUserScopedIPAvatarManifestGlobally(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)
 
 	manifest := registry.GetExternalManifest("ip_avatar_3d.render_talking_video")
-	if manifest == nil {
-		t.Fatal("expected bundled ip_avatar_3d.render_talking_video manifest")
-	}
-	if manifest.Boundary != tool.BoundaryMCPProvider || manifest.ExecutionPlane != tool.ExecutionPlaneLocal {
-		t.Fatalf("unexpected MCP boundary: %#v", manifest)
-	}
-	if !manifest.RequiresUserDevice || manifest.LocalCommand != "LOCAL_MCP_TOOL_CALL" {
-		t.Fatalf("bundled IP avatar must execute through the local MCP runner: %#v", manifest)
-	}
-	if manifest.ProviderBinding == nil ||
-		manifest.ProviderBinding.ProviderID != "ip_avatar_3d" ||
-		manifest.ProviderBinding.RemoteToolName != "render_talking_video" ||
-		manifest.ProviderBinding.LogicalToolName != "ip_avatar_3d.render_talking_video" {
-		t.Fatalf("provider binding = %#v", manifest.ProviderBinding)
-	}
-	for _, name := range []string{"script", "cameraPreset", "presentationMode", "actionSequence"} {
-		if _, ok := manifest.Parameters[name]; !ok {
-			t.Fatalf("missing %s parameter: %#v", name, manifest.Parameters)
-		}
+	if manifest != nil {
+		t.Fatalf("user-scoped runner MCP tool leaked into global registry: %#v", manifest)
 	}
 }
 

@@ -28,6 +28,7 @@ type MCPTool struct {
 	Description  string                 `json:"description,omitempty"`
 	InputSchema  map[string]interface{} `json:"inputSchema,omitempty"`
 	OutputSchema map[string]interface{} `json:"outputSchema,omitempty"`
+	Annotations  map[string]interface{} `json:"annotations,omitempty"`
 }
 
 func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolManifest {
@@ -49,6 +50,13 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 			transport = "stdio"
 		}
 		capabilities := inferMCPCapabilities(provider.ID, logicalName, remoteTool.Description)
+		inputSchema := cloneJSONSchema(remoteTool.InputSchema)
+		outputSchema := cloneJSONSchema(remoteTool.OutputSchema)
+		approvalPolicy := mcpProviderApprovalPolicy(provider.ApprovalMode)
+		approvalMode := strings.ToLower(strings.TrimSpace(provider.ApprovalMode))
+		if approvalMode == "" {
+			approvalMode = ApprovalBeforeExecute
+		}
 		manifests = append(manifests, &ToolManifest{
 			Name:               logicalName,
 			Description:        remoteTool.Description,
@@ -56,8 +64,10 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 			Boundary:           BoundaryMCPProvider,
 			Transport:          &ToolTransport{Type: transport, Endpoint: provider.Endpoint},
 			Timeout:            provider.Timeout,
-			Parameters:         jsonSchemaToParamDefs(remoteTool.InputSchema),
-			Output:             jsonSchemaToParamDefs(remoteTool.OutputSchema),
+			InputSchema:        inputSchema,
+			OutputSchema:       outputSchema,
+			Parameters:         jsonSchemaToParamDefs(inputSchema),
+			Output:             jsonSchemaToParamDefs(outputSchema),
 			Capabilities:       capabilities,
 			Tags:               []string{"mcp", strings.TrimSpace(provider.ID)},
 			CostLevel:          CostMedium,
@@ -65,6 +75,7 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 			RiskLevel:          RiskMedium,
 			SideEffect:         false,
 			Idempotent:         false,
+			ApprovalPolicy:     approvalPolicy,
 			ExecutionPlane:     ExecutionPlaneLocal,
 			RequiresUserDevice: true,
 			ArtifactLocation:   ArtifactLocationLocal,
@@ -82,13 +93,45 @@ func ManifestsFromMCPTools(provider MCPProviderConfig, tools []MCPTool) []*ToolM
 				"enabled":       provider.Enabled,
 				"enabledTools":  append([]string(nil), provider.EnabledTools...),
 				"disabledTools": append([]string(nil), provider.DisabledTools...),
-				"approvalMode":  provider.ApprovalMode,
-				"inputSchema":   remoteTool.InputSchema,
-				"outputSchema":  remoteTool.OutputSchema,
+				"approvalMode":  approvalMode,
+				"inputSchema":   cloneJSONSchema(remoteTool.InputSchema),
+				"outputSchema":  cloneJSONSchema(remoteTool.OutputSchema),
+				"annotations":   cloneJSONSchema(remoteTool.Annotations),
 			},
 		})
 	}
 	return manifests
+}
+
+func mcpProviderApprovalPolicy(mode string) ApprovalPolicy {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case ApprovalNone:
+		return ApprovalPolicy{Mode: ApprovalNone}
+	case "", ApprovalBeforeExecute:
+		return ApprovalPolicy{
+			Required:         true,
+			Mode:             ApprovalBeforeExecute,
+			BlocksDownstream: true,
+			Reason:           "The MCP provider requires user approval before tool execution.",
+		}
+	case ApprovalAlways:
+		return ApprovalPolicy{
+			Required:         true,
+			Mode:             ApprovalAlways,
+			BlocksDownstream: true,
+			Reason:           "The MCP provider requires user approval before and after tool execution.",
+		}
+	default:
+		// Local provider registration rejects unknown values. Keep programmatic
+		// callers conservative as defense in depth rather than silently
+		// downgrading an invalid value to no approval.
+		return ApprovalPolicy{
+			Required:         true,
+			Mode:             ApprovalAlways,
+			BlocksDownstream: true,
+			Reason:           "The MCP provider has an invalid approval mode and requires explicit review.",
+		}
+	}
 }
 
 func logicalMCPToolName(provider MCPProviderConfig, remoteName string) string {

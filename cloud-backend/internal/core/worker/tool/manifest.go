@@ -14,6 +14,8 @@ type ToolManifest struct {
 	Endpoint             string                 `json:"endpoint,omitempty"` // URL for external tools
 	Transport            *ToolTransport         `json:"transport,omitempty"`
 	Timeout              int                    `json:"timeout,omitempty"`
+	InputSchema          map[string]interface{} `json:"inputSchema,omitempty"`
+	OutputSchema         map[string]interface{} `json:"outputSchema,omitempty"`
 	Parameters           map[string]ParamDef    `json:"parameters"`
 	Output               map[string]ParamDef    `json:"output"`
 	Sandbox              bool                   `json:"sandbox"`
@@ -60,6 +62,9 @@ type ProviderBinding struct {
 	ProviderID      string            `json:"providerId,omitempty"`
 	RemoteToolName  string            `json:"remoteToolName,omitempty"`
 	LogicalToolName string            `json:"logicalToolName,omitempty"`
+	TargetRunnerID  string            `json:"targetRunnerId,omitempty"`
+	CatalogRevision string            `json:"catalogRevision,omitempty"`
+	DeviceID        string            `json:"deviceId,omitempty"`
 	ToolPrefix      string            `json:"toolPrefix,omitempty"`
 	ToolNameMap     map[string]string `json:"toolNameMap,omitempty"`
 }

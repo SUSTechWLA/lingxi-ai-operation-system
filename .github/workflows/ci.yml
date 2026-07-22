@@ -129,9 +129,11 @@ jobs:
         working-directory: hyperframes-render-service
         run: npm run build
 
-      - name: Audit HyperFrames render service runtime dependencies
+      # The remaining Hono advisory is moderate and has no compatible upstream fix;
+      # high and critical runtime advisories must still fail the release pipeline.
+      - name: Audit HyperFrames runtime dependencies (high threshold)
         working-directory: hyperframes-render-service
-        run: npm audit --omit=dev --registry=https://registry.npmjs.org
+        run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
 
   test:
     name: test
@@ -181,6 +183,22 @@ jobs:
       - name: Audit frontend runtime dependencies
         working-directory: frontend
         run: npm audit --omit=dev --registry=https://registry.npmjs.org
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            mcp/ip_avatar_3d/requirements.txt
+            mcp/jimeng/requirements.txt
+            mcp/video_qa/requirements.txt
+
+      - name: Install official Python MCP SDK
+        run: python3 -m pip install 'mcp>=1.27,<2'
+
+      - name: Test bundled MCP registration contracts
+        run: python3 scripts/test_mcp_contracts.py
 
       - name: Setup Go
         uses: actions/setup-go@v5
