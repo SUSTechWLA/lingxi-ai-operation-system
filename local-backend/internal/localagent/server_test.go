@@ -946,7 +946,7 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
 		t.Fatalf("create config dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "config", "mcp-providers.json"), []byte(`{"providers":[{"id":"jimeng","label":"JiMeng MCP","transport":"stdio","command":"python3","args":["mcp/jimeng/server.py"],"env":{"DREAMINA_TOKEN":"secret-token"},"enabled":true}]}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "config", "mcp-providers.json"), []byte(`{"providers":[{"id":"jimeng","label":"JiMeng MCP","transport":"stdio","command":"python3","args":["mcp/jimeng/server.py"],"env":{"DREAMINA_TOKEN":"secret-token"},"headers":{"Authorization":"Bearer mcp-header-token-should-redact","X-Workspace":"custom-header-secret-should-redact"},"enabled":true}]}`), 0o644); err != nil {
 		t.Fatalf("write mcp providers: %v", err)
 	}
 	artifactDir := filepath.Join(root, "artifacts", "vp-1", "video-1")
@@ -1061,6 +1061,36 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	if manifest["appVersion"] != "9.9.9-beta" || manifest["gitCommit"] != "abc1234-test" {
 		t.Fatalf("diagnostics manifest should include version and git commit: %#v", manifest)
 	}
+	var mcpStatus struct {
+		Providers []map[string]interface{} `json:"providers"`
+	}
+	if err := json.Unmarshal([]byte(entries["mcp/provider-status.json"]), &mcpStatus); err != nil {
+		t.Fatalf("invalid MCP provider diagnostics: %v", err)
+	}
+	var diagnosticProvider map[string]interface{}
+	for _, provider := range mcpStatus.Providers {
+		if provider["id"] == "jimeng" {
+			diagnosticProvider = provider
+			break
+		}
+	}
+	if diagnosticProvider == nil {
+		t.Fatalf("MCP provider diagnostics missing jimeng provider: %#v", mcpStatus.Providers)
+	}
+	if _, ok := diagnosticProvider["headers"]; ok {
+		t.Fatalf("MCP provider diagnostics must omit header values: %#v", diagnosticProvider)
+	}
+	if diagnosticProvider["hasHeaders"] != true {
+		t.Fatalf("MCP provider diagnostics should preserve hasHeaders metadata: %#v", diagnosticProvider)
+	}
+	headerKeys, ok := diagnosticProvider["headerKeys"].([]interface{})
+	if !ok || len(headerKeys) != 2 || headerKeys[0] != "Authorization" || headerKeys[1] != "X-Workspace" {
+		t.Fatalf("MCP provider diagnostics should preserve sorted headerKeys metadata: %#v", diagnosticProvider["headerKeys"])
+	}
+	env, ok := diagnosticProvider["env"].(map[string]interface{})
+	if !ok || env["DREAMINA_TOKEN"] != "[REDACTED]" {
+		t.Fatalf("MCP provider diagnostics should redact environment tokens: %#v", diagnosticProvider["env"])
+	}
 	recentTaskIDs, ok := manifest["recentTaskIds"].([]interface{})
 	if !ok || len(recentTaskIDs) != 1 || recentTaskIDs[0] != "task-beta-123" {
 		t.Fatalf("diagnostics manifest should include recent task ids, got %#v", manifest["recentTaskIds"])
@@ -1068,6 +1098,8 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	allEntries := strings.Join(mapValues(entries), "\n")
 	if strings.Contains(allEntries, "secret-token") ||
 		strings.Contains(allEntries, "sk-test-secret-should-redact") ||
+		strings.Contains(allEntries, "mcp-header-token-should-redact") ||
+		strings.Contains(allEntries, "custom-header-secret-should-redact") ||
 		strings.Contains(allEntries, "live-token-should-redact") ||
 		strings.Contains(allEntries, "session-cookie-should-redact") ||
 		strings.Contains(allEntries, "json-bearer-should-redact") ||
