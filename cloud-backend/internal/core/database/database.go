@@ -571,6 +571,8 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    artifact_policy JSONB DEFAULT '{}',
 		    idempotency_key VARCHAR(128),
 		    attempt INT DEFAULT 1,
+		    result_callback_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+		    followup_callback_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
 		    claimed_at TIMESTAMPTZ,
 		    lease_expires_at TIMESTAMPTZ,
 		    completed_at TIMESTAMPTZ,
@@ -594,6 +596,10 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS artifact_policy JSONB DEFAULT '{}';
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS attempt INT DEFAULT 1;
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS result_callback_state VARCHAR(20) NOT NULL DEFAULT 'DELIVERED';
+		ALTER TABLE local_jobs ALTER COLUMN result_callback_state SET DEFAULT 'PENDING';
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS followup_callback_state VARCHAR(20) NOT NULL DEFAULT 'DELIVERED';
+		ALTER TABLE local_jobs ALTER COLUMN followup_callback_state SET DEFAULT 'PENDING';
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
 		UPDATE local_jobs lj

@@ -58,6 +58,12 @@ func validateCanonicalStepInput(step AgentStep, manifest *tool.ToolManifest) err
 	if manifest == nil || manifest.InputSchema == nil {
 		return nil
 	}
+	// Compile the unmodified canonical schema first so draft selection and all
+	// standard reference resolution fail closed before runtime references are
+	// deferred below.
+	if _, err := tool.CompileCanonicalSchema(manifest.InputSchema); err != nil {
+		return fmt.Errorf("agent step %s input schema invalid for tool %s: %w", step.ID, step.Tool, err)
+	}
 	schema, err := cloneSchemaMap(manifest.InputSchema)
 	if err != nil {
 		return fmt.Errorf("agent step %s input schema invalid for tool %s: %w", step.ID, step.Tool, err)
@@ -134,39 +140,120 @@ func replaceArgumentPath(value interface{}, path []interface{}, replacement inte
 }
 
 func neutralizeSchemaPath(root map[string]interface{}, path []interface{}) {
-	if len(path) == 0 {
+	replacement, changed := neutralizeSchemaNode(root, root, path, map[string]bool{}, 0)
+	if !changed {
 		return
 	}
-	current := root
-	for index, token := range path {
-		last := index == len(path)-1
-		switch token := token.(type) {
-		case string:
-			properties, _ := current["properties"].(map[string]interface{})
-			if properties == nil {
-				return
+	replacement, err := cloneSchemaMap(replacement)
+	if err != nil {
+		return
+	}
+	for key := range root {
+		delete(root, key)
+	}
+	for key, value := range replacement {
+		root[key] = value
+	}
+}
+
+func neutralizeSchemaNode(root, schema map[string]interface{}, path []interface{}, resolving map[string]bool, depth int) (map[string]interface{}, bool) {
+	if len(path) == 0 {
+		return map[string]interface{}{}, true
+	}
+	if schema == nil || depth > 64 {
+		return schema, false
+	}
+
+	if ref, _ := schema["$ref"].(string); strings.HasPrefix(ref, "#/") && !resolving[ref] {
+		resolved := resolveLocalSchemaRef(root, schema)
+		if resolved != nil {
+			cloned, err := cloneSchemaMap(resolved)
+			if err == nil {
+				if len(schema) > 1 {
+					siblings, siblingErr := cloneSchemaMap(schema)
+					if siblingErr == nil {
+						delete(siblings, "$ref")
+						cloned = map[string]interface{}{"allOf": []interface{}{cloned, siblings}}
+					}
+				}
+				resolving[ref] = true
+				replacement, changed := neutralizeSchemaNode(root, cloned, path, resolving, depth+1)
+				delete(resolving, ref)
+				if changed {
+					return replacement, true
+				}
 			}
-			if last {
-				properties[token] = map[string]interface{}{}
-				return
-			}
-			next, _ := properties[token].(map[string]interface{})
-			if next == nil {
-				return
-			}
-			current = next
-		case int:
-			if last {
-				current["items"] = map[string]interface{}{}
-				return
-			}
-			next, _ := current["items"].(map[string]interface{})
-			if next == nil {
-				return
-			}
-			current = next
 		}
 	}
+
+	changed := false
+	switch token := path[0].(type) {
+	case string:
+		if properties, ok := schema["properties"].(map[string]interface{}); ok {
+			if child, ok := properties[token].(map[string]interface{}); ok {
+				if replacement, childChanged := neutralizeSchemaNode(root, child, path[1:], resolving, depth+1); childChanged {
+					properties[token] = replacement
+					changed = true
+				}
+			}
+		}
+		if additional, ok := schema["additionalProperties"].(map[string]interface{}); ok {
+			if replacement, childChanged := neutralizeSchemaNode(root, additional, path[1:], resolving, depth+1); childChanged {
+				schema["additionalProperties"] = replacement
+				changed = true
+			}
+		}
+	case int:
+		if prefixItems, ok := schema["prefixItems"].([]interface{}); ok && token >= 0 && token < len(prefixItems) {
+			if child, ok := prefixItems[token].(map[string]interface{}); ok {
+				if replacement, childChanged := neutralizeSchemaNode(root, child, path[1:], resolving, depth+1); childChanged {
+					prefixItems[token] = replacement
+					changed = true
+				}
+			}
+		} else if tupleItems, ok := schema["items"].([]interface{}); ok && token >= 0 && token < len(tupleItems) {
+			if child, ok := tupleItems[token].(map[string]interface{}); ok {
+				if replacement, childChanged := neutralizeSchemaNode(root, child, path[1:], resolving, depth+1); childChanged {
+					tupleItems[token] = replacement
+					changed = true
+				}
+			}
+		} else if child, ok := schema["items"].(map[string]interface{}); ok {
+			if replacement, childChanged := neutralizeSchemaNode(root, child, path[1:], resolving, depth+1); childChanged {
+				schema["items"] = replacement
+				changed = true
+			}
+		}
+	}
+
+	for _, keyword := range []string{"allOf", "anyOf", "oneOf"} {
+		branches, ok := schema[keyword].([]interface{})
+		if !ok {
+			continue
+		}
+		branchChanged := false
+		for index, branch := range branches {
+			child, ok := branch.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if replacement, childChanged := neutralizeSchemaNode(root, child, path, resolving, depth+1); childChanged {
+				branches[index] = replacement
+				branchChanged = true
+			}
+		}
+		if branchChanged {
+			changed = true
+			// A runtime value can be the discriminator that makes exactly one
+			// branch valid. Once that value is deferred, retaining oneOf would
+			// create a false static failure when several neutralized branches pass.
+			if keyword == "oneOf" {
+				delete(schema, "oneOf")
+				schema["anyOf"] = branches
+			}
+		}
+	}
+	return schema, changed
 }
 
 func canonicalOutputFieldSchema(manifest *tool.ToolManifest, field string) (map[string]interface{}, bool) {
@@ -195,30 +282,105 @@ func canonicalInputPathSchema(manifest *tool.ToolManifest, path []interface{}) (
 }
 
 func schemaAtPath(root, schema map[string]interface{}, path []interface{}) (map[string]interface{}, bool) {
-	current := resolveLocalSchemaRef(root, schema)
-	if current == nil {
+	candidates := schemaPathCandidates(root, schema, path, map[string]bool{}, 0)
+	if len(candidates) == 0 {
 		return nil, false
 	}
-	for _, token := range path {
-		current = resolveLocalSchemaRef(root, current)
-		switch token := token.(type) {
-		case string:
-			properties, _ := current["properties"].(map[string]interface{})
-			next, _ := properties[token].(map[string]interface{})
-			if next == nil {
-				return nil, false
+	if len(candidates) == 1 {
+		return candidates[0], true
+	}
+	branches := make([]interface{}, len(candidates))
+	for index := range candidates {
+		branches[index] = candidates[index]
+	}
+	return map[string]interface{}{"allOf": branches}, true
+}
+
+func schemaPathCandidates(root, schema map[string]interface{}, path []interface{}, resolving map[string]bool, depth int) []map[string]interface{} {
+	if schema == nil || depth > 64 {
+		return nil
+	}
+	if ref, _ := schema["$ref"].(string); strings.HasPrefix(ref, "#/") && !resolving[ref] {
+		resolved := resolveLocalSchemaRef(root, schema)
+		if resolved != nil {
+			resolving[ref] = true
+			candidates := schemaPathCandidates(root, resolved, path, resolving, depth+1)
+			delete(resolving, ref)
+			if len(schema) == 1 {
+				return candidates
 			}
-			current = next
-		case int:
-			next, _ := current["items"].(map[string]interface{})
-			if next == nil {
-				return nil, false
+			siblings := make(map[string]interface{}, len(schema)-1)
+			for key, value := range schema {
+				if key != "$ref" {
+					siblings[key] = value
+				}
 			}
-			current = next
+			return append(candidates, schemaPathCandidates(root, siblings, path, resolving, depth+1)...)
 		}
 	}
-	current = resolveLocalSchemaRef(root, current)
-	return current, current != nil
+	if len(path) == 0 {
+		return []map[string]interface{}{schema}
+	}
+
+	candidates := make([]map[string]interface{}, 0)
+	switch token := path[0].(type) {
+	case string:
+		if properties, ok := schema["properties"].(map[string]interface{}); ok {
+			if child, ok := properties[token].(map[string]interface{}); ok {
+				candidates = append(candidates, schemaPathCandidates(root, child, path[1:], resolving, depth+1)...)
+			}
+		}
+		if additional, ok := schema["additionalProperties"].(map[string]interface{}); ok {
+			candidates = append(candidates, schemaPathCandidates(root, additional, path[1:], resolving, depth+1)...)
+		}
+	case int:
+		if prefixItems, ok := schema["prefixItems"].([]interface{}); ok && token >= 0 && token < len(prefixItems) {
+			if child, ok := prefixItems[token].(map[string]interface{}); ok {
+				candidates = append(candidates, schemaPathCandidates(root, child, path[1:], resolving, depth+1)...)
+			}
+		} else if tupleItems, ok := schema["items"].([]interface{}); ok && token >= 0 && token < len(tupleItems) {
+			if child, ok := tupleItems[token].(map[string]interface{}); ok {
+				candidates = append(candidates, schemaPathCandidates(root, child, path[1:], resolving, depth+1)...)
+			}
+		} else if child, ok := schema["items"].(map[string]interface{}); ok {
+			candidates = append(candidates, schemaPathCandidates(root, child, path[1:], resolving, depth+1)...)
+		}
+	}
+
+	for _, keyword := range []string{"allOf", "anyOf", "oneOf"} {
+		branches, ok := schema[keyword].([]interface{})
+		if !ok {
+			continue
+		}
+		alternatives := make([]interface{}, 0, len(branches))
+		for _, branch := range branches {
+			child, ok := branch.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			found := schemaPathCandidates(root, child, path, resolving, depth+1)
+			if len(found) == 0 {
+				continue
+			}
+			if keyword == "allOf" {
+				candidates = append(candidates, found...)
+				continue
+			}
+			if len(found) == 1 {
+				alternatives = append(alternatives, found[0])
+			} else {
+				combined := make([]interface{}, len(found))
+				for index := range found {
+					combined[index] = found[index]
+				}
+				alternatives = append(alternatives, map[string]interface{}{"allOf": combined})
+			}
+		}
+		if len(alternatives) > 0 && keyword != "allOf" {
+			candidates = append(candidates, map[string]interface{}{keyword: alternatives})
+		}
+	}
+	return candidates
 }
 
 func resolveLocalSchemaRef(root, schema map[string]interface{}) map[string]interface{} {
@@ -268,6 +430,47 @@ func schemaTypes(schema map[string]interface{}) map[string]bool {
 			for _, value := range enum {
 				if inferred := jsonValueSchemaType(value); inferred != "" {
 					types[inferred] = true
+				}
+			}
+		}
+	}
+	for _, keyword := range []string{"allOf", "anyOf", "oneOf"} {
+		branches, ok := schema[keyword].([]interface{})
+		if !ok {
+			continue
+		}
+		combined := map[string]bool{}
+		haveCombined := false
+		for _, branch := range branches {
+			child, ok := branch.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			childTypes := schemaTypes(child)
+			if len(childTypes) == 0 {
+				continue
+			}
+			if keyword == "allOf" && haveCombined {
+				for name := range combined {
+					if !childTypes[name] {
+						delete(combined, name)
+					}
+				}
+			} else {
+				for name := range childTypes {
+					combined[name] = true
+				}
+			}
+			haveCombined = true
+		}
+		if haveCombined && len(combined) > 0 {
+			if len(types) == 0 {
+				types = combined
+			} else {
+				for name := range types {
+					if !combined[name] {
+						delete(types, name)
+					}
 				}
 			}
 		}

@@ -77,6 +77,22 @@ const jobMutationAccessPredicateSQL = `
      AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
  )`
 
+const terminalCallbackAccessPredicateSQL = `
+ lj.id=$1
+ AND COALESCE(lj.user_id,'')=$2
+ AND COALESCE(lj.runner_id,'')=$3
+ AND (lj.target_runner_id IS NULL OR lj.target_runner_id='' OR lj.target_runner_id=$3)
+ AND lj.status IN ('COMPLETED','FAILED')
+ AND EXISTS (
+   SELECT 1 FROM local_runners lr
+   WHERE lr.id=$3
+     AND COALESCE(lr.user_id,'')=$2
+     AND COALESCE(lr.device_id,'')=$4
+     AND COALESCE(lr.session_id,'')=$5
+     AND lr.status='ONLINE'
+     AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
+ )`
+
 const runnerHeartbeatLeaseExtensionSQL = `UPDATE local_jobs
  SET lease_expires_at=NOW() + INTERVAL '5 minutes', updated_at=NOW()
  WHERE runner_id=$1
@@ -287,6 +303,8 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 		   error_message=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.error_message END,
 		   error_json=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN '{}'::jsonb ELSE local_jobs.error_json END,
 		   diagnostics=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN '{}'::jsonb ELSE local_jobs.diagnostics END,
+		   result_callback_state=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN 'PENDING' ELSE local_jobs.result_callback_state END,
+		   followup_callback_state=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN 'PENDING' ELSE local_jobs.followup_callback_state END,
 		   retryable=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN true ELSE local_jobs.retryable END,
 		   runner_id=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.runner_id END,
 		   claimed_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.claimed_at END,
@@ -295,6 +313,10 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 		   attempt=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN local_jobs.attempt+1 ELSE local_jobs.attempt END,
 		   updated_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.updated_at ELSE local_jobs.updated_at END
 		  WHERE COALESCE(local_jobs.user_id,'')=COALESCE(EXCLUDED.user_id,'')
+		    AND (
+		      local_jobs.status NOT IN ('COMPLETED','FAILED')
+		      OR (local_jobs.result_callback_state='DELIVERED' AND local_jobs.followup_callback_state='DELIVERED')
+		    )
 		  RETURNING *
 		 ) `+localJobSelectPrefix()+` FROM upserted`,
 		jobID, req.UserID, nullableString(req.TargetRunnerID), nullableString(req.CatalogRevision), nullableString(req.MCPProviderID),
@@ -508,7 +530,9 @@ func (s *Service) CompleteJob(ctx context.Context, identity JobMutationIdentity,
 	row := s.pool.QueryRow(ctx,
 		`WITH completed AS (
 		  UPDATE local_jobs lj
-		  SET status='COMPLETED', progress=1.0, output=$6, completed_at=NOW(), updated_at=NOW()
+		  SET status='COMPLETED', progress=1.0, output=$6,
+		      result_callback_state='PENDING', followup_callback_state='PENDING',
+		      completed_at=NOW(), updated_at=NOW()
 		  WHERE `+jobMutationAccessPredicateSQL+`
 		  RETURNING *
 		 ) `+localJobSelectPrefix()+` FROM completed`,
@@ -532,6 +556,7 @@ func (s *Service) FailJob(ctx context.Context, identity JobMutationIdentity, job
 		`WITH failed AS (
 		  UPDATE local_jobs lj
 		  SET status='FAILED', error_message=$6, error_json=$7::jsonb, diagnostics=$8::jsonb, retryable=$9,
+		      result_callback_state='PENDING', followup_callback_state='PENDING',
 		      completed_at=NOW(), updated_at=NOW()
 		  WHERE `+jobMutationAccessPredicateSQL+`
 		  RETURNING *
@@ -545,6 +570,33 @@ func (s *Service) FailJob(ctx context.Context, identity JobMutationIdentity, job
 		return nil, fmt.Errorf("%w: failure authorization, lease, claim, target, or state predicate failed", ErrJobAccessDenied)
 	}
 	return job, err
+}
+
+// MarkCallbackDelivered records one successfully delivered terminal callback.
+// The update repeats the full authenticated runner identity check so a stale or
+// different runner cannot acknowledge another runner's outbox work.
+func (s *Service) MarkCallbackDelivered(ctx context.Context, identity JobMutationIdentity, jobID string, phase CallbackPhase) error {
+	column := ""
+	switch phase {
+	case CallbackPhaseResult:
+		column = "result_callback_state"
+	case CallbackPhaseFollowup:
+		column = "followup_callback_state"
+	default:
+		return fmt.Errorf("unknown callback phase %q", phase)
+	}
+	result, err := s.pool.Exec(ctx,
+		`UPDATE local_jobs lj SET `+column+`='DELIVERED', updated_at=NOW() WHERE `+terminalCallbackAccessPredicateSQL,
+		jobID, strings.TrimSpace(identity.UserID), strings.TrimSpace(identity.RunnerID),
+		strings.TrimSpace(identity.DeviceID), strings.TrimSpace(identity.SessionID),
+	)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("%w: callback authorization, runner identity, target, or terminal state predicate failed", ErrJobAccessDenied)
+	}
+	return nil
 }
 
 func requireSingleJobMutation(result pgconn.CommandTag) error {
@@ -638,8 +690,9 @@ func (s *Service) ValidateRunnerAccess(ctx context.Context, userID, deviceID, ru
 	return nil
 }
 
-// ValidateJobAccess verifies that the job has a live claim owned by the exact
-// user/runner pair and still matches any immutable target binding.
+// ValidateJobAccess verifies either a live claim or an immutable terminal job
+// owned by the exact user/runner pair. Terminal access is used only to replay
+// pending callbacks; CompleteJob and FailJob retain stricter atomic predicates.
 func (s *Service) ValidateJobAccess(ctx context.Context, userID, runnerID, jobID string) error {
 	var allowed bool
 	err := s.pool.QueryRow(ctx,
@@ -649,9 +702,10 @@ func (s *Service) ValidateJobAccess(ctx context.Context, userID, runnerID, jobID
 		    AND COALESCE(lj.user_id,'')=$2
 		    AND COALESCE(lj.runner_id,'')=$3
 		    AND (lj.target_runner_id IS NULL OR lj.target_runner_id='' OR lj.target_runner_id=$3)
-		    AND lj.status IN ('CLAIMED','RUNNING')
-		    AND lj.lease_expires_at IS NOT NULL
-		    AND lj.lease_expires_at > NOW()
+		    AND (
+		      (lj.status IN ('CLAIMED','RUNNING') AND lj.lease_expires_at IS NOT NULL AND lj.lease_expires_at > NOW())
+		      OR lj.status IN ('COMPLETED','FAILED')
+		    )
 		)`, jobID, strings.TrimSpace(userID), strings.TrimSpace(runnerID),
 	).Scan(&allowed)
 	if err != nil {
@@ -668,6 +722,7 @@ func localJobSelectPrefix() string {
 	        mcp_logical_tool_name, mcp_remote_tool_name, project_id, task_id, node_id, tool_name, command, payload,
 	        status, progress, current_step, message, output, error_message, error_json,
 	        diagnostics, retryable, timeout_sec, artifact_policy, idempotency_key, attempt,
+	        result_callback_state, followup_callback_state,
 	        lease_expires_at, created_at, updated_at`
 }
 
@@ -679,19 +734,22 @@ func scanJob(row rowScanner) (*LocalJob, error) {
 	var job LocalJob
 	var runnerID, userID, targetRunnerID, catalogRevision, mcpProviderID, mcpLogicalToolName, mcpRemoteToolName *string
 	var taskID, nodeID, toolName, payload, currentStep, message, output, errorMessage, idempotencyKey *string
-	var status string
+	var status, resultCallbackState, followupCallbackState string
 	var errorJSON, diagnosticsJSON, artifactPolicyJSON []byte
 	err := row.Scan(
 		&job.ID, &runnerID, &userID, &targetRunnerID, &catalogRevision, &mcpProviderID,
 		&mcpLogicalToolName, &mcpRemoteToolName, &job.ProjectID, &taskID, &nodeID, &toolName, &job.Command, &payload,
 		&status, &job.Progress, &currentStep, &message, &output, &errorMessage, &errorJSON,
 		&diagnosticsJSON, &job.Retryable, &job.TimeoutSec, &artifactPolicyJSON, &idempotencyKey,
-		&job.Attempt, &job.LeaseExpiresAt, &job.CreatedAt, &job.UpdatedAt,
+		&job.Attempt, &resultCallbackState, &followupCallbackState,
+		&job.LeaseExpiresAt, &job.CreatedAt, &job.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	job.Status = JobStatus(status)
+	job.ResultCallbackState = CallbackState(resultCallbackState)
+	job.FollowupCallbackState = CallbackState(followupCallbackState)
 	if runnerID != nil {
 		job.RunnerID = *runnerID
 	}

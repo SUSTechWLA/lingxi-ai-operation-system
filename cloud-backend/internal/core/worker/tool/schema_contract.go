@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"container/list"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -13,15 +14,86 @@ import (
 )
 
 const (
-	maxCanonicalSchemaBytes = 256 << 10
-	maxCanonicalSchemaDepth = 64
+	maxCanonicalSchemaBytes        = 256 << 10
+	maxCanonicalSchemaDepth        = 64
+	maxCanonicalSchemaCacheEntries = 256
+	maxCanonicalSchemaCacheBytes   = 8 << 20
 )
 
 var (
 	ErrInputSchemaInvalid  = errors.New("input schema invalid")
 	ErrOutputSchemaInvalid = errors.New("output schema invalid")
-	canonicalSchemaCache   sync.Map
+	ErrMCPToolResult       = errors.New("MCP tool returned an error result")
+	canonicalSchemaCache   = newCanonicalValidatorCache()
 )
+
+type cachedCanonicalValidator struct {
+	hash      [sha256.Size]byte
+	validator *CanonicalSchemaValidator
+	size      int
+}
+
+type canonicalValidatorCache struct {
+	mu      sync.Mutex
+	entries map[[sha256.Size]byte]*list.Element
+	lru     *list.List
+	bytes   int
+}
+
+func newCanonicalValidatorCache() *canonicalValidatorCache {
+	return &canonicalValidatorCache{entries: make(map[[sha256.Size]byte]*list.Element), lru: list.New()}
+}
+
+func (c *canonicalValidatorCache) get(hash [sha256.Size]byte) (*CanonicalSchemaValidator, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	element, ok := c.entries[hash]
+	if !ok {
+		return nil, false
+	}
+	c.lru.MoveToFront(element)
+	return element.Value.(*cachedCanonicalValidator).validator, true
+}
+
+func (c *canonicalValidatorCache) put(hash [sha256.Size]byte, validator *CanonicalSchemaValidator, size int) *CanonicalSchemaValidator {
+	if size > maxCanonicalSchemaCacheBytes {
+		return validator
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if element, ok := c.entries[hash]; ok {
+		c.lru.MoveToFront(element)
+		return element.Value.(*cachedCanonicalValidator).validator
+	}
+	element := c.lru.PushFront(&cachedCanonicalValidator{hash: hash, validator: validator, size: size})
+	c.entries[hash] = element
+	c.bytes += size
+	for len(c.entries) > maxCanonicalSchemaCacheEntries || c.bytes > maxCanonicalSchemaCacheBytes {
+		oldest := c.lru.Back()
+		if oldest == nil {
+			break
+		}
+		entry := oldest.Value.(*cachedCanonicalValidator)
+		delete(c.entries, entry.hash)
+		c.bytes -= entry.size
+		c.lru.Remove(oldest)
+	}
+	return validator
+}
+
+func (c *canonicalValidatorCache) stats() (int, int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.entries), c.bytes
+}
+
+func (c *canonicalValidatorCache) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = make(map[[sha256.Size]byte]*list.Element)
+	c.lru.Init()
+	c.bytes = 0
+}
 
 type ContractValidationError struct {
 	Kind  error
@@ -82,8 +154,8 @@ func CompileCanonicalSchema(schema map[string]interface{}) (*CanonicalSchemaVali
 		return nil, fmt.Errorf("canonical schema exceeds %d bytes", maxCanonicalSchemaBytes)
 	}
 	hash := sha256.Sum256(encoded)
-	if cached, ok := canonicalSchemaCache.Load(hash); ok {
-		return cached.(*CanonicalSchemaValidator), nil
+	if cached, ok := canonicalSchemaCache.get(hash); ok {
+		return cached, nil
 	}
 	var parsed jsonschema.Schema
 	if err := json.Unmarshal(encoded, &parsed); err != nil {
@@ -94,8 +166,7 @@ func CompileCanonicalSchema(schema map[string]interface{}) (*CanonicalSchemaVali
 		return nil, fmt.Errorf("resolve canonical schema (remote references are disabled): %w", err)
 	}
 	validator := &CanonicalSchemaValidator{resolved: resolved}
-	actual, _ := canonicalSchemaCache.LoadOrStore(hash, validator)
-	return actual.(*CanonicalSchemaValidator), nil
+	return canonicalSchemaCache.put(hash, validator, len(encoded)), nil
 }
 
 func supportedCanonicalSchemaDraft(draft string) bool {
@@ -218,18 +289,53 @@ func ValidateManifestOutput(manifest *ToolManifest, output interface{}) error {
 }
 
 func ValidateLocalJobOutput(manifest *ToolManifest, output map[string]interface{}) error {
-	if manifest == nil || manifest.OutputSchema == nil {
+	if manifest == nil {
 		return nil
 	}
 	value := interface{}(output)
 	if isMCPContractManifest(manifest) {
+		if isError, _ := output["isError"].(bool); isError {
+			return &ContractValidationError{Kind: ErrMCPToolResult, Field: "content", Err: errors.New(mcpErrorContent(output))}
+		}
+		if manifest.OutputSchema == nil {
+			return nil
+		}
 		structured, ok := output["structuredContent"]
 		if !ok || structured == nil {
 			return &ContractValidationError{Kind: ErrOutputSchemaInvalid, Field: "structuredContent", Err: errors.New("MCP result is missing structuredContent")}
 		}
 		value = structured
 	}
+	if manifest.OutputSchema == nil {
+		return nil
+	}
 	return ValidateManifestOutput(manifest, value)
+}
+
+func mcpErrorContent(output map[string]interface{}) string {
+	parts := make([]string, 0)
+	appendText := func(value interface{}) {
+		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+			parts = append(parts, strings.TrimSpace(text))
+		}
+	}
+	switch content := output["content"].(type) {
+	case []interface{}:
+		for _, item := range content {
+			switch block := item.(type) {
+			case map[string]interface{}:
+				appendText(block["text"])
+			case string:
+				appendText(block)
+			}
+		}
+	case string:
+		appendText(content)
+	}
+	if len(parts) == 0 {
+		return "MCP tool returned isError=true"
+	}
+	return strings.Join(parts, "; ")
 }
 
 func isMCPContractManifest(manifest *ToolManifest) bool {

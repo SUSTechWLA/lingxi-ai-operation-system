@@ -239,6 +239,23 @@ func TestResolveSingleRefReadsStructuredStdoutContent(t *testing.T) {
 	}
 }
 
+func TestResolveSingleRefReadsDottedNestedOutputPath(t *testing.T) {
+	ctx := context.Background()
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID: "task_001-produce_exec", TaskID: "task_001",
+		Output: map[string]interface{}{
+			"structuredContent": map[string]interface{}{
+				"asset": map[string]interface{}{"identity": map[string]interface{}{"id": "asset-42"}},
+			},
+		},
+	})
+
+	resolved, ok := resolveSingleRef(ctx, nodeRepo, "task_001", "{{produce.output.asset.identity.id}}")
+	if !ok || resolved != "asset-42" {
+		t.Fatalf("nested dotted output did not resolve: value=%#v ok=%v", resolved, ok)
+	}
+}
+
 func TestResolveSingleRefPrefersFuzzyExecNodeWithRequestedField(t *testing.T) {
 	ctx := context.Background()
 	nodeRepo := newFakeNodeRepo(

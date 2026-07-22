@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -447,7 +448,11 @@ func (ne *NodeExecutor) executeTool(
 		case toolResult := <-resultCh:
 			if toolResult.Success {
 				if err := tool.ValidateLocalJobOutput(contractManifest, toolResult.Data); err != nil {
-					result = executor.ExecutionResult{ExitCode: 1, Error: fmt.Sprintf("%s: %v", outputSchemaInvalidCode, err)}
+					code := outputSchemaInvalidCode
+					if errors.Is(err, tool.ErrMCPToolResult) {
+						code = mcpToolErrorCode
+					}
+					result = executor.ExecutionResult{ExitCode: 1, Error: fmt.Sprintf("%s: %v", code, err)}
 				} else {
 					output, _ := json.Marshal(toolResult.Data)
 					result = executor.ExecutionResult{ExitCode: 0, Stdout: output}
@@ -1061,14 +1066,15 @@ func resolveString(ctx context.Context, nodeRepo repository.NodeRepo, taskID str
 }
 
 func lookupOutputField(output map[string]interface{}, field string) (interface{}, bool) {
-	if output == nil || strings.TrimSpace(field) == "" {
+	field = strings.TrimSpace(field)
+	if output == nil || field == "" {
 		return nil, false
 	}
-	if val, ok := output[field]; ok {
+	if val, ok := lookupNestedOutputField(output, field); ok {
 		return val, true
 	}
 	for _, payload := range structuredOutputPayloads(output) {
-		if val, ok := payload[field]; ok {
+		if val, ok := lookupNestedOutputField(payload, field); ok {
 			return val, true
 		}
 	}
@@ -1081,6 +1087,24 @@ func lookupOutputField(output map[string]interface{}, field string) (interface{}
 		}
 	}
 	return nil, false
+}
+
+func lookupNestedOutputField(output map[string]interface{}, field string) (interface{}, bool) {
+	if value, ok := output[field]; ok {
+		return value, true
+	}
+	var current interface{} = output
+	for _, segment := range strings.Split(field, ".") {
+		object, ok := current.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[segment]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
 }
 
 func lookupArtifactOutputField(output map[string]interface{}, field string) (interface{}, bool) {
@@ -1189,6 +1213,9 @@ func nonEmptyString(value interface{}) (string, bool) {
 
 func structuredOutputPayloads(output map[string]interface{}) []map[string]interface{} {
 	payloads := make([]map[string]interface{}, 0, 4)
+	if structured := parseObjectPayload(output["structuredContent"]); structured != nil {
+		payloads = append(payloads, structured)
+	}
 	if parsed := parseObjectPayload(output["stdout"]); parsed != nil {
 		payloads = append(payloads, parsed)
 		if embedded := parseObjectPayload(parsed["content"]); embedded != nil {

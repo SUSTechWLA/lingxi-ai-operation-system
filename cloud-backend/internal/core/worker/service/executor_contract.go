@@ -12,6 +12,7 @@ const (
 	inputReferenceUnresolvedCode = "INPUT_REFERENCE_UNRESOLVED"
 	inputSchemaInvalidCode       = "INPUT_SCHEMA_INVALID"
 	outputSchemaInvalidCode      = "OUTPUT_SCHEMA_INVALID"
+	mcpToolErrorCode             = "MCP_TOOL_ERROR"
 )
 
 func (ne *NodeExecutor) executionContractManifest(toolName string, parameters map[string]interface{}, fallback *tool.ToolManifest) *tool.ToolManifest {

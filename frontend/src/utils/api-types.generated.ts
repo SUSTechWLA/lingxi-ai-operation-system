@@ -215,7 +215,7 @@ export interface CandidateRestoreRequest {
 /**  */
 // ClaimJobResponse
 export interface ClaimJobResponse {
-  job: { artifactPolicy?: { location: string; syncFileToCloud: boolean; syncMetadataToCloud: boolean }; attempt?: number; catalogRevision?: string; command: string; createdAt?: string; currentStep?: string; diagnostics?: Record<string, unknown>; error?: Record<string, unknown>; errorMessage?: string; idempotencyKey?: string; jobId: string; leaseExpiresAt?: string | null; mcpLogicalToolName?: string; mcpProviderId?: string; mcpRemoteToolName?: string; message?: string; nodeId?: string; output?: Record<string, unknown>; payload: Record<string, unknown>; progress?: number; projectId: string; retryable?: boolean; runnerId?: string; status?: string; targetRunnerId?: string; taskId?: string; timeoutSec?: number; toolName?: string; updatedAt?: string; userId?: string } | null;
+  job: { artifactPolicy?: { location: string; syncFileToCloud: boolean; syncMetadataToCloud: boolean }; attempt?: number; catalogRevision?: string; command: string; createdAt?: string; currentStep?: string; diagnostics?: Record<string, unknown>; error?: Record<string, unknown>; errorMessage?: string; followupCallbackState?: string; idempotencyKey?: string; jobId: string; leaseExpiresAt?: string | null; mcpLogicalToolName?: string; mcpProviderId?: string; mcpRemoteToolName?: string; message?: string; nodeId?: string; output?: Record<string, unknown>; payload: Record<string, unknown>; progress?: number; projectId: string; resultCallbackState?: string; retryable?: boolean; runnerId?: string; status?: string; targetRunnerId?: string; taskId?: string; timeoutSec?: number; toolName?: string; updatedAt?: string; userId?: string } | null;
 }
 
 /**  */

@@ -167,6 +167,40 @@ func TestExecuteNodeValidatesDelegatedMCPStructuredContent(t *testing.T) {
 	}
 }
 
+func TestExecuteNodeFailsDelegatedMCPIsErrorWithoutOutputSchema(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	bridge := &contractExecutableTool{
+		name: "external",
+		result: tool.SuccessResult(map[string]interface{}{
+			"content": []interface{}{map[string]interface{}{"type": "text", "text": "remote renderer failed"}},
+			"isError": true,
+		}),
+	}
+	registry.Register(bridge)
+	registry.RegisterExternal(&tool.ToolManifest{
+		Name: "mcp_error", Boundary: tool.BoundaryMCPProvider,
+		InputSchema: map[string]interface{}{"type": "object"},
+	})
+	publisher := &recordingEventPublisher{}
+	nodeExecutor := NewNodeExecutor(registry, publisher, config.WorkerConfig{}, nil, nil, newFakeNodeRepo())
+
+	nodeExecutor.ExecuteNode(context.Background(), eventbus.Event{
+		TaskID: "task-1", NodeID: "mcp-error", Type: string(model.NodeTypeTool),
+		Payload: map[string]interface{}{
+			"tool": "external", "parameters": map[string]interface{}{"tool": "mcp_error"},
+			"contractArguments": map[string]interface{}{},
+		},
+	})
+
+	failure := publisher.lastStatus(model.NodeFailed)
+	if bridge.calls != 1 || !strings.Contains(failure.ErrorMessage, "MCP_TOOL_ERROR") || !strings.Contains(failure.ErrorMessage, "remote renderer failed") {
+		t.Fatalf("delegated MCP error result was not preserved: calls=%d failure=%#v", bridge.calls, failure)
+	}
+	if publisher.hasStatus(model.NodeSuccess) {
+		t.Fatal("MCP isError result published success")
+	}
+}
+
 func TestExecuteNodeResolvesReferencesInsideTypedContainers(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	executable := &contractExecutableTool{

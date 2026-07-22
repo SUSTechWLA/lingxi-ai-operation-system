@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -258,6 +259,7 @@ func TestHandlerTerminalCompletionReportDoesNotReenterOnSuccess(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := &fakeRunnerService{job: &LocalJob{
 		ID: "local_job_failed", NodeID: "node_failed", ToolName: "native_contract", Status: JobFailed,
+		ResultCallbackState: CallbackDelivered, FollowupCallbackState: CallbackDelivered,
 	}}
 	sink := &fakeNodeResultSink{}
 	router := gin.New()
@@ -274,6 +276,148 @@ func TestHandlerTerminalCompletionReportDoesNotReenterOnSuccess(t *testing.T) {
 	}
 	if service.completeJobID != "" || sink.successNodeID != "" {
 		t.Fatalf("FAILED completion reentered success: service=%#v sink=%#v", service, sink)
+	}
+}
+
+func TestHandlerLateCompletionReplaysPendingFailureWithoutFlippingStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_failed_pending", NodeID: "node_failed_pending", Status: JobFailed,
+		ErrorMessage: "durable failure", ResultCallbackState: CallbackPending, FollowupCallbackState: CallbackPending,
+	}}
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_failed_pending/complete", bytes.NewBufferString(`{"success":true,"output":{"result":"late"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK || service.completeJobID != "" || service.job.Status != JobFailed {
+		t.Fatalf("late completion mutated failure: status=%d service=%#v", res.Code, service)
+	}
+	if sink.successCalls != 0 || sink.failureCalls != 1 || sink.failureError != "durable failure" {
+		t.Fatalf("late completion did not replay failure callback: %#v", sink)
+	}
+}
+
+func TestHandlerReplaysPendingCompletedCallbackAndDeliveredRetryIsNoOp(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{ID: "local_job_replay", NodeID: "node_replay", Status: JobRunning}}
+	sink := &fakeNodeResultSink{successErrors: []error{errors.New("temporary sink failure")}}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_replay/complete", bytes.NewBufferString(`{"success":true,"output":{"assetId":"asset-1"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+	if res := request(); res.Code != http.StatusInternalServerError {
+		t.Fatalf("first callback failure status=%d body=%s", res.Code, res.Body.String())
+	}
+	if service.job.Status != JobCompleted || service.job.ResultCallbackState != CallbackPending {
+		t.Fatalf("terminal result was not persisted pending callback: %#v", service.job)
+	}
+	if res := request(); res.Code != http.StatusOK {
+		t.Fatalf("pending callback replay status=%d body=%s", res.Code, res.Body.String())
+	}
+	if sink.successCalls != 2 || service.job.ResultCallbackState != CallbackDelivered || service.job.FollowupCallbackState != CallbackDelivered {
+		t.Fatalf("pending callback not delivered exactly on retry: calls=%d job=%#v", sink.successCalls, service.job)
+	}
+	if res := request(); res.Code != http.StatusOK || sink.successCalls != 2 {
+		t.Fatalf("delivered retry was not no-op: status=%d calls=%d", res.Code, sink.successCalls)
+	}
+}
+
+func TestHandlerReplaysOnlyPendingArtifactCallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{ID: "local_job_artifact", NodeID: "node_artifact", Status: JobRunning}}
+	sink := &fakeNodeResultSink{}
+	artifactCalls := 0
+	router := gin.New()
+	NewHandler(service, sink).WithArtifactSyncCallback(func(_ context.Context, _ *LocalJob, output map[string]interface{}) error {
+		artifactCalls++
+		if output["assetId"] != "asset-2" {
+			t.Fatalf("artifact replay lost persisted output: %#v", output)
+		}
+		if artifactCalls == 1 {
+			return errors.New("artifact index unavailable")
+		}
+		return nil
+	}).RegisterRoutes(router)
+
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_artifact/complete", bytes.NewBufferString(`{"success":true,"output":{"assetId":"asset-2"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+	if res := request(); res.Code != http.StatusInternalServerError {
+		t.Fatalf("first artifact callback status=%d body=%s", res.Code, res.Body.String())
+	}
+	if res := request(); res.Code != http.StatusOK {
+		t.Fatalf("artifact callback replay status=%d body=%s", res.Code, res.Body.String())
+	}
+	if sink.successCalls != 1 || artifactCalls != 2 {
+		t.Fatalf("successful sink was replayed with artifact: sink=%d artifact=%d", sink.successCalls, artifactCalls)
+	}
+}
+
+func TestHandlerReplaysPendingFailureCallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{ID: "local_job_failure", NodeID: "node_failure", Status: JobRunning}}
+	sink := &fakeNodeResultSink{failureErrors: []error{errors.New("temporary failure sink error")}}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_failure/fail", bytes.NewBufferString(`{"success":false,"error":{"code":"BROKEN","message":"preserved failure"},"retryable":true}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+	if res := request(); res.Code != http.StatusInternalServerError {
+		t.Fatalf("first failure callback status=%d body=%s", res.Code, res.Body.String())
+	}
+	if res := request(); res.Code != http.StatusOK {
+		t.Fatalf("failure callback replay status=%d body=%s", res.Code, res.Body.String())
+	}
+	if sink.failureCalls != 2 || sink.failureError != "preserved failure" || service.job.ResultCallbackState != CallbackDelivered {
+		t.Fatalf("failure replay lost state/content: sink=%#v job=%#v", sink, service.job)
+	}
+}
+
+func TestHandlerTreatsMCPIsErrorAsFailureWithoutOutputSchema(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{job: &LocalJob{ID: "local_job_mcp_error", NodeID: "node_mcp_error", ToolName: "mcp_error", Status: JobRunning}}
+	registry := tool.NewToolRegistry()
+	registry.RegisterExternal(&tool.ToolManifest{Name: "mcp_error", Boundary: tool.BoundaryMCPProvider})
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).WithToolManifestResolver(registry).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_mcp_error/complete", bytes.NewBufferString(`{
+		"success":true,"output":{"isError":true,"content":[{"type":"text","text":"remote renderer failed"}]}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	if res.Code != http.StatusUnprocessableEntity || service.completeJobID != "" || service.failReq.Error["code"] != "MCP_TOOL_ERROR" {
+		t.Fatalf("MCP isError was not failed: status=%d body=%s service=%#v", res.Code, res.Body.String(), service)
+	}
+	if !strings.Contains(sink.failureError, "remote renderer failed") {
+		t.Fatalf("MCP content was not preserved for failure sink: %#v", sink)
 	}
 }
 
@@ -410,6 +554,7 @@ type fakeRunnerService struct {
 	job           *LocalJob
 	heartbeats    []HeartbeatRequest
 	mutationErr   error
+	markErr       error
 }
 
 func (f *fakeRunnerService) RegisterRunner(_ context.Context, req RegisterRunnerRequest) (*RegisterRunnerResponse, error) {
@@ -439,13 +584,39 @@ func (f *fakeRunnerService) ReportProgress(_ context.Context, _ JobMutationIdent
 func (f *fakeRunnerService) CompleteJob(_ context.Context, _ JobMutationIdentity, jobID string, req CompleteJobRequest) (*LocalJob, error) {
 	f.completeJobID = jobID
 	f.completeReq = req
+	if f.mutationErr == nil && f.job != nil {
+		f.job.Status = JobCompleted
+		f.job.Output = req.Output
+		f.job.ResultCallbackState = CallbackPending
+		f.job.FollowupCallbackState = CallbackPending
+	}
 	return f.job, f.mutationErr
 }
 
 func (f *fakeRunnerService) FailJob(_ context.Context, _ JobMutationIdentity, jobID string, req FailJobRequest) (*LocalJob, error) {
 	f.failJobID = jobID
 	f.failReq = req
+	if f.mutationErr == nil && f.job != nil {
+		f.job.Status = JobFailed
+		f.job.Error = req.Error
+		f.job.ErrorMessage = errorMessageFromMap(req.Error)
+		f.job.ResultCallbackState = CallbackPending
+		f.job.FollowupCallbackState = CallbackPending
+	}
 	return f.job, f.mutationErr
+}
+
+func (f *fakeRunnerService) MarkCallbackDelivered(_ context.Context, _ JobMutationIdentity, _ string, phase CallbackPhase) error {
+	if f.markErr != nil || f.job == nil {
+		return f.markErr
+	}
+	switch phase {
+	case CallbackPhaseResult:
+		f.job.ResultCallbackState = CallbackDelivered
+	case CallbackPhaseFollowup:
+		f.job.FollowupCallbackState = CallbackDelivered
+	}
+	return nil
 }
 
 func (f *fakeRunnerService) GetJob(_ context.Context, _ string) (*LocalJob, error) {
@@ -469,17 +640,33 @@ type fakeNodeResultSink struct {
 	progressValue  float64
 	progressStep   string
 	progressMsg    string
+	successCalls   int
+	failureCalls   int
+	successErrors  []error
+	failureErrors  []error
 }
 
 func (f *fakeNodeResultSink) OnSuccess(_ context.Context, nodeID string, output map[string]interface{}) error {
+	f.successCalls++
 	f.successNodeID = nodeID
 	f.successOutput = output
+	if len(f.successErrors) > 0 {
+		err := f.successErrors[0]
+		f.successErrors = f.successErrors[1:]
+		return err
+	}
 	return nil
 }
 
 func (f *fakeNodeResultSink) OnFailure(_ context.Context, nodeID string, errorMessage string) error {
+	f.failureCalls++
 	f.failureNodeID = nodeID
 	f.failureError = errorMessage
+	if len(f.failureErrors) > 0 {
+		err := f.failureErrors[0]
+		f.failureErrors = f.failureErrors[1:]
+		return err
+	}
 	return nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -19,6 +20,7 @@ type RunnerService interface {
 	ReportProgress(ctx context.Context, identity JobMutationIdentity, jobID string, req ProgressRequest) error
 	CompleteJob(ctx context.Context, identity JobMutationIdentity, jobID string, req CompleteJobRequest) (*LocalJob, error)
 	FailJob(ctx context.Context, identity JobMutationIdentity, jobID string, req FailJobRequest) (*LocalJob, error)
+	MarkCallbackDelivered(ctx context.Context, identity JobMutationIdentity, jobID string, phase CallbackPhase) error
 	GetJob(ctx context.Context, jobID string) (*LocalJob, error)
 	ValidateRunnerAccess(ctx context.Context, userID, deviceID, runnerID, sessionID string) error
 	ValidateJobAccess(ctx context.Context, userID, runnerID, jobID string) error
@@ -183,8 +185,12 @@ func (h *Handler) completeJob(c *gin.Context) {
 		return
 	}
 	if jobContext != nil && (jobContext.Status == JobCompleted || jobContext.Status == JobFailed) {
-		// Terminal reports are idempotent no-ops. In particular, a late complete
-		// report must never turn a failed node into success.
+		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, jobContext); err != nil {
+			writeError(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		// The persisted terminal status is authoritative. A late complete report
+		// may replay pending callbacks, but can never turn FAILED into success.
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 		return
 	}
@@ -200,22 +206,9 @@ func (h *Handler) completeJob(c *gin.Context) {
 		writeJobMutationError(c, err)
 		return
 	}
-	if jobContext == nil {
-		jobContext = job
-	}
-	req.Output = normalizeCompleteJobOutput(jobContext, req.Output)
-	if h.results != nil && job != nil && job.NodeID != "" {
-		if err := h.results.OnSuccess(c.Request.Context(), job.NodeID, req.Output); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	// Sync artifact metadata to cloud ArtifactIndex after local job completion.
-	if h.artifactSyncCallback != nil && jobContext != nil {
-		if err := h.artifactSyncCallback(c.Request.Context(), jobContext, req.Output); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
-			return
-		}
+	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -235,11 +228,15 @@ func (h *Handler) manifestForLocalJob(job *LocalJob) *tool.ToolManifest {
 }
 
 func (h *Handler) failInvalidCompletion(c *gin.Context, identity JobMutationIdentity, job *LocalJob, validationErr error) {
-	message := "OUTPUT_SCHEMA_INVALID: " + validationErr.Error()
+	code := "OUTPUT_SCHEMA_INVALID"
+	if errors.Is(validationErr, tool.ErrMCPToolResult) {
+		code = "MCP_TOOL_ERROR"
+	}
+	message := code + ": " + validationErr.Error()
 	failed, err := h.service.FailJob(c.Request.Context(), identity, c.Param("jobId"), FailJobRequest{
 		Success: false,
 		Error: map[string]interface{}{
-			"code":    "OUTPUT_SCHEMA_INVALID",
+			"code":    code,
 			"message": message,
 		},
 		Retryable: true,
@@ -248,22 +245,62 @@ func (h *Handler) failInvalidCompletion(c *gin.Context, identity JobMutationIden
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if job == nil {
-		job = failed
-	}
-	if h.results != nil && job != nil && job.NodeID != "" {
-		if err := h.results.OnFailure(c.Request.Context(), job.NodeID, message); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	if h.jobFailureCallback != nil && job != nil {
-		if err := h.jobFailureCallback(c.Request.Context(), job, message); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
-			return
-		}
+	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, failed); err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeError(c, http.StatusUnprocessableEntity, message)
+}
+
+func (h *Handler) deliverTerminalCallbacks(ctx context.Context, identity JobMutationIdentity, job *LocalJob) error {
+	if job == nil || (job.Status != JobCompleted && job.Status != JobFailed) {
+		return nil
+	}
+	if job.ResultCallbackState != CallbackDelivered {
+		if job.Status == JobCompleted {
+			if h.results != nil && job.NodeID != "" {
+				if err := h.results.OnSuccess(ctx, job.NodeID, job.Output); err != nil {
+					return err
+				}
+			}
+		} else if h.results != nil && job.NodeID != "" {
+			if err := h.results.OnFailure(ctx, job.NodeID, terminalFailureMessage(job)); err != nil {
+				return err
+			}
+		}
+		if err := h.service.MarkCallbackDelivered(ctx, identity, job.ID, CallbackPhaseResult); err != nil {
+			return err
+		}
+		job.ResultCallbackState = CallbackDelivered
+	}
+	if job.FollowupCallbackState != CallbackDelivered {
+		if job.Status == JobCompleted {
+			if h.artifactSyncCallback != nil {
+				if err := h.artifactSyncCallback(ctx, job, job.Output); err != nil {
+					return err
+				}
+			}
+		} else if h.jobFailureCallback != nil {
+			if err := h.jobFailureCallback(ctx, job, terminalFailureMessage(job)); err != nil {
+				return err
+			}
+		}
+		if err := h.service.MarkCallbackDelivered(ctx, identity, job.ID, CallbackPhaseFollowup); err != nil {
+			return err
+		}
+		job.FollowupCallbackState = CallbackDelivered
+	}
+	return nil
+}
+
+func terminalFailureMessage(job *LocalJob) string {
+	if job == nil {
+		return "local job failed"
+	}
+	if strings.TrimSpace(job.ErrorMessage) != "" {
+		return job.ErrorMessage
+	}
+	return errorMessageFromMap(job.Error)
 }
 
 func normalizeCompleteJobOutput(job *LocalJob, output map[string]interface{}) map[string]interface{} {
@@ -388,22 +425,27 @@ func (h *Handler) failJob(c *gin.Context) {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}
+	existing, err := h.service.GetJob(c.Request.Context(), c.Param("jobId"))
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if existing != nil && (existing.Status == JobCompleted || existing.Status == JobFailed) {
+		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, existing); err != nil {
+			writeError(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
 	job, err := h.service.FailJob(c.Request.Context(), identity, c.Param("jobId"), req)
 	if err != nil {
 		writeJobMutationError(c, err)
 		return
 	}
-	if h.results != nil && job != nil && job.NodeID != "" {
-		if err := h.results.OnFailure(c.Request.Context(), job.NodeID, errorMessageFromMap(req.Error)); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	if h.jobFailureCallback != nil && job != nil {
-		if err := h.jobFailureCallback(c.Request.Context(), job, errorMessageFromMap(req.Error)); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
-			return
-		}
+	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

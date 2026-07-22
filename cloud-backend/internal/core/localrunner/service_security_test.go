@@ -41,6 +41,18 @@ func TestJobMutationPredicateAtomicallyBindsOwnerRunnerTargetSessionLeaseAndStat
 	}
 }
 
+func TestTerminalCallbackPredicateRetainsExactRunnerIsolation(t *testing.T) {
+	predicate := strings.ToLower(terminalCallbackAccessPredicateSQL)
+	for _, required := range []string{
+		"lj.user_id", "lj.runner_id", "lj.target_runner_id", "lj.status in ('completed','failed')",
+		"local_runners", "lr.user_id", "lr.device_id", "lr.session_id", "lr.status='online'", "lr.last_heartbeat",
+	} {
+		if !strings.Contains(strings.ReplaceAll(predicate, " ", ""), strings.ReplaceAll(required, " ", "")) {
+			t.Fatalf("terminal callback predicate missing %q: %s", required, predicate)
+		}
+	}
+}
+
 func TestRequireSingleJobMutationRejectsZeroRows(t *testing.T) {
 	if err := requireSingleJobMutation(pgconn.NewCommandTag("UPDATE 0")); err == nil {
 		t.Fatal("zero-row authorization/mutation must be rejected")

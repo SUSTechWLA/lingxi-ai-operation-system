@@ -149,6 +149,95 @@ func TestPlanGuardReferenceNeutralizationDoesNotWeakenSharedLocalRef(t *testing.
 	}
 }
 
+func TestPlanGuardReferenceNeutralizationHandlesCompositionsAndPrefixItemsWithoutWeakeningSiblings(t *testing.T) {
+	catalog := staticToolCatalog{
+		"producer": {Name: "producer", OutputSchema: map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{
+				"assetId":  map[string]interface{}{"type": "string"},
+				"assetIds": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+			},
+		}},
+		"consumer": {Name: "consumer", InputSchema: map[string]interface{}{
+			"$defs": map[string]interface{}{
+				"request": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"ids": map[string]interface{}{}, "mode": map[string]interface{}{},
+					},
+					"allOf": []interface{}{
+						map[string]interface{}{"properties": map[string]interface{}{"ids": map[string]interface{}{
+							"type": "array", "prefixItems": []interface{}{map[string]interface{}{"type": "string"}, map[string]interface{}{"type": "integer"}},
+						}}},
+						map[string]interface{}{"properties": map[string]interface{}{"mode": map[string]interface{}{
+							"anyOf": []interface{}{map[string]interface{}{"const": "fast"}, map[string]interface{}{"const": "quality"}},
+						}}},
+					},
+					"required": []interface{}{"ids", "mode"}, "additionalProperties": false,
+				},
+			},
+			"type": "object", "properties": map[string]interface{}{"request": map[string]interface{}{"$ref": "#/$defs/request"}},
+			"required": []interface{}{"request"}, "additionalProperties": false,
+		}},
+	}
+
+	valid := &AgentPlan{Steps: []AgentStep{
+		{ID: "produce", Tool: "producer", Arguments: map[string]interface{}{}},
+		{ID: "consume", Tool: "consumer", DependsOn: []string{"produce"}, Arguments: map[string]interface{}{
+			"request": map[string]interface{}{"ids": []interface{}{"{{produce.output.assetId}}", float64(7)}, "mode": "quality"},
+		}},
+	}}
+	if err := NewPlanGuard(catalog, nil).Validate(valid); err != nil {
+		t.Fatalf("composed reference was rejected: %v", err)
+	}
+
+	invalidSibling := &AgentPlan{Steps: []AgentStep{
+		{ID: "produce", Tool: "producer", Arguments: map[string]interface{}{}},
+		{ID: "consume", Tool: "consumer", DependsOn: []string{"produce"}, Arguments: map[string]interface{}{
+			"request": map[string]interface{}{"ids": []interface{}{"{{produce.output.assetId}}", "not-an-integer"}, "mode": "invalid"},
+		}},
+	}}
+	if err := NewPlanGuard(catalog, nil).Validate(invalidSibling); err == nil {
+		t.Fatal("neutralizing one prefix item skipped invalid literal siblings")
+	}
+
+	typeMismatch := &AgentPlan{Steps: []AgentStep{
+		{ID: "produce", Tool: "producer", Arguments: map[string]interface{}{}},
+		{ID: "consume", Tool: "consumer", DependsOn: []string{"produce"}, Arguments: map[string]interface{}{
+			"request": map[string]interface{}{"ids": []interface{}{"{{produce.output.assetIds}}", float64(7)}, "mode": "quality"},
+		}},
+	}}
+	if err := NewPlanGuard(catalog, nil).Validate(typeMismatch); err == nil || !strings.Contains(err.Error(), "incompatible") {
+		t.Fatalf("composed prefixItems type mismatch was not rejected: %v", err)
+	}
+}
+
+func TestPlanGuardReferenceNeutralizationDefersOneOfDiscriminatorOnly(t *testing.T) {
+	catalog := staticToolCatalog{
+		"producer": {Name: "producer", OutputSchema: map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{"value": map[string]interface{}{"type": "string"}},
+		}},
+		"consumer": {Name: "consumer", InputSchema: map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{
+				"value": map[string]interface{}{"oneOf": []interface{}{map[string]interface{}{"type": "string"}, map[string]interface{}{"type": "integer"}}},
+				"label": map[string]interface{}{"type": "string", "minLength": float64(1)},
+			}, "required": []interface{}{"value", "label"}, "additionalProperties": false,
+		}},
+	}
+	valid := &AgentPlan{Steps: []AgentStep{
+		{ID: "produce", Tool: "producer"},
+		{ID: "consume", Tool: "consumer", DependsOn: []string{"produce"}, Arguments: map[string]interface{}{
+			"value": "{{produce.output.value}}", "label": "kept",
+		}},
+	}}
+	if err := NewPlanGuard(catalog, nil).Validate(valid); err != nil {
+		t.Fatalf("oneOf reference should defer runtime discriminator: %v", err)
+	}
+	valid.Steps[1].Arguments["label"] = ""
+	if err := NewPlanGuard(catalog, nil).Validate(valid); err == nil {
+		t.Fatal("oneOf reference neutralization weakened a literal sibling")
+	}
+}
+
 func TestPlanGuardRejectsSourceTypeUnionWiderThanTarget(t *testing.T) {
 	catalog := staticToolCatalog{
 		"producer": {Name: "producer", OutputSchema: map[string]interface{}{

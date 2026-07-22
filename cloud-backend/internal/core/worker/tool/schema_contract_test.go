@@ -2,6 +2,7 @@ package tool
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -102,6 +103,36 @@ func TestCanonicalSchemaValidatorCacheIsConcurrent(t *testing.T) {
 	}
 }
 
+func TestCanonicalSchemaValidatorCacheIsBoundedAndInvalidSchemasAreNotCached(t *testing.T) {
+	canonicalSchemaCache.reset()
+	t.Cleanup(canonicalSchemaCache.reset)
+
+	for index := 0; index < maxCanonicalSchemaCacheEntries*2; index++ {
+		if _, err := CompileCanonicalSchema(map[string]interface{}{
+			"type": "object", "title": fmt.Sprintf("schema-%04d", index),
+		}); err != nil {
+			t.Fatalf("compile schema %d: %v", index, err)
+		}
+	}
+	entries, bytes := canonicalSchemaCache.stats()
+	if entries > maxCanonicalSchemaCacheEntries || bytes > maxCanonicalSchemaCacheBytes {
+		t.Fatalf("cache exceeded bounds: entries=%d bytes=%d", entries, bytes)
+	}
+
+	beforeEntries, beforeBytes := canonicalSchemaCache.stats()
+	for index := 0; index < 32; index++ {
+		_, _ = CompileCanonicalSchema(map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{
+				"remote": map[string]interface{}{"$ref": fmt.Sprintf("https://schemas.example.invalid/%d.json", index)},
+			},
+		})
+	}
+	afterEntries, afterBytes := canonicalSchemaCache.stats()
+	if afterEntries != beforeEntries || afterBytes != beforeBytes {
+		t.Fatalf("invalid schemas grew cache: before=(%d,%d) after=(%d,%d)", beforeEntries, beforeBytes, afterEntries, afterBytes)
+	}
+}
+
 func TestCanonicalSchemaValidatorBoundsSchemaBytesAndDepth(t *testing.T) {
 	_, err := CompileCanonicalSchema(map[string]interface{}{
 		"type": "object", "description": strings.Repeat("x", maxCanonicalSchemaBytes),
@@ -139,6 +170,23 @@ func TestValidateLocalJobOutputUsesMCPStructuredContentAndNativeRoot(t *testing.
 	native := &ToolManifest{Name: "native_asset", Boundary: BoundaryLocalNative, OutputSchema: schema}
 	if err := ValidateLocalJobOutput(native, map[string]interface{}{"assetId": "asset-2"}); err != nil {
 		t.Fatalf("native output rejected: %v", err)
+	}
+}
+
+func TestValidateLocalJobOutputRejectsMCPIsErrorWithoutOutputSchemaAndPreservesContent(t *testing.T) {
+	manifest := &ToolManifest{Name: "mcp_error", Boundary: BoundaryMCPProvider}
+	err := ValidateLocalJobOutput(manifest, map[string]interface{}{
+		"isError": true,
+		"content": []interface{}{
+			map[string]interface{}{"type": "text", "text": "renderer unavailable"},
+			map[string]interface{}{"type": "text", "text": "retry later"},
+		},
+	})
+	if !errors.Is(err, ErrMCPToolResult) {
+		t.Fatalf("isError result was not rejected as MCP failure: %v", err)
+	}
+	if !strings.Contains(err.Error(), "renderer unavailable") || !strings.Contains(err.Error(), "retry later") {
+		t.Fatalf("MCP content was not preserved: %v", err)
 	}
 }
 
