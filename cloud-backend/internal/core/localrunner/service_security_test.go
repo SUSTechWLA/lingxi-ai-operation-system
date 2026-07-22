@@ -53,6 +53,33 @@ func TestTerminalCallbackPredicateRetainsExactRunnerIsolation(t *testing.T) {
 	}
 }
 
+func TestTerminalCallbackClaimSQLIsAtomicAndLeaseRecoverable(t *testing.T) {
+	query := strings.ToLower(claimTerminalCallbackSQL("result"))
+	for _, required := range []string{
+		"result_callback_state='processing'", "result_callback_claim_token=$6",
+		"result_callback_lease_until", "result_callback_state='pending'",
+		"result_callback_lease_until < now()", terminalCallbackAccessPredicateSQL,
+	} {
+		if !strings.Contains(strings.ReplaceAll(query, " ", ""), strings.ReplaceAll(strings.ToLower(required), " ", "")) {
+			t.Fatalf("atomic callback claim missing %q: %s", required, query)
+		}
+	}
+}
+
+func TestTerminalCallbackAckAndReleaseAreAuthorizedOnlyByClaimToken(t *testing.T) {
+	for _, query := range []string{ackTerminalCallbackSQL("result"), releaseTerminalCallbackSQL("result")} {
+		normalized := strings.ToLower(query)
+		for _, required := range []string{"result_callback_claim_token=$2", "result_callback_state='processing'"} {
+			if !strings.Contains(strings.ReplaceAll(normalized, " ", ""), strings.ReplaceAll(required, " ", "")) {
+				t.Fatalf("callback token mutation missing %q: %s", required, query)
+			}
+		}
+		if strings.Contains(normalized, "session_id") || strings.Contains(normalized, "local_runners") {
+			t.Fatalf("post-claim ack/release must not depend on a revocable runner session: %s", query)
+		}
+	}
+}
+
 func TestRequireSingleJobMutationRejectsZeroRows(t *testing.T) {
 	if err := requireSingleJobMutation(pgconn.NewCommandTag("UPDATE 0")); err == nil {
 		t.Fatal("zero-row authorization/mutation must be rejected")

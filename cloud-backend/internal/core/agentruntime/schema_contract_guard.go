@@ -189,15 +189,17 @@ func neutralizeSchemaNode(root, schema map[string]interface{}, path []interface{
 	changed := false
 	switch token := path[0].(type) {
 	case string:
+		declared := false
 		if properties, ok := schema["properties"].(map[string]interface{}); ok {
 			if child, ok := properties[token].(map[string]interface{}); ok {
+				declared = true
 				if replacement, childChanged := neutralizeSchemaNode(root, child, path[1:], resolving, depth+1); childChanged {
 					properties[token] = replacement
 					changed = true
 				}
 			}
 		}
-		if additional, ok := schema["additionalProperties"].(map[string]interface{}); ok {
+		if additional, ok := schema["additionalProperties"].(map[string]interface{}); ok && !declared {
 			if replacement, childChanged := neutralizeSchemaNode(root, additional, path[1:], resolving, depth+1); childChanged {
 				schema["additionalProperties"] = replacement
 				changed = true
@@ -244,13 +246,6 @@ func neutralizeSchemaNode(root, schema map[string]interface{}, path []interface{
 		}
 		if branchChanged {
 			changed = true
-			// A runtime value can be the discriminator that makes exactly one
-			// branch valid. Once that value is deferred, retaining oneOf would
-			// create a false static failure when several neutralized branches pass.
-			if keyword == "oneOf" {
-				delete(schema, "oneOf")
-				schema["anyOf"] = branches
-			}
 		}
 	}
 	return schema, changed
@@ -325,12 +320,14 @@ func schemaPathCandidates(root, schema map[string]interface{}, path []interface{
 	candidates := make([]map[string]interface{}, 0)
 	switch token := path[0].(type) {
 	case string:
+		declared := false
 		if properties, ok := schema["properties"].(map[string]interface{}); ok {
 			if child, ok := properties[token].(map[string]interface{}); ok {
+				declared = true
 				candidates = append(candidates, schemaPathCandidates(root, child, path[1:], resolving, depth+1)...)
 			}
 		}
-		if additional, ok := schema["additionalProperties"].(map[string]interface{}); ok {
+		if additional, ok := schema["additionalProperties"].(map[string]interface{}); ok && !declared {
 			candidates = append(candidates, schemaPathCandidates(root, additional, path[1:], resolving, depth+1)...)
 		}
 	case int:

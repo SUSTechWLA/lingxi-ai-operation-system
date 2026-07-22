@@ -256,3 +256,57 @@ func TestPlanGuardRejectsSourceTypeUnionWiderThanTarget(t *testing.T) {
 		t.Fatalf("wider source union error = %v", err)
 	}
 }
+
+func TestPlanGuardDeclaredDynamicPropertyDoesNotNeutralizeAdditionalProperties(t *testing.T) {
+	catalog := staticToolCatalog{
+		"producer": {Name: "producer", OutputSchema: map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{"value": map[string]interface{}{"type": "string"}},
+		}},
+		"consumer": {Name: "consumer", InputSchema: map[string]interface{}{
+			"type":                 "object",
+			"properties":           map[string]interface{}{"declared": map[string]interface{}{"type": "string"}},
+			"required":             []interface{}{"declared"},
+			"additionalProperties": map[string]interface{}{"type": "integer"},
+		}},
+	}
+	valid := &AgentPlan{Steps: []AgentStep{
+		{ID: "produce", Tool: "producer"},
+		{ID: "consume", Tool: "consumer", DependsOn: []string{"produce"}, Arguments: map[string]interface{}{
+			"declared": "{{produce.output.value}}", "extra": float64(7),
+		}},
+	}}
+	if err := NewPlanGuard(catalog, nil).Validate(valid); err != nil {
+		t.Fatalf("declared property incorrectly combined with additionalProperties: %v", err)
+	}
+	valid.Steps[1].Arguments["extra"] = "invalid-extra"
+	if err := NewPlanGuard(catalog, nil).Validate(valid); err == nil {
+		t.Fatal("dynamic declared property neutralized invalid additional literal")
+	}
+}
+
+func TestPlanGuardDoesNotDowngradeAmbiguousOneOfToAnyOf(t *testing.T) {
+	inputSchema := map[string]interface{}{
+		"oneOf": []interface{}{
+			map[string]interface{}{"type": "object", "properties": map[string]interface{}{"value": map[string]interface{}{"type": "string", "minLength": float64(1)}}, "required": []interface{}{"value"}},
+			map[string]interface{}{"type": "object", "properties": map[string]interface{}{"value": map[string]interface{}{"type": "string", "maxLength": float64(5)}}, "required": []interface{}{"value"}},
+		},
+	}
+	catalog := staticToolCatalog{
+		"producer": {Name: "producer", OutputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"value": map[string]interface{}{"type": "string"}}}},
+		"consumer": {Name: "consumer", InputSchema: inputSchema},
+	}
+	plan := &AgentPlan{Steps: []AgentStep{
+		{ID: "produce", Tool: "producer"},
+		{ID: "consume", Tool: "consumer", DependsOn: []string{"produce"}, Arguments: map[string]interface{}{"value": "{{produce.output.value}}"}},
+	}}
+	if err := NewPlanGuard(catalog, nil).Validate(plan); err == nil {
+		t.Fatal("ambiguous oneOf dynamic reference passed Guard after both branches were neutralized")
+	}
+	validator, err := tool.CompileCanonicalSchema(inputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validator.Validate(map[string]interface{}{"value": "abc"}); err == nil {
+		t.Fatal("differential fixture must be invalid at canonical runtime because two oneOf branches match")
+	}
+}

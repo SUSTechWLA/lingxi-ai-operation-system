@@ -104,7 +104,7 @@ func TestPendingReportStoreList(t *testing.T) {
 	}
 }
 
-func TestPendingReportStoreListSkipsStaleReports(t *testing.T) {
+func TestPendingReportStoreRetainsOldUnconfirmedReports(t *testing.T) {
 	root := t.TempDir()
 	store := NewPendingReportStore(root)
 
@@ -128,18 +128,18 @@ func TestPendingReportStoreListSkipsStaleReports(t *testing.T) {
 		t.Fatalf("chtimes: %v", err)
 	}
 
-	// List should skip and remove the stale report
+	// Age alone is not terminal confirmation. The report must remain replayable
+	// until the cloud accepts it.
 	reports, err := store.List()
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(reports) != 0 {
-		t.Fatalf("expected 0 reports after stale cleanup, got %d", len(reports))
+	if len(reports) != 1 {
+		t.Fatalf("expected old unconfirmed report to remain, got %d", len(reports))
 	}
 
-	// File should be removed
-	if _, err := os.Stat(reportPath); !os.IsNotExist(err) {
-		t.Fatal("expected stale report file to be removed")
+	if _, err := os.Stat(reportPath); err != nil {
+		t.Fatalf("old unconfirmed report was deleted: %v", err)
 	}
 }
 

@@ -37,6 +37,17 @@ func TestAgentTerminalOutboxMigrationIncludesEventAndClaimIdentity(t *testing.T)
 	}
 }
 
+func TestLocalJobCallbackOutboxMigrationIncludesAtomicClaimState(t *testing.T) {
+	for _, column := range []string{
+		"result_callback_claim_token", "result_callback_lease_until",
+		"followup_callback_claim_token", "followup_callback_lease_until",
+	} {
+		if !strings.Contains(localJobCallbackOutboxMigration, column) {
+			t.Fatalf("local callback outbox migration missing %s", column)
+		}
+	}
+}
+
 type revisionMigrationExecer struct{ err error }
 
 func (e revisionMigrationExecer) Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error) {

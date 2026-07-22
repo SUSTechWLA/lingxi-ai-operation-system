@@ -84,6 +84,13 @@ const agentTerminalOutboxMigration = `
 		ON agent_runs(updated_at) WHERE terminal_event_json IS NOT NULL AND terminal_event_delivered_at IS NULL;
 `
 
+const localJobCallbackOutboxMigration = `
+	ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS result_callback_claim_token VARCHAR(96);
+	ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS result_callback_lease_until TIMESTAMPTZ;
+	ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS followup_callback_claim_token VARCHAR(96);
+	ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS followup_callback_lease_until TIMESTAMPTZ;
+`
+
 type migrationExecer interface {
 	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
 }
@@ -626,6 +633,9 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	`
 	if _, err := pool.Exec(ctx, localRunnerSchema); err != nil {
 		zap.L().Warn("Failed to run local runner migrations (non-fatal)", zap.Error(err))
+	}
+	if _, err := pool.Exec(ctx, localJobCallbackOutboxMigration); err != nil {
+		zap.L().Fatal("Failed to install required local job callback outbox schema", zap.Error(err))
 	}
 	if _, err := pool.Exec(ctx, localMCPReplanMigrationSQL); err != nil {
 		zap.L().Warn("Failed to quarantine legacy MCP jobs (non-fatal)", zap.Error(err))

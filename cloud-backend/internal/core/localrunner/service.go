@@ -28,6 +28,10 @@ var ErrJobAccessDenied = fmt.Errorf("job access denied")
 // ErrJobAlreadyCompleted is returned when attempting to mutate a completed job.
 var ErrJobAlreadyCompleted = fmt.Errorf("job already completed")
 
+// ErrCallbackBusy means another request currently owns a durable callback
+// lease. Callers must retain their pending report and retry later.
+var ErrCallbackBusy = fmt.Errorf("terminal callback is being delivered")
+
 // Service manages local runner registration and job lifecycle.
 type Service struct {
 	pool *pgxpool.Pool
@@ -92,6 +96,53 @@ const terminalCallbackAccessPredicateSQL = `
      AND lr.status='ONLINE'
      AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
  )`
+
+const terminalCallbackLeaseDuration = 2 * time.Minute
+
+func callbackPhaseColumns(phase CallbackPhase) (state, token, lease string, err error) {
+	switch phase {
+	case CallbackPhaseResult:
+		return "result_callback_state", "result_callback_claim_token", "result_callback_lease_until", nil
+	case CallbackPhaseFollowup:
+		return "followup_callback_state", "followup_callback_claim_token", "followup_callback_lease_until", nil
+	default:
+		return "", "", "", fmt.Errorf("unknown callback phase %q", phase)
+	}
+}
+
+func claimTerminalCallbackSQL(prefix string) string {
+	state := prefix + "_callback_state"
+	token := prefix + "_callback_claim_token"
+	lease := prefix + "_callback_lease_until"
+	return `WITH claimed AS (
+	 UPDATE local_jobs lj
+	 SET ` + state + `='PROCESSING', ` + token + `=$6, ` + lease + `=$7, updated_at=NOW()
+	 WHERE ` + terminalCallbackAccessPredicateSQL + `
+	   AND (` + state + `='PENDING' OR (` + state + `='PROCESSING' AND (` + lease + ` IS NULL OR ` + lease + ` < NOW())))
+	 RETURNING 1
+	)
+	SELECT EXISTS(SELECT 1 FROM claimed), COALESCE((
+	 SELECT ` + state + ` FROM local_jobs lj WHERE ` + terminalCallbackAccessPredicateSQL + `
+	), '')`
+}
+
+func ackTerminalCallbackSQL(prefix string) string {
+	state := prefix + "_callback_state"
+	token := prefix + "_callback_claim_token"
+	lease := prefix + "_callback_lease_until"
+	return `UPDATE local_jobs
+	 SET ` + state + `='DELIVERED', ` + token + `=NULL, ` + lease + `=NULL, updated_at=NOW()
+	 WHERE id=$1 AND ` + token + `=$2 AND ` + state + `='PROCESSING' AND status IN ('COMPLETED','FAILED')`
+}
+
+func releaseTerminalCallbackSQL(prefix string) string {
+	state := prefix + "_callback_state"
+	token := prefix + "_callback_claim_token"
+	lease := prefix + "_callback_lease_until"
+	return `UPDATE local_jobs
+	 SET ` + state + `='PENDING', ` + token + `=NULL, ` + lease + `=NULL, updated_at=NOW()
+	 WHERE id=$1 AND ` + token + `=$2 AND ` + state + `='PROCESSING' AND status IN ('COMPLETED','FAILED')`
+}
 
 const runnerHeartbeatLeaseExtensionSQL = `UPDATE local_jobs
  SET lease_expires_at=NOW() + INTERVAL '5 minutes', updated_at=NOW()
@@ -575,29 +626,72 @@ func (s *Service) FailJob(ctx context.Context, identity JobMutationIdentity, job
 	return job, err
 }
 
-// MarkCallbackDelivered records one successfully delivered terminal callback.
-// The update repeats the full authenticated runner identity check so a stale or
-// different runner cannot acknowledge another runner's outbox work.
-func (s *Service) MarkCallbackDelivered(ctx context.Context, identity JobMutationIdentity, jobID string, phase CallbackPhase) error {
-	column := ""
-	switch phase {
-	case CallbackPhaseResult:
-		column = "result_callback_state"
-	case CallbackPhaseFollowup:
-		column = "followup_callback_state"
-	default:
-		return fmt.Errorf("unknown callback phase %q", phase)
+// ClaimTerminalCallback atomically leases one terminal callback phase after
+// validating the authenticated runner. PROCESSING claims are recoverable after
+// their bounded lease expires.
+func (s *Service) ClaimTerminalCallback(ctx context.Context, identity JobMutationIdentity, jobID string, phase CallbackPhase) (*TerminalCallbackClaim, error) {
+	state, _, _, err := callbackPhaseColumns(phase)
+	if err != nil {
+		return nil, err
 	}
-	result, err := s.pool.Exec(ctx,
-		`UPDATE local_jobs lj SET `+column+`='DELIVERED', updated_at=NOW() WHERE `+terminalCallbackAccessPredicateSQL,
+	prefix := strings.TrimSuffix(state, "_callback_state")
+	token := "callback_" + uuid.NewString()
+	var claimed bool
+	var observedState string
+	err = s.pool.QueryRow(ctx, claimTerminalCallbackSQL(prefix),
 		jobID, strings.TrimSpace(identity.UserID), strings.TrimSpace(identity.RunnerID),
-		strings.TrimSpace(identity.DeviceID), strings.TrimSpace(identity.SessionID),
-	)
+		strings.TrimSpace(identity.DeviceID), strings.TrimSpace(identity.SessionID), token,
+		time.Now().Add(terminalCallbackLeaseDuration),
+	).Scan(&claimed, &observedState)
+	if err != nil {
+		return nil, err
+	}
+	if claimed {
+		return &TerminalCallbackClaim{Token: token, IdempotencyKey: callbackIdempotencyKey(jobID, phase)}, nil
+	}
+	switch CallbackState(observedState) {
+	case CallbackDelivered:
+		return &TerminalCallbackClaim{Delivered: true, IdempotencyKey: callbackIdempotencyKey(jobID, phase)}, nil
+	case CallbackProcessing:
+		return nil, ErrCallbackBusy
+	default:
+		return nil, fmt.Errorf("%w: callback authorization, runner identity, target, or terminal state predicate failed", ErrJobAccessDenied)
+	}
+}
+
+func callbackIdempotencyKey(jobID string, phase CallbackPhase) string {
+	return "local-job:" + strings.TrimSpace(jobID) + ":callback:" + strings.ToLower(string(phase))
+}
+
+// AcknowledgeTerminalCallback uses only the unguessable claim token. A runner
+// session being rotated after a successful claim cannot make acknowledgement
+// fail and cause duplicate delivery.
+func (s *Service) AcknowledgeTerminalCallback(ctx context.Context, jobID string, phase CallbackPhase, token string) error {
+	state, _, _, err := callbackPhaseColumns(phase)
+	if err != nil {
+		return err
+	}
+	result, err := s.pool.Exec(ctx, ackTerminalCallbackSQL(strings.TrimSuffix(state, "_callback_state")), jobID, token)
 	if err != nil {
 		return err
 	}
 	if result.RowsAffected() != 1 {
-		return fmt.Errorf("%w: callback authorization, runner identity, target, or terminal state predicate failed", ErrJobAccessDenied)
+		return fmt.Errorf("callback acknowledgement token is stale or invalid")
+	}
+	return nil
+}
+
+func (s *Service) ReleaseTerminalCallback(ctx context.Context, jobID string, phase CallbackPhase, token string) error {
+	state, _, _, err := callbackPhaseColumns(phase)
+	if err != nil {
+		return err
+	}
+	result, err := s.pool.Exec(ctx, releaseTerminalCallbackSQL(strings.TrimSuffix(state, "_callback_state")), jobID, token)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("callback release token is stale or invalid")
 	}
 	return nil
 }

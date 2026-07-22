@@ -296,6 +296,31 @@ func TestResolveSingleRefReadsDottedNestedOutputPath(t *testing.T) {
 	}
 }
 
+func TestResolveSingleRefDottedPathPrefersNestedAndMCPStructuredContent(t *testing.T) {
+	ctx := context.Background()
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID: "task_001-produce_exec", TaskID: "task_001",
+		Output: map[string]interface{}{
+			"asset.identity.id": "flat-wrapper-cheat",
+			"optional":          "wrapper-cheat",
+			"asset":             map[string]interface{}{"identity": map[string]interface{}{"id": "wrapper-id"}},
+			"structuredContent": map[string]interface{}{
+				"asset.identity.id": "flat-structured-cheat",
+				"asset":             map[string]interface{}{"identity": map[string]interface{}{"id": "structured-id"}},
+			},
+		},
+	})
+
+	resolved, ok := resolveSingleRef(ctx, nodeRepo, "task_001", "{{produce.output.asset.identity.id}}")
+	if !ok || resolved != "structured-id" {
+		t.Fatalf("canonical nested MCP field should beat flat dotted/wrapper fields: value=%#v ok=%v", resolved, ok)
+	}
+	resolved, ok = resolveSingleRef(ctx, nodeRepo, "task_001", "{{produce.output.optional}}")
+	if ok {
+		t.Fatalf("MCP structuredContent missing field must not fall back to wrapper: value=%#v", resolved)
+	}
+}
+
 func TestResolveSingleRefPrefersFuzzyExecNodeWithRequestedField(t *testing.T) {
 	ctx := context.Background()
 	nodeRepo := newFakeNodeRepo(

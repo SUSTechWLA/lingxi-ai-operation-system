@@ -20,7 +20,9 @@ type RunnerService interface {
 	ReportProgress(ctx context.Context, identity JobMutationIdentity, jobID string, req ProgressRequest) error
 	CompleteJob(ctx context.Context, identity JobMutationIdentity, jobID string, req CompleteJobRequest) (*LocalJob, error)
 	FailJob(ctx context.Context, identity JobMutationIdentity, jobID string, req FailJobRequest) (*LocalJob, error)
-	MarkCallbackDelivered(ctx context.Context, identity JobMutationIdentity, jobID string, phase CallbackPhase) error
+	ClaimTerminalCallback(ctx context.Context, identity JobMutationIdentity, jobID string, phase CallbackPhase) (*TerminalCallbackClaim, error)
+	AcknowledgeTerminalCallback(ctx context.Context, jobID string, phase CallbackPhase, token string) error
+	ReleaseTerminalCallback(ctx context.Context, jobID string, phase CallbackPhase, token string) error
 	GetJob(ctx context.Context, jobID string) (*LocalJob, error)
 	ValidateRunnerAccess(ctx context.Context, userID, deviceID, runnerID, sessionID string) error
 	ValidateJobAccess(ctx context.Context, userID, runnerID, jobID string) error
@@ -30,6 +32,16 @@ type NodeResultSink interface {
 	OnSuccess(ctx context.Context, nodeID string, output map[string]interface{}) error
 	OnFailure(ctx context.Context, nodeID string, errorMessage string) error
 	OnProgress(ctx context.Context, nodeID string, progress float64, step, message string) error
+}
+
+type callbackIdempotencyContextKey struct{}
+
+// CallbackIdempotencyKeyFromContext returns the stable delivery key attached to
+// terminal callback invocations. Sinks that support idempotent writes should
+// persist this key with their side effect.
+func CallbackIdempotencyKeyFromContext(ctx context.Context) (string, bool) {
+	value, ok := ctx.Value(callbackIdempotencyContextKey{}).(string)
+	return value, ok && value != ""
 }
 
 type ToolManifestResolver interface {
@@ -190,7 +202,7 @@ func (h *Handler) completeJob(c *gin.Context) {
 	}
 	if jobContext != nil && (jobContext.Status == JobCompleted || jobContext.Status == JobFailed) {
 		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, jobContext); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
+			writeCallbackError(c, err)
 			return
 		}
 		// The persisted terminal status is authoritative. A late complete report
@@ -216,11 +228,14 @@ func (h *Handler) completeJob(c *gin.Context) {
 	}
 	job, err := h.service.CompleteJob(c.Request.Context(), identity, c.Param("jobId"), req)
 	if err != nil {
+		if h.recoverTerminalMutation(c, identity, err) {
+			return
+		}
 		writeJobMutationError(c, err)
 		return
 	}
 	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
-		writeError(c, http.StatusInternalServerError, err.Error())
+		writeCallbackError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -278,7 +293,7 @@ func (h *Handler) failInvalidCompletion(c *gin.Context, identity JobMutationIden
 		return
 	}
 	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, failed); err != nil {
-		writeError(c, http.StatusInternalServerError, err.Error())
+		writeCallbackError(c, err)
 		return
 	}
 	writeError(c, http.StatusUnprocessableEntity, message)
@@ -288,7 +303,34 @@ func (h *Handler) deliverTerminalCallbacks(ctx context.Context, identity JobMuta
 	if job == nil || (job.Status != JobCompleted && job.Status != JobFailed) {
 		return nil
 	}
-	if job.ResultCallbackState != CallbackDelivered {
+	if err := h.deliverTerminalCallbackPhase(ctx, identity, job, CallbackPhaseResult); err != nil {
+		return err
+	}
+	return h.deliverTerminalCallbackPhase(ctx, identity, job, CallbackPhaseFollowup)
+}
+
+func (h *Handler) deliverTerminalCallbackPhase(ctx context.Context, identity JobMutationIdentity, job *LocalJob, phase CallbackPhase) error {
+	claim, err := h.service.ClaimTerminalCallback(ctx, identity, job.ID, phase)
+	if err != nil {
+		return err
+	}
+	if claim == nil || claim.Delivered {
+		return nil
+	}
+	callbackCtx := context.WithValue(ctx, callbackIdempotencyContextKey{}, claim.IdempotencyKey)
+	deliveryErr := h.invokeTerminalCallback(callbackCtx, job, phase)
+	if deliveryErr != nil {
+		if releaseErr := h.service.ReleaseTerminalCallback(ctx, job.ID, phase, claim.Token); releaseErr != nil {
+			return fmt.Errorf("terminal callback failed: %v; release claim: %w", deliveryErr, releaseErr)
+		}
+		return deliveryErr
+	}
+	return h.service.AcknowledgeTerminalCallback(ctx, job.ID, phase, claim.Token)
+}
+
+func (h *Handler) invokeTerminalCallback(ctx context.Context, job *LocalJob, phase CallbackPhase) error {
+	switch phase {
+	case CallbackPhaseResult:
 		if job.Status == JobCompleted {
 			if h.results != nil && job.NodeID != "" {
 				if err := h.results.OnSuccess(ctx, job.NodeID, job.Output); err != nil {
@@ -300,12 +342,8 @@ func (h *Handler) deliverTerminalCallbacks(ctx context.Context, identity JobMuta
 				return err
 			}
 		}
-		if err := h.service.MarkCallbackDelivered(ctx, identity, job.ID, CallbackPhaseResult); err != nil {
-			return err
-		}
-		job.ResultCallbackState = CallbackDelivered
-	}
-	if job.FollowupCallbackState != CallbackDelivered {
+		return nil
+	case CallbackPhaseFollowup:
 		if job.Status == JobCompleted {
 			if h.artifactSyncCallback != nil {
 				if err := h.artifactSyncCallback(ctx, job, job.Output); err != nil {
@@ -317,12 +355,10 @@ func (h *Handler) deliverTerminalCallbacks(ctx context.Context, identity JobMuta
 				return err
 			}
 		}
-		if err := h.service.MarkCallbackDelivered(ctx, identity, job.ID, CallbackPhaseFollowup); err != nil {
-			return err
-		}
-		job.FollowupCallbackState = CallbackDelivered
+		return nil
+	default:
+		return fmt.Errorf("unknown callback phase %q", phase)
 	}
-	return nil
 }
 
 func terminalFailureMessage(job *LocalJob) string {
@@ -464,7 +500,7 @@ func (h *Handler) failJob(c *gin.Context) {
 	}
 	if existing != nil && (existing.Status == JobCompleted || existing.Status == JobFailed) {
 		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, existing); err != nil {
-			writeError(c, http.StatusInternalServerError, err.Error())
+			writeCallbackError(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -472,14 +508,44 @@ func (h *Handler) failJob(c *gin.Context) {
 	}
 	job, err := h.service.FailJob(c.Request.Context(), identity, c.Param("jobId"), req)
 	if err != nil {
+		if h.recoverTerminalMutation(c, identity, err) {
+			return
+		}
 		writeJobMutationError(c, err)
 		return
 	}
 	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
-		writeError(c, http.StatusInternalServerError, err.Error())
+		writeCallbackError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// recoverTerminalMutation handles the loser of a concurrent complete/fail CAS.
+// The terminal row is authoritative and its callback outbox remains replayable;
+// returning 403 here would incorrectly make the local runner discard the report.
+func (h *Handler) recoverTerminalMutation(c *gin.Context, identity JobMutationIdentity, mutationErr error) bool {
+	if !errors.Is(mutationErr, ErrJobAccessDenied) {
+		return false
+	}
+	job, err := h.service.GetJob(c.Request.Context(), c.Param("jobId"))
+	if err != nil || job == nil || (job.Status != JobCompleted && job.Status != JobFailed) {
+		return false
+	}
+	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
+		writeCallbackError(c, err)
+		return true
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+	return true
+}
+
+func writeCallbackError(c *gin.Context, err error) {
+	if errors.Is(err, ErrCallbackBusy) {
+		writeError(c, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeError(c, http.StatusInternalServerError, err.Error())
 }
 
 func writeJobMutationError(c *gin.Context, err error) {

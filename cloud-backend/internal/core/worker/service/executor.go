@@ -1100,6 +1100,19 @@ func lookupOutputField(output map[string]interface{}, field string) (interface{}
 	if output == nil || field == "" {
 		return nil, false
 	}
+	// MCP output references are rooted at structuredContent. Consult it before
+	// protocol wrapper fields so wrapper metadata cannot shadow canonical tool
+	// output. Dotted names always mean nested traversal, never a flat key.
+	structured := parseObjectPayload(output["structuredContent"])
+	if structured != nil {
+		if val, ok := lookupNestedOutputField(structured, field); ok {
+			return val, true
+		}
+		if val, ok := lookupArtifactOutputField(structured, field); ok {
+			return val, true
+		}
+		return nil, false
+	}
 	if val, ok := lookupNestedOutputField(output, field); ok {
 		return val, true
 	}
@@ -1120,8 +1133,8 @@ func lookupOutputField(output map[string]interface{}, field string) (interface{}
 }
 
 func lookupNestedOutputField(output map[string]interface{}, field string) (interface{}, bool) {
-	if value, ok := output[field]; ok {
-		return value, true
+	if output == nil {
+		return nil, false
 	}
 	var current interface{} = output
 	for _, segment := range strings.Split(field, ".") {

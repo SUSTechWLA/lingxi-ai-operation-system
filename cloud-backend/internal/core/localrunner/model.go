@@ -17,8 +17,9 @@ const (
 type CallbackState string
 
 const (
-	CallbackPending   CallbackState = "PENDING"
-	CallbackDelivered CallbackState = "DELIVERED"
+	CallbackPending    CallbackState = "PENDING"
+	CallbackProcessing CallbackState = "PROCESSING"
+	CallbackDelivered  CallbackState = "DELIVERED"
 )
 
 type CallbackPhase string
@@ -200,6 +201,15 @@ type JobMutationIdentity struct {
 	DeviceID  string
 	RunnerID  string
 	SessionID string
+}
+
+// TerminalCallbackClaim is a durable lease for one callback phase. The stable
+// idempotency key lets downstream sinks suppress a replay if delivery succeeds
+// but the database acknowledgement is interrupted.
+type TerminalCallbackClaim struct {
+	Token          string
+	IdempotencyKey string
+	Delivered      bool
 }
 
 type DispatchLocalJobRequest struct {

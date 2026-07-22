@@ -2,12 +2,20 @@ package localrunner
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localtool"
+)
+
+const (
+	maxMCPDiagnosticBytes = 64 << 10
+	maxMCPDiagnosticDepth = 12
+	maxMCPDiagnosticItems = 64
 )
 
 type CloudClient interface {
@@ -410,6 +418,22 @@ func (l *Loop) executeAndReport(ctx context.Context, job localtool.Job) error {
 	if result != nil && result.Output != nil {
 		output = result.Output
 	}
+	if localtool.NormalizeCommand(job.Command) == localtool.CommandLocalMCPToolCall && mcpResultIsError(output) {
+		failReq := FailJobRequest{
+			Success: false, Retryable: true,
+			Error: map[string]interface{}{
+				"code":    "MCP_TOOL_ERROR",
+				"message": mcpResultErrorMessage(output),
+			},
+			Diagnostics: boundedMCPResultDiagnostics(output),
+		}
+		_ = l.pendingReports.Save(PendingReport{JobID: job.ID, Type: "fail", Fail: &failReq})
+		reportErr := l.client.FailJob(ctx, job.ID, failReq)
+		if reportErr == nil {
+			_ = l.pendingReports.Remove(job.ID, "fail")
+		}
+		return reportErr
+	}
 	completeReq := CompleteJobRequest{Success: true, Output: output}
 	_ = l.pendingReports.Save(PendingReport{JobID: job.ID, Type: "complete", Complete: &completeReq})
 	reportErr := l.client.CompleteJob(ctx, job.ID, completeReq)
@@ -438,7 +462,7 @@ func (l *Loop) flushPendingReports(ctx context.Context) error {
 				_ = l.pendingReports.Remove(report.JobID, "complete")
 				continue
 			}
-			if err := l.client.CompleteJob(ctx, report.JobID, *report.Complete); err == nil || isTerminalPendingReportError(err) {
+			if err := l.client.CompleteJob(ctx, report.JobID, *report.Complete); err == nil {
 				_ = l.pendingReports.Remove(report.JobID, "complete")
 			}
 		case "fail":
@@ -446,7 +470,7 @@ func (l *Loop) flushPendingReports(ctx context.Context) error {
 				_ = l.pendingReports.Remove(report.JobID, "fail")
 				continue
 			}
-			if err := l.client.FailJob(ctx, report.JobID, *report.Fail); err == nil || isTerminalPendingReportError(err) {
+			if err := l.client.FailJob(ctx, report.JobID, *report.Fail); err == nil {
 				_ = l.pendingReports.Remove(report.JobID, "fail")
 			}
 		default:
@@ -456,18 +480,117 @@ func (l *Loop) flushPendingReports(ctx context.Context) error {
 	return nil
 }
 
-func isTerminalPendingReportError(err error) bool {
-	if err == nil {
-		return false
+func mcpResultIsError(output map[string]interface{}) bool {
+	isError, _ := output["isError"].(bool)
+	return isError
+}
+
+func mcpResultErrorMessage(output map[string]interface{}) string {
+	if message, ok := output["error"].(string); ok && strings.TrimSpace(message) != "" {
+		return strings.TrimSpace(message)
 	}
-	var statusErr *HTTPStatusError
-	if !errors.As(err, &statusErr) {
-		return false
+	if content, ok := output["content"].([]interface{}); ok {
+		for _, item := range content {
+			if block, ok := item.(map[string]interface{}); ok {
+				if text, ok := block["text"].(string); ok && strings.TrimSpace(text) != "" {
+					return strings.TrimSpace(text)
+				}
+			}
+		}
 	}
-	switch statusErr.StatusCode {
-	case 403, 404, 409:
-		return true
+	return "MCP tool returned isError=true"
+}
+
+func boundedMCPResultDiagnostics(output map[string]interface{}) map[string]interface{} {
+	selected := make(map[string]interface{}, 4)
+	for _, key := range []string{"content", "structuredContent", "meta", "raw"} {
+		if value, ok := output[key]; ok {
+			selected[key] = value
+		}
+	}
+	// Reserve JSON/container overhead in addition to the recursively-accounted
+	// values so the encoded diagnostic remains below the public limit.
+	budget := maxMCPDiagnosticBytes - (16 << 10)
+	sanitized, _ := boundedDiagnosticValue(selected, 0, &budget).(map[string]interface{})
+	if sanitized == nil {
+		sanitized = map[string]interface{}{}
+	}
+	return map[string]interface{}{"mcpResult": sanitized, "truncated": budget <= 0}
+}
+
+func boundedDiagnosticValue(value interface{}, depth int, budget *int) interface{} {
+	if *budget <= 0 {
+		return "<truncated>"
+	}
+	if depth >= maxMCPDiagnosticDepth {
+		*budget -= len("<max-depth>")
+		return "<max-depth>"
+	}
+	switch typed := value.(type) {
+	case nil, bool, float64, float32, int, int64, int32, uint, uint64, json.Number:
+		return typed
+	case string:
+		limit := len(typed)
+		if limit > 4096 {
+			limit = 4096
+		}
+		if limit > *budget {
+			limit = *budget
+		}
+		*budget -= limit
+		if limit < len(typed) {
+			return typed[:limit] + "<truncated>"
+		}
+		return typed
+	case []byte:
+		return boundedDiagnosticValue(string(typed), depth+1, budget)
+	case []interface{}:
+		limit := len(typed)
+		if limit > maxMCPDiagnosticItems {
+			limit = maxMCPDiagnosticItems
+		}
+		result := make([]interface{}, 0, limit+1)
+		for index := 0; index < limit && *budget > 0; index++ {
+			result = append(result, boundedDiagnosticValue(typed[index], depth+1, budget))
+		}
+		if limit < len(typed) {
+			result = append(result, "<truncated-items>")
+		}
+		return result
+	case map[string]interface{}:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if len(keys) > maxMCPDiagnosticItems {
+			keys = keys[:maxMCPDiagnosticItems]
+		}
+		result := make(map[string]interface{}, len(keys))
+		for index, key := range keys {
+			if *budget <= 0 {
+				break
+			}
+			safeKey := key
+			if len(safeKey) > 128 {
+				safeKey = safeKey[:128] + "<truncated-key>"
+			}
+			if _, exists := result[safeKey]; exists {
+				safeKey = fmt.Sprintf("%s#%d", safeKey, index)
+			}
+			*budget -= len(safeKey)
+			result[safeKey] = boundedDiagnosticValue(typed[key], depth+1, budget)
+		}
+		return result
 	default:
-		return false
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprintf("<unsupported:%T>", typed)
+		}
+		var generic interface{}
+		if err := json.Unmarshal(encoded, &generic); err != nil {
+			return boundedDiagnosticValue(string(encoded), depth+1, budget)
+		}
+		return boundedDiagnosticValue(generic, depth+1, budget)
 	}
 }

@@ -2,6 +2,7 @@ package localrunner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -236,7 +237,7 @@ func TestLoopFailsUnsupportedCommand(t *testing.T) {
 	}
 }
 
-func TestLoopDropsTerminalPendingReportErrors(t *testing.T) {
+func TestLoopRetainsPendingReportWhenCloudReturnsForbidden(t *testing.T) {
 	client := &fakeClient{
 		register: RegisterRunnerResponse{RunnerID: "runner_001", SessionID: "session_001", HeartbeatIntervalSec: 15, PollIntervalSec: 3},
 		failErr:  &HTTPStatusError{Method: http.MethodPost, Path: "/api/local-jobs/local_job_stale/fail", StatusCode: http.StatusForbidden},
@@ -257,18 +258,56 @@ func TestLoopDropsTerminalPendingReportErrors(t *testing.T) {
 	}
 
 	if err := loop.RunOnce(context.Background()); err != nil {
-		t.Fatalf("run once should drop terminal pending report without failing: %v", err)
+		t.Fatalf("run once should retain and retry pending report without failing: %v", err)
 	}
 
 	reports, err := loop.pendingReports.List()
 	if err != nil {
 		t.Fatalf("list pending reports: %v", err)
 	}
-	if len(reports) != 0 {
-		t.Fatalf("terminal pending report should be removed, got %#v", reports)
+	if len(reports) != 1 {
+		t.Fatalf("unconfirmed forbidden report must be retained, got %#v", reports)
 	}
 	if client.failedJobID != "local_job_stale" {
 		t.Fatalf("pending failure should have been retried before removal: %#v", client)
+	}
+}
+
+func TestLoopReportsMCPIsErrorAsFailureWithBoundedDiagnostics(t *testing.T) {
+	client := &fakeClient{}
+	registry := localtool.NewRegistry()
+	registry.Register(localtool.ExecutorFunc(func(context.Context, localtool.Job) (*localtool.Result, error) {
+		return &localtool.Result{Output: map[string]interface{}{
+			"isError":           true,
+			"content":           []interface{}{map[string]interface{}{"type": "text", "text": "provider rejected request"}},
+			"structuredContent": map[string]interface{}{"reason": "policy"},
+			"meta":              map[string]interface{}{"trace": "trace-1"},
+			"raw": map[string]interface{}{
+				strings.Repeat("oversized-key", maxMCPDiagnosticBytes): strings.Repeat("x", maxMCPDiagnosticBytes*2),
+			},
+		}}, nil
+	}), localtool.CommandLocalMCPToolCall)
+	loop := NewLoop(client, registry, LoopOptions{DataDir: t.TempDir()})
+
+	if err := loop.executeAndReport(context.Background(), localtool.Job{ID: "mcp-error", Command: localtool.CommandLocalMCPToolCall}); err != nil {
+		t.Fatalf("MCP failure report: %v", err)
+	}
+	if client.completedJobID != "" {
+		t.Fatalf("MCP isError must not POST complete: %#v", client.completed)
+	}
+	if client.failedJobID != "mcp-error" || client.failed.Error["code"] != "MCP_TOOL_ERROR" {
+		t.Fatalf("MCP isError was not POSTed to fail: %#v", client.failed)
+	}
+	diagnostic, ok := client.failed.Diagnostics["mcpResult"].(map[string]interface{})
+	if !ok || diagnostic["content"] == nil || diagnostic["structuredContent"] == nil || diagnostic["meta"] == nil || diagnostic["raw"] == nil {
+		t.Fatalf("MCP diagnostics lost protocol fields: %#v", client.failed.Diagnostics)
+	}
+	encoded, err := json.Marshal(client.failed.Diagnostics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > maxMCPDiagnosticBytes+1024 {
+		t.Fatalf("MCP diagnostics are unbounded: bytes=%d", len(encoded))
 	}
 }
 

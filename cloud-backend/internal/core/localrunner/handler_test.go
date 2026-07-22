@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +16,76 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
+
+func TestDeliverTerminalCallbacksClaimsEachPhaseExactlyOnceConcurrently(t *testing.T) {
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_concurrent", NodeID: "node_concurrent", Status: JobCompleted,
+		Output:              map[string]interface{}{"assetId": "asset-1"},
+		ResultCallbackState: CallbackPending, FollowupCallbackState: CallbackPending,
+	}}
+	sink := &concurrentNodeResultSink{}
+	var artifactMu sync.Mutex
+	artifactCalls := 0
+	artifactKey := ""
+	handler := NewHandler(service, sink).WithArtifactSyncCallback(func(ctx context.Context, _ *LocalJob, _ map[string]interface{}) error {
+		artifactMu.Lock()
+		artifactCalls++
+		artifactKey, _ = CallbackIdempotencyKeyFromContext(ctx)
+		artifactMu.Unlock()
+		return nil
+	})
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			err := handler.deliverTerminalCallbacks(context.Background(), JobMutationIdentity{RunnerID: "runner_001"}, service.job)
+			if err != nil && !errors.Is(err, ErrCallbackBusy) {
+				errs <- err
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if got := sink.SuccessCalls(); got != 1 {
+		t.Fatalf("result sink calls=%d, want exactly one", got)
+	}
+	artifactMu.Lock()
+	gotArtifacts := artifactCalls
+	artifactMu.Unlock()
+	if gotArtifacts != 1 || artifactKey != "local-job:local_job_concurrent:callback:followup" {
+		t.Fatalf("artifact callback calls=%d key=%q, want exactly one stable delivery", gotArtifacts, artifactKey)
+	}
+}
+
+type concurrentNodeResultSink struct {
+	mu      sync.Mutex
+	success int
+}
+
+func (s *concurrentNodeResultSink) OnSuccess(context.Context, string, map[string]interface{}) error {
+	s.mu.Lock()
+	s.success++
+	s.mu.Unlock()
+	return nil
+}
+func (*concurrentNodeResultSink) OnFailure(context.Context, string, string) error { return nil }
+func (*concurrentNodeResultSink) OnProgress(context.Context, string, float64, string, string) error {
+	return nil
+}
+func (s *concurrentNodeResultSink) SuccessCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.success
+}
 
 func TestHandlerRegisterRunnerUsesEdgeRunProtocol(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -577,19 +648,47 @@ func TestHandlerRejectsAtomicMutationAuthorizationFailure(t *testing.T) {
 	}
 }
 
+func TestHandlerConcurrentMutationLoserRefetchesTerminalInsteadOfForbidden(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{
+		job:         &LocalJob{ID: "local_job_race", NodeID: "node_race", Status: JobRunning},
+		mutationErr: ErrJobAccessDenied,
+		terminalOnMutationFailure: &LocalJob{
+			ID: "local_job_race", NodeID: "node_race", Status: JobCompleted,
+			Output: map[string]interface{}{"winner": true}, ResultCallbackState: CallbackPending, FollowupCallbackState: CallbackPending,
+		},
+	}
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_race/complete", bytes.NewBufferString(`{"success":true,"output":{"loser":true}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("concurrent mutation loser status=%d body=%s", res.Code, res.Body.String())
+	}
+	if sink.successCalls != 1 || sink.successOutput["winner"] != true || sink.successOutput["loser"] != nil {
+		t.Fatalf("loser did not replay authoritative terminal row: %#v", sink)
+	}
+}
+
 type fakeRunnerService struct {
-	registerReq       RegisterRunnerRequest
-	claimRunnerID     string
-	completeJobID     string
-	completeReq       CompleteJobRequest
-	failJobID         string
-	failReq           FailJobRequest
-	job               *LocalJob
-	heartbeats        []HeartbeatRequest
-	mutationErr       error
-	markErr           error
-	scopedManifest    *tool.ToolManifest
-	scopedManifestErr error
+	mu                        sync.Mutex
+	registerReq               RegisterRunnerRequest
+	claimRunnerID             string
+	completeJobID             string
+	completeReq               CompleteJobRequest
+	failJobID                 string
+	failReq                   FailJobRequest
+	job                       *LocalJob
+	heartbeats                []HeartbeatRequest
+	mutationErr               error
+	terminalOnMutationFailure *LocalJob
+	markErr                   error
+	scopedManifest            *tool.ToolManifest
+	scopedManifestErr         error
 }
 
 func (f *fakeRunnerService) ResolveMCPJobManifest(_ context.Context, _ *LocalJob) (*tool.ToolManifest, error) {
@@ -623,6 +722,9 @@ func (f *fakeRunnerService) ReportProgress(_ context.Context, _ JobMutationIdent
 func (f *fakeRunnerService) CompleteJob(_ context.Context, _ JobMutationIdentity, jobID string, req CompleteJobRequest) (*LocalJob, error) {
 	f.completeJobID = jobID
 	f.completeReq = req
+	if f.mutationErr != nil && f.terminalOnMutationFailure != nil {
+		f.job = f.terminalOnMutationFailure
+	}
 	if f.mutationErr == nil && f.job != nil {
 		f.job.Status = JobCompleted
 		f.job.Output = req.Output
@@ -635,6 +737,9 @@ func (f *fakeRunnerService) CompleteJob(_ context.Context, _ JobMutationIdentity
 func (f *fakeRunnerService) FailJob(_ context.Context, _ JobMutationIdentity, jobID string, req FailJobRequest) (*LocalJob, error) {
 	f.failJobID = jobID
 	f.failReq = req
+	if f.mutationErr != nil && f.terminalOnMutationFailure != nil {
+		f.job = f.terminalOnMutationFailure
+	}
 	if f.mutationErr == nil && f.job != nil {
 		f.job.Status = JobFailed
 		f.job.Error = req.Error
@@ -645,15 +750,51 @@ func (f *fakeRunnerService) FailJob(_ context.Context, _ JobMutationIdentity, jo
 	return f.job, f.mutationErr
 }
 
-func (f *fakeRunnerService) MarkCallbackDelivered(_ context.Context, _ JobMutationIdentity, _ string, phase CallbackPhase) error {
+func (f *fakeRunnerService) ClaimTerminalCallback(_ context.Context, _ JobMutationIdentity, jobID string, phase CallbackPhase) (*TerminalCallbackClaim, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.job == nil {
+		return nil, ErrJobAccessDenied
+	}
+	state := &f.job.ResultCallbackState
+	if phase == CallbackPhaseFollowup {
+		state = &f.job.FollowupCallbackState
+	}
+	switch *state {
+	case CallbackDelivered:
+		return &TerminalCallbackClaim{Delivered: true, IdempotencyKey: callbackIdempotencyKey(jobID, phase)}, nil
+	case CallbackProcessing:
+		return nil, ErrCallbackBusy
+	default:
+		*state = CallbackProcessing
+		return &TerminalCallbackClaim{Token: callbackIdempotencyKey(jobID, phase) + ":token", IdempotencyKey: callbackIdempotencyKey(jobID, phase)}, nil
+	}
+}
+
+func (f *fakeRunnerService) AcknowledgeTerminalCallback(_ context.Context, _ string, phase CallbackPhase, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.markErr != nil || f.job == nil {
 		return f.markErr
 	}
-	switch phase {
-	case CallbackPhaseResult:
+	if phase == CallbackPhaseResult {
 		f.job.ResultCallbackState = CallbackDelivered
-	case CallbackPhaseFollowup:
+	} else {
 		f.job.FollowupCallbackState = CallbackDelivered
+	}
+	return nil
+}
+
+func (f *fakeRunnerService) ReleaseTerminalCallback(_ context.Context, _ string, phase CallbackPhase, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.job == nil {
+		return nil
+	}
+	if phase == CallbackPhaseResult {
+		f.job.ResultCallbackState = CallbackPending
+	} else {
+		f.job.FollowupCallbackState = CallbackPending
 	}
 	return nil
 }
