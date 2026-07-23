@@ -75,9 +75,9 @@ The tool shares the existing GPT-SoVITS client and mastering implementation. It 
 
 ## Local Storage and Privacy
 
-The browser uploads reference audio to the existing local artifact service. Cloud project state stores only a content-addressed `local://projects/...` storage reference, MIME type, hash, transcript, provider choice, and consent flag. It never stores the absolute local path or audio bytes.
+The browser uploads reference audio to the existing local artifact service. Cloud project state stores only the project-scoped local artifact ID, its content-addressed `local://projects/...` storage reference, MIME type, hash, transcript, provider choice, and consent flag. It never stores the absolute local path or audio bytes.
 
-At execution time, the local runner resolves only approved voice-reference storage fields into a path under its project data directory. Path traversal, arbitrary absolute paths from cloud input, remote URLs, and cross-project references are rejected before the MCP call.
+At execution time, the local runner resolves the approved `voiceReferenceArtifactId` through `artifacts/<projectId>/<artifactId>/content`, then cross-checks the artifact metadata project ID, storage reference, MIME type, and content hash before supplying a local path to MCP. Path traversal, arbitrary absolute paths from cloud input, remote URLs, missing artifact metadata, and cross-project references are rejected before the MCP call.
 
 Voice recordings and voice embeddings remain local by default. No ASR service or remote voice provider receives the recording in this version. The user supplies the exact reference transcript; automatic transcription can be added later as a separate opt-in local ASR feature.
 
