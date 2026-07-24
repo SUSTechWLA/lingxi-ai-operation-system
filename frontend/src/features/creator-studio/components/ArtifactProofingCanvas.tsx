@@ -1,12 +1,14 @@
 import { useEffect, useState, type PointerEvent, type RefObject } from 'react'
 import type { ArtifactContentResponse } from '../../../utils/types'
 import type { ArtifactSelection } from '../types'
+import type { TextSelectionDraft } from '../textSelection'
 import { artifactContentNeedsLocalHydration, classifyArtifactPresentation, safeCreatorReviewText } from '../artifactPresentation'
 import { resolveCreatorArtifactMediaUrl } from '../logic'
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import JsonArtifactViewer from './JsonArtifactViewer'
 import MarkdownArtifactViewer from './MarkdownArtifactViewer'
 import SimpleVideoPlayer from './SimpleVideoPlayer'
+import { CanonicalTextSelectionSurface } from './TextSelectionAssistant'
 
 interface ArtifactProofingCanvasProps {
   content: ArtifactContentResponse | null
@@ -15,6 +17,8 @@ interface ArtifactProofingCanvasProps {
   onImagePointerDown?: (event: PointerEvent<HTMLImageElement>) => void
   onImagePointerUp?: (event: PointerEvent<HTMLImageElement>) => void
   onImagePointerCancel?: () => void
+  textSurfaceRef?: RefObject<HTMLPreElement>
+  onTextSelectionChange?: (draft: TextSelectionDraft | null) => void
 }
 
 export default function ArtifactProofingCanvas({
@@ -24,6 +28,8 @@ export default function ArtifactProofingCanvas({
   onImagePointerDown,
   onImagePointerUp,
   onImagePointerCancel,
+  textSurfaceRef,
+  onTextSelectionChange,
 }: ArtifactProofingCanvasProps) {
   const [mediaFailed, setMediaFailed] = useState(false)
   const [localText, setLocalText] = useState<{ key: string; text?: string; error?: string } | null>(null)
@@ -68,9 +74,33 @@ export default function ArtifactProofingCanvas({
   }
   const displayedContent = localText?.key === hydrationKey && localText.text !== undefined ? localText.text : content.content
   const readableText = safeCreatorReviewText(displayedContent)
-  if (presentation === 'json') return <JsonArtifactViewer content={displayedContent} />
+  const selectionSource = safeCreatorReviewText(content.reviewText)
+  const selectionEnabled = Boolean(textSurfaceRef && onTextSelectionChange)
+  if (presentation === 'json') {
+    return <JsonArtifactViewer
+      content={displayedContent}
+      selectionSource={selectionSource}
+      selectionEnabled={selectionEnabled}
+      textSurfaceRef={textSurfaceRef}
+      onTextSelectionChange={onTextSelectionChange}
+    />
+  }
   if (presentation === 'markdown') {
-    return readableText === undefined ? <JsonArtifactViewer content={displayedContent} /> : <MarkdownArtifactViewer content={readableText} />
+    return readableText === undefined
+      ? <JsonArtifactViewer
+          content={displayedContent}
+          selectionSource={selectionSource}
+          selectionEnabled={selectionEnabled}
+          textSurfaceRef={textSurfaceRef}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      : <MarkdownArtifactViewer
+          content={readableText}
+          selectionSource={selectionSource}
+          selectionEnabled={selectionEnabled}
+          textSurfaceRef={textSurfaceRef}
+          onTextSelectionChange={onTextSelectionChange}
+        />
   }
   if (presentation === 'image' && resolvedMediaUrl && !mediaFailed) {
     const rect = selection?.kind === 'rect' ? selection : null
@@ -97,7 +127,9 @@ export default function ArtifactProofingCanvas({
     return <audio className="artifact-audio-preview" controls preload="metadata" src={resolvedMediaUrl} onError={() => setMediaFailed(true)}>当前客户端无法播放音频。</audio>
   }
   if (presentation === 'text') {
-    return readableText === undefined
+    return selectionEnabled && selectionSource !== undefined && textSurfaceRef && onTextSelectionChange
+      ? <CanonicalTextSelectionSurface source={selectionSource} surfaceRef={textSurfaceRef} onSelectionChange={onTextSelectionChange} />
+      : readableText === undefined
       ? <JsonArtifactViewer content={displayedContent} />
       : <pre className="artifact-raw-preview" tabIndex={0}>{readableText}</pre>
   }

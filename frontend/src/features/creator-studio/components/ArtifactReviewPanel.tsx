@@ -28,7 +28,11 @@ import {
 import { cycleFocusIndex } from '../focusCycle'
 import { classifyArtifactPresentation } from '../artifactPresentation'
 import type { CreatorReviewArtifact } from '../creatorReviewArtifacts'
+import type { TextSelectionDraft } from '../textSelection'
 import ArtifactProofingCanvas from './ArtifactProofingCanvas'
+import TextSelectionAssistant from './TextSelectionAssistant'
+
+const TEXT_SELECTION_CONFLICT_COPY = '内容已更新，请重新选择需要修改的文字。'
 
 interface ArtifactReviewPanelProps {
   projectId: string
@@ -50,15 +54,19 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
   const [directContent, setDirectContent] = useState(contentText(content?.content))
   const [mode, setMode] = useState<'instruction' | 'direct'>('instruction')
   const [selection, setSelection] = useState<ArtifactSelection | null>(null)
+  const [textSelectionDraft, setTextSelectionDraft] = useState<TextSelectionDraft | null>(null)
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [error, setError] = useState('')
   const [working, setWorking] = useState(false)
   const imageRef = useRef<HTMLImageElement>(null)
+  const textSurfaceRef = useRef<HTMLPreElement>(null)
+  const instructionRef = useRef<HTMLTextAreaElement>(null)
   const selectionStart = useRef<{ x: number; y: number } | null>(null)
   const mountedRef = useRef(true)
   const operationControllerRef = useRef<AbortController | null>(null)
   const contentLoadedRef = useRef<string | null>(null)
   const impactTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const preserveConflictErrorRef = useRef(false)
 
   const artifactId = artifact?.artifactId
   const baseVersion = artifact?.version
@@ -87,8 +95,9 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     setDirectContent('')
     setMode('instruction')
     setSelection(null)
+    setTextSelectionDraft(null)
     setPending(null)
-    setError('')
+    if (!preserveConflictErrorRef.current) setError('')
     contentLoadedRef.current = null
   }, [artifactId, baseVersion])
 
@@ -104,6 +113,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     const controller = new AbortController()
     operationControllerRef.current = controller
     const isCurrent = () => mountedRef.current && !controller.signal.aborted && operationControllerRef.current === controller
+    preserveConflictErrorRef.current = false
     setError('')
     setWorking(true)
     try {
@@ -111,11 +121,20 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     } catch (caught) {
       if (!isCurrent()) return
       if (isCreatorConflict(caught)) {
-        setError(CREATOR_CONFLICT_COPY)
+        const textSelectionConflict = selection?.kind === 'text'
+        preserveConflictErrorRef.current = true
+        setError(textSelectionConflict ? TEXT_SELECTION_CONFLICT_COPY : CREATOR_CONFLICT_COPY)
+        if (textSelectionConflict) {
+          setSelection(null)
+          setTextSelectionDraft(null)
+          window.getSelection()?.removeAllRanges()
+        }
         try {
           await onConflict(controller.signal)
         } catch {
           if (isCurrent()) setError('暂时无法刷新最新内容，请稍后重试。')
+        } finally {
+          preserveConflictErrorRef.current = false
         }
       } else {
         setError('暂时无法保存，请稍后重试。')
@@ -132,6 +151,8 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
 
   const previewRevision = () => {
     if (!artifactId || !baseVersion) return
+    setTextSelectionDraft(null)
+    window.getSelection()?.removeAllRanges()
     const trimmedInstruction = instruction.trim()
     const trimmedContent = directContent.trim()
     if (mode === 'instruction' && !trimmedInstruction) {
@@ -240,7 +261,31 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
       height: event.clientY - bounds.top - start.y,
     }, { width: bounds.width, height: bounds.height })
     setSelection(nextSelection.width < 0.002 || nextSelection.height < 0.002 ? null : nextSelection)
+    setTextSelectionDraft(null)
     selectionStart.current = null
+  }
+
+  const handleTextSelectionChange = (draft: TextSelectionDraft | null) => {
+    setTextSelectionDraft(draft)
+    setSelection(current => draft?.selection ?? (current?.kind === 'text' ? null : current))
+  }
+
+  const chooseTextQuickAction = (nextInstruction: string) => {
+    if (!textSelectionDraft) return
+    setSelection(textSelectionDraft.selection)
+    setMode('instruction')
+    setInstruction(nextInstruction)
+    setTextSelectionDraft(null)
+    window.getSelection()?.removeAllRanges()
+  }
+
+  const chooseCustomTextInstruction = () => {
+    if (!textSelectionDraft) return
+    setSelection(textSelectionDraft.selection)
+    setMode('instruction')
+    setTextSelectionDraft(null)
+    window.getSelection()?.removeAllRanges()
+    window.requestAnimationFrame(() => instructionRef.current?.focus())
   }
 
   return (
@@ -264,9 +309,21 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
             onImagePointerDown={startRectangle}
             onImagePointerUp={finishRectangle}
             onImagePointerCancel={() => { selectionStart.current = null }}
+            textSurfaceRef={textSurfaceRef}
+            onTextSelectionChange={handleTextSelectionChange}
           />
+          {textSelectionDraft && <TextSelectionAssistant
+            draft={textSelectionDraft}
+            surfaceRef={textSurfaceRef}
+            onQuickAction={chooseTextQuickAction}
+            onCustomInstruction={chooseCustomTextInstruction}
+            onClear={() => handleTextSelectionChange(null)}
+          />}
           {isImage && <p className="artifact-selection-help">在图片上拖拽框选需要调整的区域。</p>}
-          {isVideo && <TimeSelection selection={selection} onChange={setSelection} />}
+          {isVideo && <TimeSelection selection={selection} onChange={nextSelection => {
+            setTextSelectionDraft(null)
+            setSelection(nextSelection)
+          }} />}
           {selection && <p className="artifact-selection-help">已保留本次选择范围，修改时会一并发送。</p>}
 
           <div className="artifact-actions">
@@ -277,7 +334,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
 
           {mode === 'instruction' && (
             <label className="artifact-editor-label">修改说明
-              <textarea value={instruction} onChange={event => setInstruction(event.target.value)} placeholder="例如：把开头改得更有悬念" />
+              <textarea ref={instructionRef} value={instruction} onChange={event => setInstruction(event.target.value)} placeholder="例如：把开头改得更有悬念" />
             </label>
           )}
           {mode === 'direct' && isText && (

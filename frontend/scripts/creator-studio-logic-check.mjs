@@ -13,8 +13,12 @@ const focusBundle = join(temp, 'focus-cycle.mjs')
 const presentationBundle = join(temp, 'artifact-presentation.mjs')
 const authBundle = join(temp, 'auth.mjs')
 const reviewArtifactsBundle = join(temp, 'creator-review-artifacts.mjs')
+const textSelectionBundle = join(temp, 'text-selection.mjs')
 
 try {
+  const textSelectionUrl = new URL('../src/features/creator-studio/textSelection.ts', import.meta.url)
+  assert.equal(existsSync(textSelectionUrl), true, 'creator text selection helper must exist')
+
   execFileSync(process.execPath, [
     new URL('../node_modules/typescript/bin/tsc', import.meta.url).pathname,
     '--noEmit', '--strict', '--skipLibCheck', '--module', 'ESNext', '--moduleResolution', 'bundler',
@@ -62,6 +66,56 @@ try {
     outfile: reviewArtifactsBundle,
   })
   const reviewArtifacts = await import(pathToFileURL(reviewArtifactsBundle))
+  await build({
+    entryPoints: [textSelectionUrl.pathname],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    outfile: textSelectionBundle,
+  })
+  const textSelection = await import(pathToFileURL(textSelectionBundle))
+
+  assert.deepEqual(
+    textSelection.buildTextSelection('开头正文结尾', 2, 4),
+    { kind: 'text', start: 2, end: 4, text: '正文' },
+    'forward selections preserve exact UTF-16 offsets and source text',
+  )
+  assert.deepEqual(
+    textSelection.buildTextSelection('开头正文结尾', 4, 2),
+    { kind: 'text', start: 2, end: 4, text: '正文' },
+    'backward selections normalize to ascending offsets',
+  )
+  assert.equal(textSelection.buildTextSelection('正文', 1, 1), null, 'empty selections are ignored')
+  assert.deepEqual(
+    textSelection.buildTextSelection('前  有空格  后', 1, 8),
+    { kind: 'text', start: 1, end: 8, text: '  有空格  ' },
+    'whitespace inside a selection is preserved exactly',
+  )
+  assert.deepEqual(
+    textSelection.buildTextSelection('第一句，第二句。', 4, 7),
+    { kind: 'text', start: 4, end: 7, text: '第二句' },
+    'Chinese text uses JavaScript UTF-16 offsets',
+  )
+  assert.deepEqual(
+    textSelection.buildTextSelection('甲🙂乙', 1, 3),
+    { kind: 'text', start: 1, end: 3, text: '🙂' },
+    'emoji selection keeps its two UTF-16 code units',
+  )
+  assert.equal(
+    textSelection.buildTextSelection('甲🙂乙', 1, 2),
+    null,
+    'selection boundaries cannot split an emoji surrogate pair',
+  )
+  assert.deepEqual(
+    textSelection.buildTextSelection('字'.repeat(4_001), 0, 4_000),
+    { kind: 'text', start: 0, end: 4_000, text: '字'.repeat(4_000) },
+    'a 4,000-code-unit selection is accepted',
+  )
+  assert.equal(
+    textSelection.buildTextSelection('字'.repeat(4_001), 0, 4_001),
+    null,
+    'a selection over 4,000 UTF-16 code units is rejected',
+  )
 
   const reviewClassificationCases = [
     [{ kind: 'JSON', mimeType: 'application/json', name: 'shot-02-image-request.json', artifactType: 'external_generation_request', generationKind: 'image' }, 'text'],
@@ -710,6 +764,9 @@ try {
   const agentReviewSource = readFileSync(new URL('../src/features/creator-studio/components/AgentReviewGatePanel.tsx', import.meta.url), 'utf8')
   const jsonViewerSource = readFileSync(new URL('../src/features/creator-studio/components/JsonArtifactViewer.tsx', import.meta.url), 'utf8')
   const markdownViewerSource = readFileSync(new URL('../src/features/creator-studio/components/MarkdownArtifactViewer.tsx', import.meta.url), 'utf8')
+  const textSelectionAssistantUrl = new URL('../src/features/creator-studio/components/TextSelectionAssistant.tsx', import.meta.url)
+  assert.equal(existsSync(textSelectionAssistantUrl), true, 'readable creator proofing needs one text selection assistant')
+  const textSelectionAssistantSource = readFileSync(textSelectionAssistantUrl, 'utf8')
   const creatorStylesSource = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
   const recoverySource = readFileSync(new URL('../src/features/creator-studio/components/TaskRecoveryBanner.tsx', import.meta.url), 'utf8')
   const queueSource = readFileSync(new URL('../src/features/creator-studio/components/ShotReviewQueue.tsx', import.meta.url), 'utf8')
@@ -825,6 +882,12 @@ try {
   assert.doesNotMatch(proofingSource, /<video\b/, 'artifact proofing delegates video playback to the shared player')
   assert.match(proofingSource, /safeCreatorReviewText\(displayedContent\)/)
   assert.doesNotMatch(proofingSource, /artifactContentText\(displayedContent\)/, 'creator plain-text proofing must never serialize non-string content')
+  assert.match(proofingSource, /safeCreatorReviewText\(content\.reviewText\)/, 'scoped selection must use the exact reviewText contract')
+  assert.doesNotMatch(
+    proofingSource,
+    /buildTextSelection\((?:displayedContent|readableText)/,
+    'scoped selection must never derive offsets from hydrated, decorated, or projected display content',
+  )
   assert.match(reviewSource, /开始时间（秒）/)
   assert.match(reviewSource, /aria-modal="true"/)
   assert.match(reviewSource, /cycleFocusIndex/)
@@ -841,6 +904,7 @@ try {
   assert.match(jsonViewerSource, /buildArtifactReviewModel/)
   assert.match(jsonViewerSource, /关键内容仍在准备中/)
   assert.match(jsonViewerSource, /artifact-review-script/)
+  assert.match(jsonViewerSource, /结构化内容可整体优化，局部划选暂不可用。/)
   assert.doesNotMatch(
     jsonViewerSource,
     /技术数据|查看原文|parsed\.raw|JSON\.stringify|JsonTree|downloadText|navigator\.clipboard|<pre\b/,
@@ -853,12 +917,26 @@ try {
   )
   assert.match(markdownViewerSource, /safeCreatorReviewText\(content\)/)
   assert.match(markdownViewerSource, /<JsonArtifactViewer content=\{content\}/)
+  assert.match(markdownViewerSource, /selectionSource/, 'Markdown selection must switch to the canonical manuscript source')
   assert.doesNotMatch(
     markdownViewerSource,
     /artifactContentText|源码|navigator\.clipboard|downloadText|artifact-raw-preview|<pre\b/,
     'creator Markdown proofing must preserve readable Markdown without raw source, copy, download, or serialization controls',
   )
   assert.match(creatorStylesSource, /\.artifact-review-document/)
+  for (const label of ['更精炼', '增强画面感', '优化节奏', '自定义修改']) {
+    assert.match(textSelectionAssistantSource, new RegExp(label), `text selection assistant includes ${label}`)
+  }
+  assert.match(textSelectionAssistantSource, /只修改所选内容，使表达更精炼；保持上下文含义和未选内容不变。/)
+  assert.match(textSelectionAssistantSource, /event\.key === 'Escape'/)
+  assert.match(textSelectionAssistantSource, /removeAllRanges\(\)/)
+  assert.match(textSelectionAssistantSource, /buildTextSelection\(source, range\.startOffset, range\.endOffset\)/)
+  assert.doesNotMatch(textSelectionAssistantSource, /textContent[\s\S]*buildTextSelection/, 'selection offsets must never be reconstructed from decorated DOM text')
+  assert.match(reviewSource, /内容已更新，请重新选择需要修改的文字。/)
+  assert.match(reviewSource, /setSelection\(textSelectionDraft\.selection\)/)
+  assert.match(reviewSource, /setInstruction\(nextInstruction\)/)
+  assert.match(reviewSource, /setMode\('instruction'\)/)
+  assert.match(reviewSource, /instructionRef\.current\?\.focus\(\)/)
   assert.match(timelineSource, /完整创作过程/)
   assert.equal(existsSync(contentLibraryUrl), true, 'the four-tab creator content library must exist')
   for (const tabLabel of ['文字与提示词', '参考图', '视频片段', '语音']) {
