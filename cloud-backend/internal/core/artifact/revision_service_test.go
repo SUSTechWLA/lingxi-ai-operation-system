@@ -3,6 +3,7 @@ package artifact
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -180,6 +181,152 @@ func TestRevisionServiceFailedCreateDoesNotMarkDownstreamStale(t *testing.T) {
 	}
 	if repo.stale != 0 {
 		t.Fatalf("failed revision stale calls = %d, want 0", repo.stale)
+	}
+}
+
+func TestRevisionServiceReplaceImageUsesCanonicalLocalIdentityWithoutGenerator(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindImage
+	base.Name = "shot-02.png"
+	base.MimeType = "image/png"
+	base.StorageType = StorageLocal
+	base.StorageRef = "local://projects/project-1/artifacts/shot-02/original.png"
+	base.SizeBytes = 12
+	base.ContentHash = "sha256:original"
+	base.WorkflowRunID = "run-current"
+	base.TaskID = "task-current"
+	base.RoleAgentID = "role-current"
+	base.ProducedByNode = "node-current"
+	base.ProducedByTool = "tool-current"
+	base.ProducedByRole = "role-current"
+	base.Metadata = map[string]interface{}{
+		"producedByNode": "node-current",
+		"producedByTool": "tool-current",
+		"producedByRole": "role-current",
+		"nested":         map[string]interface{}{"kept": true},
+		"localPath":      "/stale/original.png",
+		"storageRef":     base.StorageRef,
+		"contentHash":    base.ContentHash,
+		"mimeType":       base.MimeType,
+		"sizeBytes":      base.SizeBytes,
+	}
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	generatorCalled := false
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		generatorCalled = true
+		return "must not run", nil
+	})
+	replacement := ReplacementMaterialIdentity{
+		ContentHash: "sha256:replacement",
+		StorageRef:  "local://projects/project-1/materials/replacement",
+		MimeType:    "image/webp",
+		SizeBytes:   4096,
+	}
+	selection := map[string]interface{}{"kind": "rect", "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}
+
+	result, err := revisions.Replace(context.Background(), ReplaceRequest{
+		ArtifactID: "artifact-v1", NewArtifactID: "artifact-replacement",
+		Material: replacement,
+		Provenance: map[string]interface{}{
+			"mode": "replace", "replacementMaterial": replacement, "selection": selection,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Replace() error = %v", err)
+	}
+	if generatorCalled {
+		t.Fatal("typed image replacement must never invoke the revision generator")
+	}
+	if result.Artifact.Version != 2 || result.Artifact.ParentID != base.ID || result.Artifact.Kind != KindImage {
+		t.Fatalf("replacement artifact = %+v", result.Artifact)
+	}
+	got := repo.lastCreate
+	if got.ID != "artifact-replacement" || got.ProjectID != base.ProjectID || got.StageName != base.StageName ||
+		got.UnitID != base.UnitID || got.Name != base.Name || got.Kind != KindImage || !got.ForceNewVersion {
+		t.Fatalf("replacement request lost immutable identity: %+v", got)
+	}
+	if got.StorageType != StorageLocal || got.StorageRef != replacement.StorageRef || got.MimeType != replacement.MimeType ||
+		got.SizeBytes != replacement.SizeBytes || got.ContentHash != replacement.ContentHash || len(got.Data) != 0 {
+		t.Fatalf("replacement request did not use canonical local identity: %+v", got)
+	}
+	if got.WorkflowRunID != "run-current" || got.TaskID != "task-current" || got.RoleAgentID != "role-current" ||
+		got.Metadata["producedByNode"] != "node-current" || got.Metadata["producedByTool"] != "tool-current" ||
+		got.Metadata["producedByRole"] != "role-current" {
+		t.Fatalf("replacement request lost current producer identity: %+v metadata=%+v", got, got.Metadata)
+	}
+	if !reflect.DeepEqual(got.Metadata["replacementMaterial"], replacement) ||
+		!reflect.DeepEqual(got.Metadata["selection"], selection) {
+		t.Fatalf("replacement provenance = %+v", got.Metadata)
+	}
+	for _, staleIdentity := range []string{"localPath", "storageRef", "contentHash", "mimeType", "sizeBytes", "mediaUrl", "mediaUrls"} {
+		if _, exists := got.Metadata[staleIdentity]; exists {
+			t.Fatalf("replacement resurrected stale %s metadata: %+v", staleIdentity, got.Metadata)
+		}
+	}
+	if repo.stale != 1 {
+		t.Fatalf("replacement stale calls = %d, want 1", repo.stale)
+	}
+}
+
+func TestRevisionServiceReplaceRejectsInvalidTargetOrMaterialBeforeCreate(t *testing.T) {
+	valid := ReplacementMaterialIdentity{
+		ContentHash: "sha256:replacement",
+		StorageRef:  "local://projects/project-1/materials/replacement",
+		MimeType:    "image/png",
+		SizeBytes:   1,
+	}
+	tests := []struct {
+		name     string
+		kind     ArtifactKind
+		material ReplacementMaterialIdentity
+	}{
+		{name: "non image target", kind: KindMarkdown, material: valid},
+		{name: "non local ref", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: valid.ContentHash, StorageRef: "https://example.test/replacement.png", MimeType: valid.MimeType, SizeBytes: valid.SizeBytes}},
+		{name: "empty local ref", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: valid.ContentHash, StorageRef: "local://", MimeType: valid.MimeType, SizeBytes: valid.SizeBytes}},
+		{name: "non image mime", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: valid.ContentHash, StorageRef: valid.StorageRef, MimeType: "video/mp4", SizeBytes: valid.SizeBytes}},
+		{name: "empty image subtype", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: valid.ContentHash, StorageRef: valid.StorageRef, MimeType: "image/", SizeBytes: valid.SizeBytes}},
+		{name: "negative size", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: valid.ContentHash, StorageRef: valid.StorageRef, MimeType: valid.MimeType, SizeBytes: -1}},
+		{name: "invalid hash", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: "md5:bad", StorageRef: valid.StorageRef, MimeType: valid.MimeType, SizeBytes: valid.SizeBytes}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.Kind = test.kind
+			repo := newRevisionServiceFake(t, base)
+			result, err := NewRevisionService(repo).Replace(context.Background(), ReplaceRequest{
+				ArtifactID: base.ID,
+				Material:   test.material,
+			})
+			if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil {
+				t.Fatalf("Replace() result=%+v error=%v", result, err)
+			}
+			if repo.lastCreate != nil || repo.stale != 0 || !base.IsCurrent {
+				t.Fatalf("invalid replacement mutated state: create=%+v stale=%d current=%v", repo.lastCreate, repo.stale, base.IsCurrent)
+			}
+		})
+	}
+}
+
+func TestRevisionServiceReplaceCreateFailureLeavesCurrentImageAndInvalidationUntouched(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindImage
+	repo := newRevisionServiceFake(t, base)
+	repo.createErr = errRevisionTestCreate
+	result, err := NewRevisionService(repo).Replace(context.Background(), ReplaceRequest{
+		ArtifactID: base.ID,
+		Material: ReplacementMaterialIdentity{
+			ContentHash: "sha256:replacement",
+			StorageRef:  "local://projects/project-1/materials/replacement",
+			MimeType:    "image/png",
+			SizeBytes:   5,
+		},
+	})
+	if err != errRevisionTestCreate || result != nil {
+		t.Fatalf("Replace() result=%+v error=%v", result, err)
+	}
+	if repo.stale != 0 || !base.IsCurrent {
+		t.Fatalf("failed replacement mutated current image: stale=%d current=%v", repo.stale, base.IsCurrent)
 	}
 }
 

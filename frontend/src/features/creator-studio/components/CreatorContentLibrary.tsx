@@ -167,7 +167,9 @@ function CreatorContentCard({
       ) : artifact.reviewCategory === 'text' ? (
         <p className="creator-content-excerpt">{readableExcerpt(preview.content)}</p>
       ) : artifact.reviewCategory === 'image' && mediaUrl ? (
-        <img key={mediaLoadKey} src={mediaUrl} alt={`${artifact.reviewLabel}预览`} loading="lazy" onError={handleMediaError} />
+        <button type="button" className="creator-content-image-thumbnail" onClick={onSelect} aria-label={`审阅${artifact.reviewLabel}`}>
+          <img key={mediaLoadKey} src={mediaUrl} alt={`${artifact.reviewLabel}预览`} loading="lazy" onError={handleMediaError} />
+        </button>
       ) : artifact.reviewCategory === 'video' && mediaUrl ? (
         <video
           key={mediaLoadKey}

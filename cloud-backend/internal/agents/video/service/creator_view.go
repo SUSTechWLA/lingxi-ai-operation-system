@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	"github.com/tangying-ai/aios-core/internal/agents/video/assets"
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
 )
@@ -155,6 +156,7 @@ type creatorArtifactHistoryReader interface {
 
 type creatorRevisionService interface {
 	Revise(context.Context, artifact.ReviseRequest) (*artifact.RevisionResult, error)
+	Replace(context.Context, artifact.ReplaceRequest) (*artifact.RevisionResult, error)
 	Restore(context.Context, artifact.RestoreRequest) (*artifact.RevisionResult, error)
 }
 
@@ -192,23 +194,24 @@ var (
 const creatorMutationReceiptKey = "creatorStepMutationReceipt"
 
 type creatorMutationReceipt struct {
-	Operation            string                 `json:"operation"`
-	IdempotencyKey       string                 `json:"idempotencyKey"`
-	Fingerprint          string                 `json:"fingerprint"`
-	ProjectID            string                 `json:"projectId"`
-	StepID               string                 `json:"stepId"`
-	BaseArtifactID       string                 `json:"baseArtifactId"`
-	HistoricalArtifactID string                 `json:"historicalArtifactId,omitempty"`
-	BaseVersion          int                    `json:"baseVersion"`
-	HistoricalVersion    int                    `json:"historicalVersion,omitempty"`
-	RunID                string                 `json:"runId"`
-	ReviewID             string                 `json:"reviewId"`
-	NewArtifactID        string                 `json:"newArtifactId"`
-	ParentArtifactID     string                 `json:"parentArtifactId"`
-	AffectedStepIDs      []model.CreatorStepID  `json:"affectedStepIds"`
-	AffectedShotIDs      []string               `json:"affectedShotIds,omitempty"`
-	Selection            map[string]interface{} `json:"selection,omitempty"`
-	RequestDigest        string                 `json:"requestDigest"`
+	Operation            string                                `json:"operation"`
+	IdempotencyKey       string                                `json:"idempotencyKey"`
+	Fingerprint          string                                `json:"fingerprint"`
+	ProjectID            string                                `json:"projectId"`
+	StepID               string                                `json:"stepId"`
+	BaseArtifactID       string                                `json:"baseArtifactId"`
+	HistoricalArtifactID string                                `json:"historicalArtifactId,omitempty"`
+	BaseVersion          int                                   `json:"baseVersion"`
+	HistoricalVersion    int                                   `json:"historicalVersion,omitempty"`
+	RunID                string                                `json:"runId"`
+	ReviewID             string                                `json:"reviewId"`
+	NewArtifactID        string                                `json:"newArtifactId"`
+	ParentArtifactID     string                                `json:"parentArtifactId"`
+	AffectedStepIDs      []model.CreatorStepID                 `json:"affectedStepIds"`
+	AffectedShotIDs      []string                              `json:"affectedShotIds,omitempty"`
+	Selection            map[string]interface{}                `json:"selection,omitempty"`
+	ReplacementMaterial  *artifact.ReplacementMaterialIdentity `json:"replacementMaterial,omitempty"`
+	RequestDigest        string                                `json:"requestDigest"`
 }
 
 func NewCreatorViewService(projects creatorProjectReader, shots creatorShotReader, artifacts creatorArtifactReader) *CreatorViewService {
@@ -539,24 +542,40 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	}
 	mode := req.Mode
 	var directContent []byte
+	var replacement *artifact.ReplacementMaterialIdentity
 	message := ""
 	switch mode {
 	case "direct":
-		if strings.TrimSpace(req.DirectContent) == "" || strings.TrimSpace(req.Instruction) != "" {
+		if strings.TrimSpace(req.DirectContent) == "" || strings.TrimSpace(req.Instruction) != "" ||
+			req.ReplacementMaterial != nil || len(req.ModelProviders) != 0 {
 			return nil, ErrCreatorInvalidRequest
 		}
 		directContent = []byte(req.DirectContent)
 	case "instruction":
-		if strings.TrimSpace(req.Instruction) == "" || strings.TrimSpace(req.DirectContent) != "" {
+		if strings.TrimSpace(req.Instruction) == "" || strings.TrimSpace(req.DirectContent) != "" ||
+			req.ReplacementMaterial != nil {
 			return nil, ErrCreatorInvalidRequest
 		}
 		message = strings.TrimSpace(req.Instruction)
+	case "replace":
+		if req.ReplacementMaterial == nil || strings.TrimSpace(req.Instruction) != "" ||
+			strings.TrimSpace(req.DirectContent) != "" || len(req.ModelProviders) != 0 ||
+			base.Kind != artifact.KindImage {
+			return nil, ErrCreatorInvalidRequest
+		}
+		replacement, err = s.resolveCreatorReplacementMaterial(ctx, projectID, *req.ReplacementMaterial)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, ErrCreatorInvalidRequest
 	}
 	selection, err := normalizeArtifactSelection(req.Selection)
 	if err != nil {
 		return nil, err
+	}
+	if mode == "replace" && selection != nil && selection["kind"] != "rect" {
+		return nil, ErrCreatorInvalidRequest
 	}
 	if selection != nil && selection["kind"] == "text" {
 		if s.artifactTextResolver == nil {
@@ -581,20 +600,27 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	if err != nil {
 		return nil, err
 	}
-	requestDigest := creatorRequestDigest(map[string]interface{}{
+	requestIntent := map[string]interface{}{
 		"mode": mode, "instruction": message, "directContent": string(directContent), "selection": selection,
-	})
+	}
+	if replacement != nil {
+		requestIntent["replacementMaterial"] = replacement
+	}
+	requestDigest := creatorRequestDigest(requestIntent)
 	if authoritative.ID != base.ID || authoritative.Version != req.BaseVersion {
-		return s.retryCreatorMutation(ctx, userID, projectID, stepID, authoritative, req.IdempotencyKey, "revise", base.ID, req.BaseVersion, "", 0, requestDigest, selection, impact, req.RunID, req.ReviewID)
+		return s.retryCreatorMutation(ctx, userID, projectID, stepID, authoritative, req.IdempotencyKey, "revise", base.ID, req.BaseVersion, "", 0, requestDigest, selection, replacement, impact, req.RunID, req.ReviewID)
 	}
 	runID, reviewID, err := s.reviews.ResolveReviewGate(ctx, base, req.RunID, req.ReviewID)
 	if err != nil {
 		return nil, err
 	}
-	receipt := newCreatorMutationReceipt("revise", req.IdempotencyKey, projectID, stepID, base, nil, runID, reviewID, impact, selection, requestDigest)
+	receipt := newCreatorMutationReceipt("revise", req.IdempotencyKey, projectID, stepID, base, nil, runID, reviewID, impact, selection, replacement, requestDigest)
 	provenance := map[string]interface{}{"mode": mode, "baseVersion": req.BaseVersion, creatorMutationReceiptKey: receipt}
 	if selection != nil {
 		provenance["selection"] = selection
+	}
+	if replacement != nil {
+		provenance["replacementMaterial"] = *replacement
 	}
 	var providers map[string]interface{}
 	if mode == "instruction" {
@@ -603,15 +629,22 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 			return nil, err
 		}
 	}
-	revised, err := s.revisions.Revise(ctx, artifact.ReviseRequest{
-		ArtifactID: base.ID, NewArtifactID: receipt.NewArtifactID, Message: message, DirectContent: directContent,
-		ModelProviders: providers, Provenance: provenance,
-	})
+	var revised *artifact.RevisionResult
+	if replacement != nil {
+		revised, err = s.revisions.Replace(ctx, artifact.ReplaceRequest{
+			ArtifactID: base.ID, NewArtifactID: receipt.NewArtifactID, Material: *replacement, Provenance: provenance,
+		})
+	} else {
+		revised, err = s.revisions.Revise(ctx, artifact.ReviseRequest{
+			ArtifactID: base.ID, NewArtifactID: receipt.NewArtifactID, Message: message, DirectContent: directContent,
+			ModelProviders: providers, Provenance: provenance,
+		})
+	}
 	if err != nil {
 		if errors.Is(err, artifact.ErrArtifactVersionConflict) {
 			current, reloadErr := s.currentArtifactForStep(ctx, projectID, stepID)
 			if reloadErr == nil {
-				return s.retryCreatorMutation(ctx, userID, projectID, stepID, current, req.IdempotencyKey, "revise", base.ID, req.BaseVersion, "", 0, requestDigest, selection, impact, req.RunID, req.ReviewID)
+				return s.retryCreatorMutation(ctx, userID, projectID, stepID, current, req.IdempotencyKey, "revise", base.ID, req.BaseVersion, "", 0, requestDigest, selection, replacement, impact, req.RunID, req.ReviewID)
 			}
 		}
 		return nil, err
@@ -682,7 +715,7 @@ func (s *CreatorViewService) RestoreStepVersion(ctx context.Context, userID, pro
 		if !sameExactIDs(req.ConfirmedAffectedShotIDs, impact.AffectedShotIDs) {
 			return nil, ErrCreatorImpactMismatch
 		}
-		return s.retryCreatorMutation(ctx, userID, projectID, stepID, current, req.IdempotencyKey, "restore", "", req.BaseVersion, "", version, creatorRequestDigest(map[string]interface{}{"reason": strings.TrimSpace(req.Reason)}), nil, impact, req.RunID, req.ReviewID)
+		return s.retryCreatorMutation(ctx, userID, projectID, stepID, current, req.IdempotencyKey, "restore", "", req.BaseVersion, "", version, creatorRequestDigest(map[string]interface{}{"reason": strings.TrimSpace(req.Reason)}), nil, nil, impact, req.RunID, req.ReviewID)
 	}
 	history, err := s.history.GetHistory(ctx, projectID, current.StageName, current.UnitID)
 	if err != nil {
@@ -710,7 +743,7 @@ func (s *CreatorViewService) RestoreStepVersion(ctx context.Context, userID, pro
 		return nil, err
 	}
 	requestDigest := creatorRequestDigest(map[string]interface{}{"reason": strings.TrimSpace(req.Reason)})
-	receipt := newCreatorMutationReceipt("restore", req.IdempotencyKey, projectID, stepID, current, historical, runID, reviewID, impact, nil, requestDigest)
+	receipt := newCreatorMutationReceipt("restore", req.IdempotencyKey, projectID, stepID, current, historical, runID, reviewID, impact, nil, nil, requestDigest)
 	restored, err := s.revisions.Restore(ctx, artifact.RestoreRequest{
 		ArtifactID: historical.ID, NewArtifactID: receipt.NewArtifactID, ReviewerID: userID,
 		Reason: strings.TrimSpace(req.Reason), Provenance: map[string]interface{}{creatorMutationReceiptKey: receipt},
@@ -719,7 +752,7 @@ func (s *CreatorViewService) RestoreStepVersion(ctx context.Context, userID, pro
 		if errors.Is(err, artifact.ErrArtifactVersionConflict) {
 			latest, reloadErr := s.currentArtifactForStep(ctx, projectID, stepID)
 			if reloadErr == nil {
-				return s.retryCreatorMutation(ctx, userID, projectID, stepID, latest, req.IdempotencyKey, "restore", current.ID, req.BaseVersion, historical.ID, version, requestDigest, nil, impact, req.RunID, req.ReviewID)
+				return s.retryCreatorMutation(ctx, userID, projectID, stepID, latest, req.IdempotencyKey, "restore", current.ID, req.BaseVersion, historical.ID, version, requestDigest, nil, nil, impact, req.RunID, req.ReviewID)
 			}
 		}
 		return nil, err
@@ -853,6 +886,44 @@ func validCreatorRevisionChild(candidate, parent *artifact.Artifact, projectID s
 	return ok && mapped == stepID && candidate.StageName == parent.StageName && candidate.UnitID == parent.UnitID
 }
 
+func (s *CreatorViewService) resolveCreatorReplacementMaterial(
+	ctx context.Context,
+	projectID string,
+	supplied model.ReplacementMaterial,
+) (*artifact.ReplacementMaterialIdentity, error) {
+	manifest, err := s.history.GetCurrent(ctx, projectID, "requirements", "source-materials")
+	if err != nil || manifest == nil || manifest.ProjectID != projectID ||
+		manifest.StageName != "requirements" || manifest.UnitID != "source-materials" {
+		return nil, ErrCreatorInvalidRequest
+	}
+	materials, err := assets.ProjectMaterialsFromArtifact(manifest)
+	if err != nil {
+		return nil, ErrCreatorInvalidRequest
+	}
+	for _, candidate := range materials {
+		canonical, normalizeErr := assets.NormalizeProjectMaterial(projectID, candidate)
+		if normalizeErr != nil {
+			return nil, ErrCreatorInvalidRequest
+		}
+		if canonical.ContentHash != supplied.ContentHash {
+			continue
+		}
+		if canonical.Kind != assets.AssetTypeImage ||
+			canonical.StorageRef != supplied.StorageRef ||
+			canonical.MimeType != supplied.MimeType ||
+			canonical.SizeBytes != supplied.SizeBytes {
+			return nil, ErrCreatorInvalidRequest
+		}
+		return &artifact.ReplacementMaterialIdentity{
+			ContentHash: canonical.ContentHash,
+			StorageRef:  canonical.StorageRef,
+			MimeType:    canonical.MimeType,
+			SizeBytes:   canonical.SizeBytes,
+		}, nil
+	}
+	return nil, ErrCreatorInvalidRequest
+}
+
 func normalizeArtifactSelection(selection *model.ArtifactSelection) (map[string]interface{}, error) {
 	if selection == nil {
 		return nil, nil
@@ -976,12 +1047,16 @@ func creatorRequestDigest(value interface{}) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func newCreatorMutationReceipt(operation, key, projectID string, stepID model.CreatorStepID, base, historical *artifact.Artifact, runID, reviewID string, impact model.StepImpact, selection map[string]interface{}, requestDigest string) creatorMutationReceipt {
+func newCreatorMutationReceipt(operation, key, projectID string, stepID model.CreatorStepID, base, historical *artifact.Artifact, runID, reviewID string, impact model.StepImpact, selection map[string]interface{}, replacement *artifact.ReplacementMaterialIdentity, requestDigest string) creatorMutationReceipt {
 	receipt := creatorMutationReceipt{
 		Operation: operation, IdempotencyKey: key, ProjectID: projectID, StepID: string(stepID),
 		BaseArtifactID: base.ID, BaseVersion: base.Version, RunID: runID, ReviewID: reviewID,
 		ParentArtifactID: base.ID, AffectedStepIDs: append([]model.CreatorStepID(nil), impact.AffectedStepIDs...),
 		AffectedShotIDs: append([]string(nil), impact.AffectedShotIDs...), Selection: selection, RequestDigest: requestDigest,
+	}
+	if replacement != nil {
+		canonical := *replacement
+		receipt.ReplacementMaterial = &canonical
 	}
 	if historical != nil {
 		receipt.HistoricalArtifactID, receipt.HistoricalVersion = historical.ID, historical.Version
@@ -1018,7 +1093,7 @@ func creatorReceiptFromArtifact(current *artifact.Artifact) (creatorMutationRece
 	return receipt, creatorReceiptFingerprint(receipt) == receipt.Fingerprint
 }
 
-func (s *CreatorViewService) retryCreatorMutation(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, current *artifact.Artifact, key, operation, baseArtifactID string, baseVersion int, historicalArtifactID string, historicalVersion int, requestDigest string, selection map[string]interface{}, impact model.StepImpact, assertedRunID, assertedReviewID string) (*model.StepMutationResult, error) {
+func (s *CreatorViewService) retryCreatorMutation(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, current *artifact.Artifact, key, operation, baseArtifactID string, baseVersion int, historicalArtifactID string, historicalVersion int, requestDigest string, selection map[string]interface{}, replacement *artifact.ReplacementMaterialIdentity, impact model.StepImpact, assertedRunID, assertedReviewID string) (*model.StepMutationResult, error) {
 	receipt, ok := creatorReceiptFromArtifact(current)
 	if !ok || receipt.ProjectID != projectID || receipt.StepID != string(stepID) || receipt.Operation != operation {
 		return nil, ErrCreatorVersionConflict
@@ -1029,6 +1104,7 @@ func (s *CreatorViewService) retryCreatorMutation(ctx context.Context, userID, p
 	if receipt.BaseVersion != baseVersion || (baseArtifactID != "" && receipt.BaseArtifactID != baseArtifactID) ||
 		receipt.HistoricalVersion != historicalVersion || (historicalArtifactID != "" && receipt.HistoricalArtifactID != historicalArtifactID) ||
 		receipt.RequestDigest != requestDigest || !reflectCreatorJSON(receipt.Selection, selection) ||
+		!reflectCreatorJSON(receipt.ReplacementMaterial, replacement) ||
 		!reflectCreatorJSON(receipt.AffectedStepIDs, impact.AffectedStepIDs) || !reflectCreatorJSON(receipt.AffectedShotIDs, impact.AffectedShotIDs) {
 		return nil, ErrCreatorIdempotencyConflict
 	}

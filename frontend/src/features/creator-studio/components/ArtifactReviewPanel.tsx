@@ -3,10 +3,11 @@ import type { ArtifactContentResponse } from '../../../utils/types'
 import {
   confirmStep,
   previewStepRevision,
+  registerProjectMaterial,
   restoreStepVersion,
   reviseStep,
 } from '../../../services/creatorApi'
-import { buildClientModelProvidersForRun } from '../../../services/localAgent'
+import { buildClientModelProvidersForRun, uploadLocalArtifactFile } from '../../../services/localAgent'
 import type {
   ArtifactSelection,
   CreationView,
@@ -19,6 +20,7 @@ import {
   CREATOR_CONFLICT_COPY,
   canConfirmCreatorStep,
   createTimeSelection,
+  buildProjectMaterialStorageRef,
   creatorMutationIdempotencyKey,
   creatorStepLabel,
   formatStepImpact,
@@ -34,6 +36,7 @@ import {
 import type { CreatorReviewArtifact } from '../creatorReviewArtifacts'
 import type { TextSelectionDraft } from '../textSelection'
 import ArtifactProofingCanvas from './ArtifactProofingCanvas'
+import ImageReviewDialog from './ImageReviewDialog'
 import TextSelectionAssistant from './TextSelectionAssistant'
 
 const TEXT_SELECTION_CONFLICT_COPY = '内容已更新，请重新选择需要修改的文字。'
@@ -60,6 +63,8 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
   const [selection, setSelection] = useState<ArtifactSelection | null>(null)
   const [textSelectionDraft, setTextSelectionDraft] = useState<TextSelectionDraft | null>(null)
   const [pending, setPending] = useState<PendingAction | null>(null)
+  const [imageDialogSrc, setImageDialogSrc] = useState('')
+  const [imageDialogOpen, setImageDialogOpen] = useState(false)
   const [error, setError] = useState('')
   const [working, setWorking] = useState(false)
   const imageRef = useRef<HTMLImageElement>(null)
@@ -102,6 +107,8 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     setSelection(null)
     setTextSelectionDraft(null)
     setPending(null)
+    setImageDialogOpen(false)
+    setImageDialogSrc('')
     if (!preserveConflictErrorRef.current) setError('')
     contentLoadedRef.current = null
   }, [artifactId, baseVersion])
@@ -155,39 +162,109 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     window.requestAnimationFrame(() => impactTriggerRef.current?.focus())
   }
 
-  const previewRevision = () => {
+  const previewRevision = (preparedInstruction?: string) => {
     if (!artifactId || !baseVersion) return
     setTextSelectionDraft(null)
     window.getSelection()?.removeAllRanges()
-    if (mode === 'direct' && !canDirectEdit) {
+    const effectiveMode = preparedInstruction === undefined ? mode : 'instruction'
+    if (effectiveMode === 'direct' && !canDirectEdit) {
       setDirectContent('')
       setMode('instruction')
       setError('当前内容请使用修改说明整体优化。')
       return
     }
-    const trimmedInstruction = instruction.trim()
+    const trimmedInstruction = (preparedInstruction ?? instruction).trim()
     const trimmedContent = directContent.trim()
-    if (mode === 'instruction' && !trimmedInstruction) {
+    if (effectiveMode === 'instruction' && !trimmedInstruction) {
       setError('请先告诉 AI 需要怎样修改。')
       return
     }
-    if (mode === 'direct' && !trimmedContent) {
+    if (effectiveMode === 'direct' && !trimmedContent) {
       setError('直接编辑的内容不能为空。')
       return
     }
-    const request: StepRevisionMutationRequest = mode === 'instruction'
+    const request: StepRevisionMutationRequest = effectiveMode === 'instruction'
       ? {
-          artifactId, baseVersion, mode, instruction: trimmedInstruction,
+          artifactId, baseVersion, mode: 'instruction', instruction: trimmedInstruction,
           reviewId: step.reviewId, runId: step.runId, selection, confirmedAffectedShotIds: [],
         }
       : {
-          artifactId, baseVersion, mode, directContent: trimmedContent,
+          artifactId, baseVersion, mode: 'direct', directContent: trimmedContent,
           reviewId: step.reviewId, runId: step.runId, selection, confirmedAffectedShotIds: [],
         }
     void withErrorHandling(async (signal, isCurrent) => {
       const impact = await previewStepRevision(projectId, step.id, { artifactId, baseVersion }, signal)
       if (isCurrent()) setPending({ kind: 'revision', request, impact })
     })
+  }
+
+  const prepareImageRevision = (nextInstruction: string) => {
+    setMode('instruction')
+    setInstruction(nextInstruction)
+    setImageDialogOpen(false)
+    previewRevision(nextInstruction)
+  }
+
+  const prepareImageReplacement = async (file: File) => {
+    if (!artifactId || !baseVersion || !canRevise || !file.type.startsWith('image/')) {
+      throw new Error('invalid image replacement')
+    }
+    operationControllerRef.current?.abort()
+    const controller = new AbortController()
+    operationControllerRef.current = controller
+    const isCurrent = () => mountedRef.current && !controller.signal.aborted && operationControllerRef.current === controller
+    setError('')
+    setWorking(true)
+    try {
+      const replacementId = `creator-replacement-${crypto.randomUUID()}`
+      const upload = await uploadLocalArtifactFile({
+        projectId,
+        id: replacementId,
+        storageRef: buildProjectMaterialStorageRef(projectId, replacementId),
+        file,
+        mimeType: file.type,
+        signal: controller.signal,
+        metadata: {
+          artifactType: 'project_source_material',
+          source: 'creator_image_replacement',
+          localOnly: true,
+        },
+      })
+      if (!isCurrent() || !upload.storageRef || !upload.contentHash) throw new Error('replacement upload is incomplete')
+      const registered = await registerProjectMaterial(projectId, {
+        name: file.name,
+        kind: 'image',
+        storageRef: upload.storageRef,
+        mimeType: upload.mimeType || file.type,
+        sizeBytes: upload.sizeBytes ?? file.size,
+        contentHash: upload.contentHash,
+      }, controller.signal)
+      if (!isCurrent() || registered.material.kind !== 'image') throw new Error('replacement registration is incomplete')
+      const request: StepRevisionMutationRequest = {
+        artifactId,
+        baseVersion,
+        mode: 'replace',
+        replacementMaterial: {
+          contentHash: registered.material.contentHash,
+          storageRef: registered.material.storageRef,
+          mimeType: registered.material.mimeType,
+          sizeBytes: registered.material.sizeBytes,
+        },
+        reviewId: step.reviewId,
+        runId: step.runId,
+        selection: selection?.kind === 'rect' ? selection : null,
+        confirmedAffectedShotIds: [],
+      }
+      const impact = await previewStepRevision(projectId, step.id, { artifactId, baseVersion }, controller.signal)
+      if (!isCurrent()) throw new Error('replacement preview was cancelled')
+      setPending({ kind: 'revision', request, impact })
+      setImageDialogOpen(false)
+    } catch (caught) {
+      if (isCurrent()) setError('替换图片尚未准备好，请保留当前图片并重试。')
+      throw caught
+    } finally {
+      if (isCurrent()) setWorking(false)
+    }
   }
 
   const confirmRevision = () => {
@@ -318,6 +395,10 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
             content={content}
             selection={selection}
             imageRef={imageRef}
+            onOpenImage={src => {
+              setImageDialogSrc(src)
+              setImageDialogOpen(true)
+            }}
             onImagePointerDown={startRectangle}
             onImagePointerUp={finishRectangle}
             onImagePointerCancel={() => { selectionStart.current = null }}
@@ -371,7 +452,29 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
         </>
       )}
 
-      {pending && <ImpactConfirmation pending={pending} working={working} onCancel={closeImpact} onConfirm={pending.kind === 'revision' ? confirmRevision : confirmRestore} />}
+      {pending && <ImpactConfirmation pending={pending} working={working} error={error} onCancel={closeImpact} onConfirm={pending.kind === 'revision' ? confirmRevision : confirmRestore} />}
+      {isImage && artifactId && baseVersion && imageDialogSrc && <ImageReviewDialog
+        open={imageDialogOpen}
+        projectId={projectId}
+        artifactId={artifactId}
+        baseVersion={baseVersion}
+        title={artifact?.reviewLabel || content?.artifact.name || '当前图片'}
+        src={imageDialogSrc}
+        alt={content?.artifact.name || artifact?.reviewLabel || '当前图片内容'}
+        selection={selection?.kind === 'rect' ? selection : null}
+        instruction={instruction}
+        working={working}
+        onSelectionChange={setSelection}
+        onInstructionChange={setInstruction}
+        onPrepareRevision={prepareImageRevision}
+        onPrepareReplacement={prepareImageReplacement}
+        onKeep={() => {
+          setImageDialogOpen(false)
+          handleConfirm()
+        }}
+        onReload={() => setError('')}
+        onClose={() => setImageDialogOpen(false)}
+      />}
       {error && <p className="creator-form-error" role="alert">{error}</p>}
     </section>
   )
@@ -387,7 +490,7 @@ function TimeSelection({ selection, onChange }: { selection: ArtifactSelection |
   )
 }
 
-function ImpactConfirmation({ pending, working, onCancel, onConfirm }: { pending: PendingAction; working: boolean; onCancel: () => void; onConfirm: () => void }) {
+function ImpactConfirmation({ pending, working, error, onCancel, onConfirm }: { pending: PendingAction; working: boolean; error: string; onCancel: () => void; onConfirm: () => void }) {
   const shotIds = pending.impact.affectedShotIds ?? []
   const dialogRef = useRef<HTMLElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
@@ -422,6 +525,7 @@ function ImpactConfirmation({ pending, working, onCancel, onConfirm }: { pending
         <strong>确认这次修改</strong>
         <p>{formatStepImpact(pending.impact)}</p>
         {shotIds.length > 0 && <p>受影响镜头：{shotIds.join('、')}</p>}
+        {error && <p className="creator-form-error" role="alert">{error}</p>}
         <div>
           <button ref={cancelRef} type="button" className="creator-secondary-button" disabled={working} onClick={onCancel}>取消</button>
           <button type="button" className="creator-primary-button" disabled={working} onClick={onConfirm}>{pending.kind === 'restore' ? '确认恢复' : '确认修改'}</button>

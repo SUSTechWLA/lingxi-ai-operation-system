@@ -42,6 +42,25 @@ function assertIdempotencyKey(idempotencyKey: string): void {
   if (!idempotencyKey.trim()) throw new TypeError('idempotencyKey is required')
 }
 
+function assertStepRevisionMutation(request: StepRevisionMutationRequest): void {
+  if (request.mode !== 'replace') return
+  const unsafe = request as unknown as Record<string, unknown>
+  if ('instruction' in unsafe || 'directContent' in unsafe || 'modelProviders' in unsafe) {
+    throw new TypeError('replace revisions accept only registered replacement material metadata')
+  }
+  const material = request.replacementMaterial
+  if (
+    !material.contentHash.startsWith('sha256:') ||
+    !material.storageRef.startsWith('local://') ||
+    !material.mimeType.startsWith('image/') ||
+    !Number.isInteger(material.sizeBytes) ||
+    material.sizeBytes < 0 ||
+    (request.selection !== undefined && request.selection !== null && request.selection.kind !== 'rect')
+  ) {
+    throw new TypeError('replacement material identity is invalid')
+  }
+}
+
 export async function getCreationView(projectId: string, signal?: AbortSignal): Promise<CreationView> {
   const response = await api.get<ApiResponse<CreationView>>(creatorPath(projectId, '/creation-view'), { signal })
   return response.data.data
@@ -87,6 +106,7 @@ export async function reviseStep(
 ): Promise<StepMutationResult> {
   assertPositiveVersion(request.baseVersion)
   assertIdempotencyKey(idempotencyKey)
+  assertStepRevisionMutation(request)
   const response = await api.post<ApiResponse<StepMutationResult>>(
     creatorPath(projectId, `/steps/${encodeURIComponent(stepId)}/revisions`), request,
     { headers: { 'Idempotency-Key': idempotencyKey }, signal },

@@ -124,7 +124,7 @@ func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 		t.Fatalf("preview properties = %v", got)
 	}
 	mutation := spec.Components.Schemas["StepRevisionMutationRequest"]
-	if mutation == nil || len(mutation.OneOf) != 2 {
+	if mutation == nil || len(mutation.OneOf) != 3 {
 		t.Fatalf("mutation oneOf = %+v", mutation)
 	}
 	for _, branch := range mutation.OneOf {
@@ -135,8 +135,10 @@ func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 		if len(mode.Enum) != 1 {
 			t.Fatalf("mutation mode enum = %v", mode.Enum)
 		}
-		content := "directContent"
-		if mode.Enum[0] == "instruction" {
+		content := "replacementMaterial"
+		if mode.Enum[0] == "direct" {
+			content = "directContent"
+		} else if mode.Enum[0] == "instruction" {
 			content = "instruction"
 		}
 		want := []string{"artifactId", "baseVersion", "mode", content, "confirmedAffectedShotIds"}
@@ -255,7 +257,7 @@ func TestCloudSpec_CreatorResponsesAndFiniteStates(t *testing.T) {
 func TestCloudSpec_ExactRevisionUnionAndClosedMaterialRequest(t *testing.T) {
 	spec := BuildCloudSpec()
 	mutation := spec.Components.Schemas["StepRevisionMutationRequest"]
-	if mutation == nil || len(mutation.OneOf) != 2 {
+	if mutation == nil || len(mutation.OneOf) != 3 {
 		t.Fatalf("mutation schema = %+v", mutation)
 	}
 	for _, branch := range mutation.OneOf {
@@ -275,6 +277,17 @@ func TestCloudSpec_ExactRevisionUnionAndClosedMaterialRequest(t *testing.T) {
 		}
 		if mode == "instruction" && branch.Schema.Properties["modelProviders"] == nil {
 			t.Fatal("instruction branch must accept transient model provider credentials")
+		}
+		if mode == "replace" {
+			for _, forbidden := range []string{"instruction", "directContent", "modelProviders"} {
+				if branch.Schema.Properties[forbidden] != nil {
+					t.Fatalf("replace branch exposes forbidden field %q", forbidden)
+				}
+			}
+			replacement := inlineProperty(t, branch.Schema, "replacementMaterial")
+			if replacement.Ref != "#/components/schemas/ReplacementMaterialIdentity" {
+				t.Fatalf("replace branch replacementMaterial = %+v", replacement)
+			}
 		}
 	}
 
@@ -336,6 +349,16 @@ func TestCloudSpec_ArtifactSelectionBranchesAreClosedAndDisjoint(t *testing.T) {
 		if !selectionProperty.Nullable {
 			t.Fatalf("optional selection must accept JSON null: %+v", selectionProperty)
 		}
+		mode := inlineProperty(t, branch.Schema, "mode").Enum[0]
+		if mode == "replace" {
+			if selectionProperty.Type != "object" || selectionProperty.AdditionalProperties == nil ||
+				selectionProperty.AdditionalProperties.Allowed == nil || *selectionProperty.AdditionalProperties.Allowed {
+				t.Fatalf("replace selection must be a closed rectangle: %+v", selectionProperty)
+			}
+			if kind := inlineProperty(t, selectionProperty, "kind"); !reflect.DeepEqual(kind.Enum, []any{"rect"}) {
+				t.Fatalf("replace selection kind = %v", kind.Enum)
+			}
+		}
 	}
 }
 
@@ -378,7 +401,7 @@ func TestCloudSpec_SerializesCreatorSchemaRefsAsOpenAPI(t *testing.T) {
 
 	mutation := jsonObject(t, schemas["StepRevisionMutationRequest"], "StepRevisionMutationRequest")
 	mutationBranches := jsonArray(t, mutation["oneOf"], "StepRevisionMutationRequest.oneOf")
-	if len(mutationBranches) != 2 {
+	if len(mutationBranches) != 3 {
 		t.Fatalf("StepRevisionMutationRequest.oneOf length = %d", len(mutationBranches))
 	}
 	for index, value := range mutationBranches {
@@ -386,6 +409,13 @@ func TestCloudSpec_SerializesCreatorSchemaRefsAsOpenAPI(t *testing.T) {
 		assertNoSchemaWrapper(t, branch, "StepRevisionMutationRequest.oneOf")
 		properties := jsonObject(t, branch["properties"], "StepRevisionMutationRequest.properties")
 		selectionRef := jsonObject(t, properties["selection"], "StepRevisionMutationRequest.selection")
+		mode := jsonArray(t, jsonObject(t, properties["mode"], "StepRevisionMutationRequest.mode")["enum"], "StepRevisionMutationRequest.mode.enum")[0]
+		if mode == "replace" {
+			if selectionRef["type"] != "object" || selectionRef["additionalProperties"] != false || selectionRef["nullable"] != true {
+				t.Fatalf("replace selection = %#v", selectionRef)
+			}
+			continue
+		}
 		if selectionRef["$ref"] != "#/components/schemas/ArtifactSelection" || selectionRef["nullable"] != true {
 			t.Fatalf("StepRevisionMutationRequest.oneOf[%d] selection = %#v", index, selectionRef)
 		}

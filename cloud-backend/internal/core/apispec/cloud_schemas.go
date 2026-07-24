@@ -796,6 +796,13 @@ func registerCloudSchemas(b *Builder) {
 		}, "kind", "start", "end", "text")},
 	}}
 	b.Schema("ArtifactSelection", selection)
+	replacementMaterialIdentity := requiredObject(map[string]*SchemaRef{
+		"contentHash": {Schema: &Schema{Type: "string", Pattern: `^sha256:.+$`}},
+		"storageRef":  {Schema: &Schema{Type: "string", Pattern: `^local://.+$`}},
+		"mimeType":    {Schema: &Schema{Type: "string", Pattern: `^image/.+$`}},
+		"sizeBytes":   {Schema: &Schema{Type: "integer", Format: "int64", Minimum: &zero}},
+	}, "contentHash", "storageRef", "mimeType", "sizeBytes")
+	b.Schema("ReplacementMaterialIdentity", replacementMaterialIdentity)
 	b.Schema("StepRevisionPreviewRequest", requiredObject(map[string]*SchemaRef{
 		"artifactId": {Schema: StringSchema()}, "baseVersion": {Schema: positiveVersion()},
 	}, "artifactId", "baseVersion"))
@@ -811,9 +818,21 @@ func registerCloudSchemas(b *Builder) {
 	instructionMutation := mutationProperties("instruction")
 	instructionMutation["instruction"] = &SchemaRef{Schema: StringSchema()}
 	instructionMutation["modelProviders"] = &SchemaRef{Schema: freeFormObject("Transient desktop model-provider credentials; never persisted")}
+	replaceMutation := mutationProperties("replace")
+	replaceMutation["replacementMaterial"] = &SchemaRef{Schema: RefSchema("ReplacementMaterialIdentity")}
+	replaceSelection := closedObject(
+		map[string]*SchemaRef{
+			"kind": {Schema: enumSchema("rect")}, "x": {Schema: &Schema{Type: "number"}}, "y": {Schema: &Schema{Type: "number"}},
+			"width": {Schema: &Schema{Type: "number"}}, "height": {Schema: &Schema{Type: "number"}},
+		},
+		"kind", "x", "y", "width", "height",
+	)
+	replaceSelection.Nullable = true
+	replaceMutation["selection"] = &SchemaRef{Schema: replaceSelection}
 	b.Schema("StepRevisionMutationRequest", &Schema{OneOf: []*SchemaRef{
 		{Schema: closedObject(directMutation, "artifactId", "baseVersion", "mode", "directContent", "confirmedAffectedShotIds")},
 		{Schema: closedObject(instructionMutation, "artifactId", "baseVersion", "mode", "instruction", "confirmedAffectedShotIds")},
+		{Schema: closedObject(replaceMutation, "artifactId", "baseVersion", "mode", "replacementMaterial", "confirmedAffectedShotIds")},
 	}})
 	b.Schema("StepConfirmRequest", requiredObject(map[string]*SchemaRef{
 		"artifactId": {Schema: StringSchema()}, "runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()}, "comment": {Schema: StringSchema()},

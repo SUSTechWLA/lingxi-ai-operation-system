@@ -1,6 +1,8 @@
 package model
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
@@ -167,6 +169,13 @@ type ArtifactSelection struct {
 	Text    string   `json:"text,omitempty"`
 }
 
+type ReplacementMaterial struct {
+	ContentHash string `json:"contentHash"`
+	StorageRef  string `json:"storageRef"`
+	MimeType    string `json:"mimeType"`
+	SizeBytes   int64  `json:"sizeBytes"`
+}
+
 type StepRevisionRequest struct {
 	IdempotencyKey           string                 `json:"-"`
 	ArtifactID               string                 `json:"artifactId"`
@@ -174,11 +183,53 @@ type StepRevisionRequest struct {
 	Mode                     string                 `json:"mode"`
 	Instruction              string                 `json:"instruction,omitempty"`
 	DirectContent            string                 `json:"directContent,omitempty"`
+	ReplacementMaterial      *ReplacementMaterial   `json:"replacementMaterial,omitempty"`
 	ModelProviders           map[string]interface{} `json:"modelProviders,omitempty"`
 	RunID                    string                 `json:"runId,omitempty"`
 	ReviewID                 string                 `json:"reviewId,omitempty"`
 	ConfirmedAffectedShotIDs []string               `json:"confirmedAffectedShotIds,omitempty"`
 	Selection                *ArtifactSelection     `json:"selection,omitempty"`
+}
+
+func (r *StepRevisionRequest) UnmarshalJSON(data []byte) error {
+	idempotencyKey := r.IdempotencyKey
+	type stepRevisionRequestAlias StepRevisionRequest
+	var decoded stepRevisionRequestAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	allowed := map[string]bool{
+		"artifactId": true, "baseVersion": true, "mode": true, "runId": true, "reviewId": true,
+		"confirmedAffectedShotIds": true, "selection": true,
+	}
+	switch decoded.Mode {
+	case "direct":
+		allowed["directContent"] = true
+	case "instruction":
+		allowed["instruction"] = true
+		allowed["modelProviders"] = true
+	case "replace":
+		allowed["replacementMaterial"] = true
+	default:
+		// Impact preview uses the same wire model without a mutation mode.
+		if decoded.Mode == "" {
+			*r = StepRevisionRequest(decoded)
+			r.IdempotencyKey = idempotencyKey
+			return nil
+		}
+	}
+	for field := range fields {
+		if !allowed[field] {
+			return fmt.Errorf("field %q is not allowed for %q revision mode", field, decoded.Mode)
+		}
+	}
+	*r = StepRevisionRequest(decoded)
+	r.IdempotencyKey = idempotencyKey
+	return nil
 }
 
 type StepRestoreRequest struct {

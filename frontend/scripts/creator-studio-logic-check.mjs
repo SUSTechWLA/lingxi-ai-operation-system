@@ -804,6 +804,9 @@ try {
   const textSelectionAssistantUrl = new URL('../src/features/creator-studio/components/TextSelectionAssistant.tsx', import.meta.url)
   assert.equal(existsSync(textSelectionAssistantUrl), true, 'readable creator proofing needs one text selection assistant')
   const textSelectionAssistantSource = readFileSync(textSelectionAssistantUrl, 'utf8')
+  const imageReviewDialogUrl = new URL('../src/features/creator-studio/components/ImageReviewDialog.tsx', import.meta.url)
+  assert.equal(existsSync(imageReviewDialogUrl), true, 'image proofing needs a full-screen review dialog')
+  const imageReviewDialogSource = existsSync(imageReviewDialogUrl) ? readFileSync(imageReviewDialogUrl, 'utf8') : ''
   const creatorStylesSource = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
   const recoverySource = readFileSync(new URL('../src/features/creator-studio/components/TaskRecoveryBanner.tsx', import.meta.url), 'utf8')
   const queueSource = readFileSync(new URL('../src/features/creator-studio/components/ShotReviewQueue.tsx', import.meta.url), 'utf8')
@@ -835,7 +838,13 @@ try {
   assert.match(generatedSource, /scope: 'candidate_accept'/)
   assert.match(generatedSource, /scope: 'candidate_restore'/)
   assert.match(generatedSource, /export interface StepRevisionPreviewRequest \{\s+artifactId: string;\s+baseVersion: number;\s+\}/)
-  assert.match(generatedSource, /export type StepRevisionMutationRequest = .*mode: 'direct'.* \| .*mode: 'instruction'/)
+  assert.match(generatedSource, /export type StepRevisionMutationRequest = .*mode: 'direct'.* \| .*mode: 'instruction'.* \| .*mode: 'replace'/)
+  assert.match(generatedSource, /mode: 'replace'[\s\S]*replacementMaterial:/)
+  assert.doesNotMatch(
+    generatedSource.match(/[^;\n]*mode: 'replace'[^;\n]*/)?.[0] || '',
+    /instruction|directContent|modelProviders/,
+    'typed replacement branch must not expose instruction or provider fields',
+  )
   assert.match(generatedSource, /export interface StepRegenerationRequest \{[\s\S]*confirmedAffectedStepIds:/)
   assert.match(apiSource, /assertPositiveVersion\(request\.baseVersion\)/)
   assert.match(apiSource, /signal/g, 'creator requests must support AbortSignal')
@@ -927,6 +936,7 @@ try {
     'structured JSON presentation must not share the direct-edit eligibility flag',
   )
   assert.match(proofingSource, /artifact-selection-overlay/)
+  assert.match(proofingSource, /<img\b/, 'creator image proofing uses an actual image preview')
   assert.match(proofingSource, /fetch\(resolvedMediaUrl/)
   assert.match(proofingSource, /AbortController/)
   assert.match(proofingSource, /onPointerCancel/)
@@ -1006,11 +1016,33 @@ try {
   assert.match(contentLibrarySource, /id=\{tabPanelId\(tab\.category\)\}/)
   assert.match(contentLibrarySource, /aria-labelledby=\{tabId\(tab\.category\)\}/)
   assert.match(contentLibrarySource, /关键内容仍在准备中，生成完成后会显示在这里。/)
+  assert.match(contentLibrarySource, /<img[\s\S]*loading="lazy"/, 'every image card uses a lazy real thumbnail')
   assert.doesNotMatch(
     contentLibrarySource,
     /\b(?:attempt|sizeBytes|storageType|storageRef|contentHash|promptHash|artifactType|kind)\b/,
     'creator content cards never render technical artifact descriptors',
   )
+  for (const sourcePattern of [
+    /role="dialog"/,
+    /aria-modal="true"/,
+    /event\.key === 'Escape'/,
+    /\.focus\(\)/,
+    /zoom/,
+    /normalizeRectSelection/,
+    /重新加载预览/,
+    /局部重绘/,
+    /调整构图/,
+    /风格与光影/,
+    /整张重生成/,
+    /替换图片/,
+    /保留这张/,
+  ]) {
+    assert.match(imageReviewDialogSource, sourcePattern, `image review dialog contract requires ${sourcePattern}`)
+  }
+  assert.match(imageReviewDialogSource, /accept="image\/\*"/, 'replacement picker accepts image files only')
+  assert.match(reviewSource, /uploadLocalArtifactFile[\s\S]*registerProjectMaterial[\s\S]*previewStepRevision/, 'replacement uploads, registers, then previews impact')
+  assert.match(reviewSource, /mode: 'replace'/, 'replacement submission uses the typed revision branch')
+  assert.match(reviewSource, /确认修改/, 'typed replacement remains behind the existing explicit impact confirmation')
   assert.match(projectBriefSource, /创作目标/)
   assert.match(projectBriefSource, /目标时长/)
   assert.match(regenerationDialogSource, /previewStepRegeneration/)

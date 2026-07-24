@@ -40,6 +40,23 @@ type ReviseRequest struct {
 	Provenance map[string]interface{}
 }
 
+// ReplacementMaterialIdentity is the canonical metadata-only identity of one
+// project-registered local image. The creator service resolves and authorizes
+// it before invoking RevisionService.Replace.
+type ReplacementMaterialIdentity struct {
+	ContentHash string `json:"contentHash"`
+	StorageRef  string `json:"storageRef"`
+	MimeType    string `json:"mimeType"`
+	SizeBytes   int64  `json:"sizeBytes"`
+}
+
+type ReplaceRequest struct {
+	NewArtifactID string
+	ArtifactID    string
+	Material      ReplacementMaterialIdentity
+	Provenance    map[string]interface{}
+}
+
 type RestoreRequest struct {
 	ArtifactID    string
 	NewArtifactID string
@@ -52,6 +69,7 @@ var (
 	ErrRevisionArtifactNotFound   = errors.New("revision artifact not found")
 	ErrRevisionContentUnavailable = errors.New("revision source content unavailable")
 	ErrRevisionGeneration         = errors.New("revision generation failed")
+	ErrRevisionInvalidReplacement = errors.New("revision replacement is invalid")
 )
 
 // RevisionService owns revision and restore orchestration. It never changes
@@ -121,6 +139,73 @@ func (s *RevisionService) Revise(ctx context.Context, req ReviseRequest) (*Revis
 	}
 	staleStages := s.markDownstreamStale(ctx, base)
 	return &RevisionResult{Artifact: revision, StaleStageNames: staleStages}, nil
+}
+
+// Replace creates an immutable child image version that points to already
+// uploaded local bytes. It never reads or copies those bytes and never invokes
+// the revision generator.
+func (s *RevisionService) Replace(ctx context.Context, req ReplaceRequest) (*RevisionResult, error) {
+	base, err := s.artifacts.GetByID(ctx, req.ArtifactID)
+	if err != nil || base == nil {
+		return nil, fmt.Errorf("%w: %v", ErrRevisionArtifactNotFound, err)
+	}
+	material := req.Material
+	storageRef := strings.TrimSpace(material.StorageRef)
+	mimeType := strings.ToLower(strings.TrimSpace(material.MimeType))
+	contentHash := strings.TrimSpace(material.ContentHash)
+	if base.Kind != KindImage ||
+		storageRef != material.StorageRef || mimeType != material.MimeType || contentHash != material.ContentHash ||
+		!strings.HasPrefix(storageRef, "local://") || len(strings.TrimPrefix(storageRef, "local://")) == 0 ||
+		!strings.HasPrefix(mimeType, "image/") || len(strings.TrimPrefix(mimeType, "image/")) == 0 ||
+		material.SizeBytes < 0 ||
+		!strings.HasPrefix(contentHash, "sha256:") ||
+		len(strings.TrimPrefix(contentHash, "sha256:")) == 0 {
+		return nil, ErrRevisionInvalidReplacement
+	}
+
+	metadata := cloneMetadata(base.Metadata)
+	// Content identity belongs to the immutable artifact row. Carrying any of
+	// these legacy metadata mirrors forward can make readers resolve the base
+	// image even though the replacement row points at the new material.
+	for _, key := range []string{
+		"localPath", "path",
+		"storageRef", "storage_ref",
+		"contentHash", "content_hash",
+		"mimeType", "mime_type",
+		"sizeBytes", "size_bytes",
+		"mediaUrl", "mediaURL", "mediaUrls", "mediaURLs",
+	} {
+		delete(metadata, key)
+	}
+	for key, value := range map[string]string{
+		"producedByNode": base.ProducedByNode,
+		"producedByTool": base.ProducedByTool,
+		"producedByRole": base.ProducedByRole,
+	} {
+		delete(metadata, key)
+		if strings.TrimSpace(value) != "" {
+			metadata[key] = value
+		}
+	}
+	metadata["status"] = string(ArtifactStatusValid)
+	metadata["humanApproved"] = false
+	metadata["replacementOf"] = base.ID
+	for key, value := range req.Provenance {
+		metadata[key] = deepCloneMetadataValue(value)
+	}
+	replacement, err := s.artifacts.CreateArtifact(ctx, &CreateArtifactRequest{
+		ID: req.NewArtifactID, ProjectID: base.ProjectID, WorkflowRunID: base.WorkflowRunID, TaskID: base.TaskID,
+		StageName: base.StageName, RoleAgentID: base.RoleAgentID, UnitID: base.UnitID,
+		Kind: base.Kind, Name: base.Name, StorageType: StorageLocal, StorageRef: material.StorageRef,
+		MimeType: material.MimeType, SizeBytes: material.SizeBytes, ContentHash: material.ContentHash,
+		PromptHash: base.PromptHash, Provider: base.Provider, Model: base.Model, Metadata: metadata,
+		ForceNewVersion: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	staleStages := s.markDownstreamStale(ctx, base)
+	return &RevisionResult{Artifact: replacement, StaleStageNames: staleStages}, nil
 }
 
 // Restore recreates a historical artifact as a new version. The selected

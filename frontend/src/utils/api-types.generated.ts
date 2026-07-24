@@ -657,6 +657,15 @@ export interface RenderStrategyResponse {
 }
 
 /**  */
+// ReplacementMaterialIdentity
+export interface ReplacementMaterialIdentity {
+  contentHash: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageRef: string;
+}
+
+/**  */
 // ShotCandidate
 export interface ShotCandidate {
   artifactRefs?: { aigcBackgroundVideoArtifactId?: string; compositedShotVideoArtifactId?: string; htmlOverlayVideoArtifactId?: string; htmlPreviewVideoArtifactId?: string; htmlSourceArtifactId?: string; keyframeImageArtifactId?: string; keyframePromptArtifactId?: string; renderStrategyArtifactId?: string; subtitleArtifactId?: string; videoClipArtifactId?: string; videoPromptArtifactId?: string; visualPlanArtifactId?: string };
@@ -1022,7 +1031,7 @@ export interface StepRestoreRequest {
 
 /**  */
 // StepRevisionMutationRequest
-export type StepRevisionMutationRequest = { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent: string; instruction?: never; mode: 'direct'; modelProviders?: never; reviewId?: string; runId?: string; selection?: ArtifactSelection | null } | { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent?: never; instruction: string; mode: 'instruction'; modelProviders?: Record<string, unknown>; reviewId?: string; runId?: string; selection?: ArtifactSelection | null };
+export type StepRevisionMutationRequest = { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent: string; instruction?: never; mode: 'direct'; modelProviders?: never; replacementMaterial?: never; reviewId?: string; runId?: string; selection?: ArtifactSelection | null } | { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent?: never; instruction: string; mode: 'instruction'; modelProviders?: Record<string, unknown>; replacementMaterial?: never; reviewId?: string; runId?: string; selection?: ArtifactSelection | null } | { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent?: never; instruction?: never; mode: 'replace'; modelProviders?: never; replacementMaterial: ReplacementMaterialIdentity; reviewId?: string; runId?: string; selection?: { height: number; kind: 'rect'; width: number; x: number; y: number } | null };
 
 /**  */
 // StepRevisionPreviewRequest

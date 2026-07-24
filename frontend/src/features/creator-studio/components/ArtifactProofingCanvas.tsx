@@ -14,6 +14,7 @@ interface ArtifactProofingCanvasProps {
   content: ArtifactContentResponse | null
   selection?: ArtifactSelection | null
   imageRef?: RefObject<HTMLImageElement>
+  onOpenImage?: (src: string) => void
   onImagePointerDown?: (event: PointerEvent<HTMLImageElement>) => void
   onImagePointerUp?: (event: PointerEvent<HTMLImageElement>) => void
   onImagePointerCancel?: () => void
@@ -25,6 +26,7 @@ export default function ArtifactProofingCanvas({
   content,
   selection,
   imageRef,
+  onOpenImage,
   onImagePointerDown,
   onImagePointerUp,
   onImagePointerCancel,
@@ -117,6 +119,7 @@ export default function ArtifactProofingCanvas({
           onPointerCancel={onImagePointerCancel}
         />
         {rect && <span className="artifact-selection-overlay" aria-label="已选中的图片区域" style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` }} />}
+        {onOpenImage && <button type="button" className="artifact-image-open-button" onClick={() => onOpenImage(resolvedMediaUrl)}>全屏审阅</button>}
       </div>
     )
   }
