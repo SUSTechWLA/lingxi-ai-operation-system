@@ -226,7 +226,7 @@ func TestRevisionServiceReplaceImageUsesCanonicalLocalIdentityWithoutGenerator(t
 	selection := map[string]interface{}{"kind": "rect", "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}
 
 	result, err := revisions.Replace(context.Background(), ReplaceRequest{
-		ArtifactID: "artifact-v1", NewArtifactID: "artifact-replacement",
+		ArtifactID: "artifact-v1", BaseVersion: base.Version, NewArtifactID: "artifact-replacement",
 		Material: replacement,
 		Provenance: map[string]interface{}{
 			"mode": "replace", "replacementMaterial": replacement, "selection": selection,
@@ -245,6 +245,9 @@ func TestRevisionServiceReplaceImageUsesCanonicalLocalIdentityWithoutGenerator(t
 	if got.ID != "artifact-replacement" || got.ProjectID != base.ProjectID || got.StageName != base.StageName ||
 		got.UnitID != base.UnitID || got.Name != base.Name || got.Kind != KindImage || !got.ForceNewVersion {
 		t.Fatalf("replacement request lost immutable identity: %+v", got)
+	}
+	if got.ExpectedParentID != base.ID || got.ExpectedParentVersion != base.Version {
+		t.Fatalf("replacement request lost authorized base lineage: %+v", got)
 	}
 	if got.StorageType != StorageLocal || got.StorageRef != replacement.StorageRef || got.MimeType != replacement.MimeType ||
 		got.SizeBytes != replacement.SizeBytes || got.ContentHash != replacement.ContentHash || len(got.Data) != 0 {
@@ -295,8 +298,9 @@ func TestRevisionServiceReplaceRejectsInvalidTargetOrMaterialBeforeCreate(t *tes
 			base.Kind = test.kind
 			repo := newRevisionServiceFake(t, base)
 			result, err := NewRevisionService(repo).Replace(context.Background(), ReplaceRequest{
-				ArtifactID: base.ID,
-				Material:   test.material,
+				ArtifactID:  base.ID,
+				BaseVersion: base.Version,
+				Material:    test.material,
 			})
 			if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil {
 				t.Fatalf("Replace() result=%+v error=%v", result, err)
@@ -314,7 +318,8 @@ func TestRevisionServiceReplaceCreateFailureLeavesCurrentImageAndInvalidationUnt
 	repo := newRevisionServiceFake(t, base)
 	repo.createErr = errRevisionTestCreate
 	result, err := NewRevisionService(repo).Replace(context.Background(), ReplaceRequest{
-		ArtifactID: base.ID,
+		ArtifactID:  base.ID,
+		BaseVersion: base.Version,
 		Material: ReplacementMaterialIdentity{
 			ContentHash: "sha256:replacement",
 			StorageRef:  "local://projects/project-1/materials/replacement",
@@ -327,6 +332,48 @@ func TestRevisionServiceReplaceCreateFailureLeavesCurrentImageAndInvalidationUnt
 	}
 	if repo.stale != 0 || !base.IsCurrent {
 		t.Fatalf("failed replacement mutated current image: stale=%d current=%v", repo.stale, base.IsCurrent)
+	}
+}
+
+func TestRevisionServiceReplaceConflictAfterBaseLoadKeepsCompetingCurrent(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindImage
+	base.MimeType = "image/png"
+	base.StorageRef = "local://projects/project-1/artifacts/original"
+	base.ContentHash = "sha256:original"
+	repo := newRevisionServiceFake(t, base)
+	competing := cloneArtifactForRevisionTest(base)
+	competing.ID = "artifact-v2"
+	competing.Version = 2
+	competing.ParentID = base.ID
+	competing.ContentHash = "sha256:competing"
+	competing.StorageRef = "local://projects/project-1/artifacts/competing"
+	repo.beforeCreate = func(_ *CreateArtifactRequest) {
+		base.IsCurrent = false
+		competing.IsCurrent = true
+		repo.byID[competing.ID] = competing
+	}
+
+	result, err := NewRevisionService(repo).Replace(context.Background(), ReplaceRequest{
+		ArtifactID:    base.ID,
+		BaseVersion:   base.Version,
+		NewArtifactID: "artifact-replacement",
+		Material: ReplacementMaterialIdentity{
+			ContentHash: "sha256:replacement",
+			StorageRef:  "local://projects/project-1/materials/replacement",
+			MimeType:    "image/webp",
+			SizeBytes:   42,
+		},
+	})
+	if !errors.Is(err, ErrArtifactVersionConflict) || result != nil {
+		t.Fatalf("Replace() result=%+v error=%v, want atomic version conflict", result, err)
+	}
+	current, currentErr := repo.GetCurrent(context.Background(), base.ProjectID, base.StageName, base.UnitID)
+	if currentErr != nil || current.ID != competing.ID || !competing.IsCurrent {
+		t.Fatalf("current artifact after conflict = %+v error=%v, want competing revision", current, currentErr)
+	}
+	if repo.stale != 0 || len(repo.byID) != 2 {
+		t.Fatalf("conflict mutated replacement lineage: stale=%d artifacts=%d", repo.stale, len(repo.byID))
 	}
 }
 
@@ -544,11 +591,12 @@ func TestRestoreUsesHistoricalBytesButCurrentExecutionIdentity(t *testing.T) {
 }
 
 type revisionServiceFake struct {
-	t          *testing.T
-	byID       map[string]*Artifact
-	stale      int
-	lastCreate *CreateArtifactRequest
-	createErr  error
+	t            *testing.T
+	byID         map[string]*Artifact
+	stale        int
+	lastCreate   *CreateArtifactRequest
+	createErr    error
+	beforeCreate func(*CreateArtifactRequest)
 }
 
 func newRevisionServiceFake(t *testing.T, artifacts ...*Artifact) *revisionServiceFake {
@@ -579,6 +627,9 @@ func (f *revisionServiceFake) GetCurrent(_ context.Context, projectID, stageName
 
 func (f *revisionServiceFake) CreateArtifact(_ context.Context, req *CreateArtifactRequest) (*Artifact, error) {
 	f.lastCreate = cloneCreateRequestForRevisionTest(req)
+	if f.beforeCreate != nil {
+		f.beforeCreate(req)
+	}
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
@@ -586,12 +637,15 @@ func (f *revisionServiceFake) CreateArtifact(_ context.Context, req *CreateArtif
 	for _, artifact := range f.byID {
 		if artifact.ProjectID == req.ProjectID && artifact.StageName == req.StageName && artifact.UnitID == req.UnitID && artifact.IsCurrent {
 			current = artifact
-			artifact.IsCurrent = false
 		}
+	}
+	if req.ExpectedParentID != "" && (current == nil || current.ID != req.ExpectedParentID || current.Version != req.ExpectedParentVersion) {
+		return nil, ErrArtifactVersionConflict
 	}
 	if current == nil {
 		f.t.Fatal("CreateArtifact must use an existing current artifact")
 	}
+	current.IsCurrent = false
 	created := &Artifact{
 		ID: "artifact-v4", ProjectID: req.ProjectID, WorkflowRunID: req.WorkflowRunID, TaskID: req.TaskID,
 		StageName: req.StageName, RoleAgentID: req.RoleAgentID, UnitID: req.UnitID, Kind: req.Kind, Name: req.Name,

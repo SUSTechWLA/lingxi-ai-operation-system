@@ -632,7 +632,8 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	var revised *artifact.RevisionResult
 	if replacement != nil {
 		revised, err = s.revisions.Replace(ctx, artifact.ReplaceRequest{
-			ArtifactID: base.ID, NewArtifactID: receipt.NewArtifactID, Material: *replacement, Provenance: provenance,
+			ArtifactID: base.ID, BaseVersion: req.BaseVersion, NewArtifactID: receipt.NewArtifactID,
+			Material: *replacement, Provenance: provenance,
 		})
 	} else {
 		revised, err = s.revisions.Revise(ctx, artifact.ReviseRequest{

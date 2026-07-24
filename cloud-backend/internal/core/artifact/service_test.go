@@ -1,7 +1,9 @@
 package artifact
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -84,6 +86,80 @@ func TestCreateArtifactRequest(t *testing.T) {
 		// Auto-computed in service when not provided
 		t.Log("contentHash auto-computed by service layer")
 	}
+}
+
+func TestArtifactLineageCandidateUsesAuthorizedExpectationNotObservedCurrent(t *testing.T) {
+	req := &CreateArtifactRequest{
+		ExpectedParentID:      "artifact-v2",
+		ExpectedParentVersion: 2,
+	}
+	competingCurrent := &Artifact{ID: "artifact-v3", Version: 3}
+
+	version, parentID, err := artifactLineageCandidate(req, competingCurrent)
+	if err != nil {
+		t.Fatalf("artifactLineageCandidate() error = %v", err)
+	}
+	if version != 3 || parentID != "artifact-v2" {
+		t.Fatalf("candidate lineage = %s@%d, want artifact-v2@3", parentID, version)
+	}
+}
+
+func TestArtifactLineageCandidateRejectsPartialExpectation(t *testing.T) {
+	for _, req := range []*CreateArtifactRequest{
+		{ExpectedParentID: "artifact-v2"},
+		{ExpectedParentVersion: 2},
+		{ExpectedParentID: "artifact-v2", ExpectedParentVersion: -1},
+	} {
+		if _, _, err := artifactLineageCandidate(req, &Artifact{ID: "artifact-v3", Version: 3}); !errors.Is(err, ErrArtifactVersionConflict) {
+			t.Fatalf("artifactLineageCandidate(%+v) error = %v, want version conflict", req, err)
+		}
+	}
+}
+
+func TestCreateArtifactExpectedParentConflictCannotInsertStaleCandidate(t *testing.T) {
+	competing := &Artifact{
+		ID: "artifact-v2", ProjectID: "project-1", StageName: "keyframe", UnitID: "shot-1",
+		Version: 2, ParentID: "artifact-v1", IsCurrent: true,
+	}
+	store := &artifactCreationRaceStore{current: competing}
+	created, err := createArtifactWithStore(context.Background(), store, &CreateArtifactRequest{
+		ID: "artifact-replacement", ProjectID: competing.ProjectID, StageName: competing.StageName, UnitID: competing.UnitID,
+		Kind: KindImage, Name: "shot-1.webp", StorageType: StorageLocal,
+		StorageRef: "local://projects/project-1/materials/replacement", MimeType: "image/webp",
+		ContentHash: "sha256:replacement", ForceNewVersion: true,
+		ExpectedParentID: "artifact-v1", ExpectedParentVersion: 1,
+	})
+	if !errors.Is(err, ErrArtifactVersionConflict) || created != nil {
+		t.Fatalf("createArtifactWithStore() artifact=%+v error=%v, want version conflict", created, err)
+	}
+	if store.inserted != nil || store.current != competing || store.findCurrentCalls != 0 {
+		t.Fatalf("stale candidate changed lineage: inserted=%+v current=%+v currentReads=%d", store.inserted, store.current, store.findCurrentCalls)
+	}
+}
+
+type artifactCreationRaceStore struct {
+	current          *Artifact
+	inserted         *Artifact
+	findCurrentCalls int
+}
+
+func (s *artifactCreationRaceStore) FindByHash(context.Context, string, string, string, string) (*Artifact, error) {
+	return nil, errors.New("not found")
+}
+
+func (s *artifactCreationRaceStore) FindCurrent(context.Context, string, string, string) (*Artifact, error) {
+	s.findCurrentCalls++
+	return s.current, nil
+}
+
+func (s *artifactCreationRaceStore) Save(_ context.Context, candidate *Artifact) error {
+	if s.current == nil || candidate.ParentID != s.current.ID || candidate.Version != s.current.Version+1 {
+		return ErrArtifactVersionConflict
+	}
+	s.current.IsCurrent = false
+	s.inserted = candidate
+	s.current = candidate
+	return nil
 }
 
 func TestBuildArtifactRecordStoresOnlyLocalMetadata(t *testing.T) {

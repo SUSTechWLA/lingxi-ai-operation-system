@@ -162,6 +162,13 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     window.requestAnimationFrame(() => impactTriggerRef.current?.focus())
   }
 
+  const cancelImageReview = () => {
+    operationControllerRef.current?.abort()
+    operationControllerRef.current = null
+    setWorking(false)
+    setImageDialogOpen(false)
+  }
+
   const previewRevision = (preparedInstruction?: string) => {
     if (!artifactId || !baseVersion) return
     setTextSelectionDraft(null)
@@ -473,7 +480,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
           handleConfirm()
         }}
         onReload={() => setError('')}
-        onClose={() => setImageDialogOpen(false)}
+        onClose={cancelImageReview}
       />}
       {error && <p className="creator-form-error" role="alert">{error}</p>}
     </section>

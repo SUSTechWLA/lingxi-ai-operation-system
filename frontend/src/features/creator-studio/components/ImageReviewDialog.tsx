@@ -92,7 +92,7 @@ export default function ImageReviewDialog({
   const trapFocus = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape') {
       event.preventDefault()
-      if (!busy) onClose()
+      onClose()
       return
     }
     if (event.key !== 'Tab') return
@@ -227,7 +227,7 @@ export default function ImageReviewDialog({
             <p className="creator-eyebrow">图片审阅</p>
             <h2 ref={headingRef} id="image-review-title" tabIndex={-1}>{title}</h2>
           </div>
-          <button type="button" className="creator-secondary-button" disabled={busy} onClick={onClose} aria-label="关闭图片审阅">关闭</button>
+          <button type="button" className="creator-secondary-button" onClick={onClose} aria-label="关闭图片审阅">关闭</button>
         </header>
 
         <div className="image-review-toolbar" aria-label="图片查看工具">

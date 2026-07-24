@@ -1040,6 +1040,34 @@ try {
     assert.match(imageReviewDialogSource, sourcePattern, `image review dialog contract requires ${sourcePattern}`)
   }
   assert.match(imageReviewDialogSource, /accept="image\/\*"/, 'replacement picker accepts image files only')
+  assert.doesNotMatch(
+    imageReviewDialogSource,
+    /if\s*\(!busy\)\s*onClose\(\)/,
+    'Escape must close and cancel image replacement even while work is in flight',
+  )
+  assert.doesNotMatch(
+    imageReviewDialogSource,
+    /disabled=\{busy\}\s+onClick=\{onClose\}/,
+    'the visible image-review close control must remain available while work is in flight',
+  )
+  assert.match(
+    reviewSource,
+    /const cancelImageReview = \(\) => \{[\s\S]*operationControllerRef\.current\?\.abort\(\)[\s\S]*operationControllerRef\.current = null[\s\S]*setWorking\(false\)[\s\S]*setImageDialogOpen\(false\)/,
+    'closing image review aborts and detaches the active replacement operation before hiding the dialog',
+  )
+  assert.match(reviewSource, /onClose=\{cancelImageReview\}/, 'Escape and the close control use the aborting image-review close path')
+  assert.match(
+    reviewSource,
+    /previewStepRevision[\s\S]*if \(!isCurrent\(\)\) throw new Error\('replacement preview was cancelled'\)[\s\S]*setPending/,
+    'an aborted or superseded replacement preview cannot open impact confirmation with a late response',
+  )
+  assert.match(
+    imageReviewDialogSource,
+    /triggerRef\.current = document\.activeElement[\s\S]*return \(\) => \{[\s\S]*trigger\?\.focus\(\)/,
+    'closing the dialog restores focus to its launch control',
+  )
+  assert.match(imageReviewDialogSource, /getBoundingClientRect\(\)/, 'rectangle selection uses rendered image bounds at every zoom level')
+  assert.match(imageReviewDialogSource, /setReloadKey\(value => value \+ 1\)/, 'failed image preview retry remounts the image element')
   assert.match(reviewSource, /uploadLocalArtifactFile[\s\S]*registerProjectMaterial[\s\S]*previewStepRevision/, 'replacement uploads, registers, then previews impact')
   assert.match(reviewSource, /mode: 'replace'/, 'replacement submission uses the typed revision branch')
   assert.match(reviewSource, /确认修改/, 'typed replacement remains behind the existing explicit impact confirmation')

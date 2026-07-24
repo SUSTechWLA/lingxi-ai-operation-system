@@ -35,35 +35,53 @@ func NewService(repo *Repository) *Service {
 	return &Service{repo: repo}
 }
 
+type artifactCreationStore interface {
+	FindByHash(context.Context, string, string, string, string) (*Artifact, error)
+	FindCurrent(context.Context, string, string, string) (*Artifact, error)
+	Save(context.Context, *Artifact) error
+}
+
 // CreateArtifact creates a new artifact version. If a version with the same
 // content hash already exists for the same scope, it returns the existing one
 // (idempotent). Otherwise, it auto-increments the version number and saves.
 func (s *Service) CreateArtifact(ctx context.Context, req *CreateArtifactRequest) (*Artifact, error) {
+	return createArtifactWithStore(ctx, s.repo, req)
+}
+
+func createArtifactWithStore(ctx context.Context, store artifactCreationStore, req *CreateArtifactRequest) (*Artifact, error) {
 	if req.ContentHash == "" && len(req.Data) > 0 {
 		req.ContentHash = HashContent(req.Data)
 	}
 
-	// Check for idempotent duplicate (same content hash = same result)
-	if contentHashDedupEnabled(req) {
-		existing, err := s.repo.FindByHash(ctx, req.ProjectID, req.StageName, req.UnitID, req.ContentHash)
-		if err == nil && existing != nil {
-			zap.L().Debug("Artifact already exists (idempotent)", zap.String("hash", req.ContentHash))
-			return existing, nil
+	var (
+		nextVersion int
+		parentID    string
+		err         error
+	)
+	if hasExpectedArtifactParent(req) {
+		// Do not replace the authorized parent with a newly observed current
+		// row. Repository.Save compares this candidate to the lineage again
+		// while holding the lineage advisory lock.
+		nextVersion, parentID, err = artifactLineageCandidate(req, nil)
+	} else {
+		// Check for idempotent duplicate (same content hash = same result).
+		if contentHashDedupEnabled(req) {
+			existing, findErr := store.FindByHash(ctx, req.ProjectID, req.StageName, req.UnitID, req.ContentHash)
+			if findErr == nil && existing != nil {
+				zap.L().Debug("Artifact already exists (idempotent)", zap.String("hash", req.ContentHash))
+				return existing, nil
+			}
 		}
+		current, _ := store.FindCurrent(ctx, req.ProjectID, req.StageName, req.UnitID)
+		nextVersion, parentID, err = artifactLineageCandidate(req, current)
 	}
-
-	// Determine the next version number
-	current, err := s.repo.FindCurrent(ctx, req.ProjectID, req.StageName, req.UnitID)
-	nextVersion := 1
-	var parentID string
-	if err == nil && current != nil {
-		nextVersion = current.Version + 1
-		parentID = current.ID
+	if err != nil {
+		return nil, err
 	}
 
 	artifact := buildArtifactRecord(req, nextVersion, parentID)
 
-	if err := s.repo.Save(ctx, artifact); err != nil {
+	if err := store.Save(ctx, artifact); err != nil {
 		return nil, fmt.Errorf("failed to create artifact: %w", err)
 	}
 
@@ -76,7 +94,25 @@ func (s *Service) CreateArtifact(ctx context.Context, req *CreateArtifactRequest
 }
 
 func contentHashDedupEnabled(req *CreateArtifactRequest) bool {
-	return req != nil && !req.ForceNewVersion && req.ContentHash != ""
+	return req != nil && !req.ForceNewVersion && !hasExpectedArtifactParent(req) && req.ContentHash != ""
+}
+
+func hasExpectedArtifactParent(req *CreateArtifactRequest) bool {
+	return req != nil && (req.ExpectedParentID != "" || req.ExpectedParentVersion != 0)
+}
+
+func artifactLineageCandidate(req *CreateArtifactRequest, current *Artifact) (int, string, error) {
+	if hasExpectedArtifactParent(req) {
+		parentID := strings.TrimSpace(req.ExpectedParentID)
+		if parentID == "" || parentID != req.ExpectedParentID || req.ExpectedParentVersion <= 0 {
+			return 0, "", ErrArtifactVersionConflict
+		}
+		return req.ExpectedParentVersion + 1, parentID, nil
+	}
+	if current != nil {
+		return current.Version + 1, current.ID, nil
+	}
+	return 1, "", nil
 }
 
 // GetCurrent returns the current version of an artifact for the given scope.

@@ -53,6 +53,7 @@ type ReplacementMaterialIdentity struct {
 type ReplaceRequest struct {
 	NewArtifactID string
 	ArtifactID    string
+	BaseVersion   int
 	Material      ReplacementMaterialIdentity
 	Provenance    map[string]interface{}
 }
@@ -149,6 +150,9 @@ func (s *RevisionService) Replace(ctx context.Context, req ReplaceRequest) (*Rev
 	if err != nil || base == nil {
 		return nil, fmt.Errorf("%w: %v", ErrRevisionArtifactNotFound, err)
 	}
+	if req.BaseVersion <= 0 || base.Version != req.BaseVersion {
+		return nil, ErrArtifactVersionConflict
+	}
 	material := req.Material
 	storageRef := strings.TrimSpace(material.StorageRef)
 	mimeType := strings.ToLower(strings.TrimSpace(material.MimeType))
@@ -199,7 +203,7 @@ func (s *RevisionService) Replace(ctx context.Context, req ReplaceRequest) (*Rev
 		Kind: base.Kind, Name: base.Name, StorageType: StorageLocal, StorageRef: material.StorageRef,
 		MimeType: material.MimeType, SizeBytes: material.SizeBytes, ContentHash: material.ContentHash,
 		PromptHash: base.PromptHash, Provider: base.Provider, Model: base.Model, Metadata: metadata,
-		ForceNewVersion: true,
+		ForceNewVersion: true, ExpectedParentID: base.ID, ExpectedParentVersion: req.BaseVersion,
 	})
 	if err != nil {
 		return nil, err

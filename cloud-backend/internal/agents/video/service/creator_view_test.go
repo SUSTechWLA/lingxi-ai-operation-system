@@ -534,6 +534,10 @@ func TestStepImageReplacementAuthorizesCanonicalRegisteredMaterialAndPreservesRe
 	if !reflect.DeepEqual(revisions.replaceRequest.Material, wantIdentity) {
 		t.Fatalf("canonical replacement = %+v, want %+v", revisions.replaceRequest.Material, wantIdentity)
 	}
+	if revisions.replaceRequest.ArtifactID != base.ID || revisions.replaceRequest.BaseVersion != base.Version {
+		t.Fatalf("authorized replacement base = %s@%d, want %s@%d",
+			revisions.replaceRequest.ArtifactID, revisions.replaceRequest.BaseVersion, base.ID, base.Version)
+	}
 	receipt, ok := creatorReceiptFromArtifact(result.Artifact)
 	if !ok || !reflect.DeepEqual(receipt.ReplacementMaterial, &wantIdentity) {
 		t.Fatalf("replacement receipt=%+v valid=%v", receipt, ok)
