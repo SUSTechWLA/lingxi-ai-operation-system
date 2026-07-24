@@ -139,6 +139,40 @@ func TestArtifactContentReviewTextPreservesHydratedLocalSourceBytes(t *testing.T
 	}
 }
 
+func TestResolveReviewableTextPrefersNonEmptyInlineSourceOverHydration(t *testing.T) {
+	const inlineSource = "  # legacy inline source\n\nkeep this exact text  \n"
+	node := &model.Node{
+		ID: "legacy_script_exec", TaskID: "task-legacy-inline", Status: model.NodeSuccess,
+		Input: map[string]interface{}{"parameters": map[string]interface{}{"stage": "script"}},
+		Output: map[string]interface{}{
+			"content": "hydrated replacement that must not win",
+			"artifacts": []interface{}{map[string]interface{}{
+				"unitId": "script-content", "kind": "MARKDOWN", "name": "script.md", "mimeType": "text/markdown",
+			}},
+		},
+	}
+	nodeRepo := &reviewTextNodeRepo{node: node}
+	item := &Artifact{
+		ID: "artifact-legacy-inline", ProjectID: "vp-1", WorkflowRunID: "run-missing", TaskID: node.TaskID,
+		StageName: "script", UnitID: "script-content", Kind: KindMarkdown, Name: "script.md",
+		MimeType: "text/markdown", StorageType: StorageLocal, InlineJSON: inlineSource,
+	}
+	handler := newHandlerForStore(
+		&fakeHandlerArtifactStore{artifact: item},
+		unavailableWorkflowRunRepository(t),
+		nodeRepo,
+	)
+
+	reviewText, err := handler.ResolveReviewableText(context.Background(), item)
+
+	if err != nil || reviewText != inlineSource {
+		t.Fatalf("ResolveReviewableText() = %q, %v; want exact inline source %q", reviewText, err, inlineSource)
+	}
+	if nodeRepo.findByIDCalls != 0 || nodeRepo.findByTaskIDCalls != 0 {
+		t.Fatalf("hydrator repository calls = FindByID:%d FindByTaskID:%d; want none", nodeRepo.findByIDCalls, nodeRepo.findByTaskIDCalls)
+	}
+}
+
 func TestArtifactContentReviewTextPreservesExactLocalZeroBytes(t *testing.T) {
 	node := &model.Node{
 		ID: "empty_script_exec", TaskID: "task-empty-local", Status: model.NodeSuccess,
@@ -240,15 +274,21 @@ func unavailableWorkflowRunRepository(t *testing.T) *workflow.RunRepository {
 	return workflow.NewRunRepository(pool)
 }
 
-type reviewTextNodeRepo struct{ node *model.Node }
+type reviewTextNodeRepo struct {
+	node              *model.Node
+	findByIDCalls     int
+	findByTaskIDCalls int
+}
 
 func (f *reviewTextNodeRepo) FindByID(_ context.Context, id string) (*model.Node, error) {
+	f.findByIDCalls++
 	if f.node != nil && f.node.ID == id {
 		return f.node, nil
 	}
 	return nil, nil
 }
 func (f *reviewTextNodeRepo) FindByTaskID(_ context.Context, taskID string) ([]*model.Node, error) {
+	f.findByTaskIDCalls++
 	if f.node != nil && f.node.TaskID == taskID {
 		return []*model.Node{f.node}, nil
 	}

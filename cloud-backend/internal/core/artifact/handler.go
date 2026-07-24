@@ -174,7 +174,7 @@ func (h *Handler) ResolveReviewableText(ctx context.Context, item *Artifact) (st
 	if item == nil {
 		return "", ErrRevisionContentUnavailable
 	}
-	if item.StorageType == StorageInline {
+	if item.InlineJSON != "" || item.StorageType == StorageInline {
 		return item.InlineJSON, nil
 	}
 	if hydrated, ok := h.hydrateLocalTextArtifactContent(ctx, item); ok {
