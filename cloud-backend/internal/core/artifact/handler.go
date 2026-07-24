@@ -122,6 +122,16 @@ func (h *Handler) ListProjectArtifacts(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": gin.H{"artifacts": artifacts}})
 }
 
+// ReconcileProjectArtifacts materializes reviewable artifacts that still live
+// only in successful workflow-node output. It is idempotent and is used by the
+// creator view so historical projects repair themselves before being displayed.
+func (h *Handler) ReconcileProjectArtifacts(ctx context.Context, projectID string) error {
+	if h == nil || h.service == nil || h.runRepo == nil || h.nodeRepo == nil {
+		return nil
+	}
+	return h.materializeProject(ctx, projectID)
+}
+
 func (h *Handler) GetArtifact(c *gin.Context) {
 	artifact, ok := h.authorizedArtifact(c)
 	if !ok {
