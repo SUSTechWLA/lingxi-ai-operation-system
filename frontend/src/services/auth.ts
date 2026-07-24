@@ -30,6 +30,26 @@ interface AuthEnvelope<T> {
   data: T
 }
 
+export class AuthHTTPError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'AuthHTTPError'
+    this.status = status
+  }
+}
+
+export function isDefinitiveAuthFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const directStatus = 'status' in error && typeof error.status === 'number' ? error.status : undefined
+  const response = 'response' in error && error.response && typeof error.response === 'object'
+    ? error.response as { status?: unknown }
+    : undefined
+  const responseStatus = typeof response?.status === 'number' ? response.status : undefined
+  return directStatus === 401 || directStatus === 403 || responseStatus === 401 || responseStatus === 403
+}
+
 function mapAuthResponse(raw: RawAuthResponse): AuthSession {
   return {
     user: raw.user,
@@ -151,7 +171,7 @@ async function authedGet<T>(path: string): Promise<T> {
       headers: { Authorization: `Bearer ${refreshed.accessToken}` },
     })
   }
-  if (!response.ok) throw new Error(await errorMessage(response, '请求失败'))
+  if (!response.ok) throw new AuthHTTPError(await errorMessage(response, '请求失败'), response.status)
   const envelope = await response.json() as AuthEnvelope<T>
   return envelope.data
 }
@@ -165,7 +185,7 @@ async function authRequest<T>(path: string, payload: Record<string, unknown>): P
     },
     body: JSON.stringify(payload),
   })
-  if (!response.ok) throw new Error(await errorMessage(response, '认证失败'))
+  if (!response.ok) throw new AuthHTTPError(await errorMessage(response, '认证失败'), response.status)
   const envelope = await response.json() as AuthEnvelope<T>
   return envelope.data
 }

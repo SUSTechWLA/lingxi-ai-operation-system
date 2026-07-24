@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import type { ArtifactContentResponse } from '../../../utils/types'
 import {
   confirmStep,
@@ -26,7 +26,9 @@ import {
   normalizeRectSelection,
 } from '../logic'
 import { cycleFocusIndex } from '../focusCycle'
+import { classifyArtifactPresentation } from '../artifactPresentation'
 import type { CreatorReviewArtifact } from '../creatorReviewArtifacts'
+import ArtifactProofingCanvas from './ArtifactProofingCanvas'
 
 interface ArtifactReviewPanelProps {
   projectId: string
@@ -60,11 +62,14 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
 
   const artifactId = artifact?.artifactId
   const baseVersion = artifact?.version
-  const mimeType = content?.artifact.mimeType || ''
-  const isImage = mimeType.startsWith('image/')
-  const isVideo = mimeType.startsWith('video/')
-  const isAudio = mimeType.startsWith('audio/')
-  const isText = mimeType.startsWith('text/') || ['JSON', 'MARKDOWN', 'LOG'].includes(content?.artifact.kind || '')
+  const presentation = classifyArtifactPresentation({
+    mimeType: content?.artifact.mimeType,
+    kind: content?.artifact.kind,
+    name: content?.artifact.name,
+  })
+  const isImage = presentation === 'image'
+  const isVideo = presentation === 'video'
+  const isText = ['json', 'markdown', 'text'].includes(presentation)
   const canConfirm = !viewingHistorical && canConfirmCreatorStep(step)
   const canRevise = !viewingHistorical && Boolean(artifactId && baseVersion && step.allowedActions.includes('revise'))
   const versionList = useMemo(() => [...versions].sort((left, right) => right.version - left.version), [versions])
@@ -252,11 +257,8 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
       {!artifactId ? <p className="artifact-empty">这一步还没有可查看的内容。</p> : (
         <>
           {viewingHistorical && <div className="artifact-history-notice" role="status"><strong>正在查看历史产物</strong><span>当前版本不会被覆盖；需要时可从版本列表恢复。</span></div>}
-          <ContentPreview
+          <ArtifactProofingCanvas
             content={content}
-            isImage={isImage}
-            isVideo={isVideo}
-            isAudio={isAudio}
             selection={selection}
             imageRef={imageRef}
             onImagePointerDown={startRectangle}
@@ -304,32 +306,6 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
       {error && <p className="creator-form-error" role="alert">{error}</p>}
     </section>
   )
-}
-
-function ContentPreview({ content, isImage, isVideo, isAudio, selection, imageRef, onImagePointerDown, onImagePointerUp, onImagePointerCancel }: {
-  content: ArtifactContentResponse | null
-  isImage: boolean
-  isVideo: boolean
-  isAudio: boolean
-  selection: ArtifactSelection | null
-  imageRef: RefObject<HTMLImageElement>
-  onImagePointerDown: (event: PointerEvent<HTMLImageElement>) => void
-  onImagePointerUp: (event: PointerEvent<HTMLImageElement>) => void
-  onImagePointerCancel: () => void
-}) {
-  if (!content) return <p className="artifact-empty">正在读取内容…</p>
-  if (isImage && content.mediaUrl) {
-    const rect = selection?.kind === 'rect' ? selection : null
-    return (
-      <div className="artifact-image-stage">
-        <img ref={imageRef} className="artifact-image-preview" src={content.mediaUrl} alt="当前图片内容，拖拽可框选修改区域" onPointerDown={onImagePointerDown} onPointerUp={onImagePointerUp} onPointerCancel={onImagePointerCancel} />
-        {rect && <span className="artifact-selection-overlay" aria-label="已选中的图片区域" style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` }} />}
-      </div>
-    )
-  }
-  if (isVideo && content.mediaUrl) return <video className="artifact-video-preview" controls src={content.mediaUrl}>当前浏览器无法播放视频。</video>
-  if (isAudio && content.mediaUrl) return <audio className="artifact-audio-preview" controls src={content.mediaUrl}>当前浏览器无法播放音频。</audio>
-  return <pre className="artifact-text-preview">{contentText(content.content)}</pre>
 }
 
 function TimeSelection({ selection, onChange }: { selection: ArtifactSelection | null; onChange: (selection: ArtifactSelection) => void }) {

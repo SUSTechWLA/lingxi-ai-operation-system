@@ -6,6 +6,8 @@ import type {
   CandidateRestoreRequest as GeneratedCandidateRestoreRequest,
   CreationView as GeneratedCreationView,
   CreatorArtifactVersion as GeneratedCreatorArtifactVersion,
+  CreatorArtifactDescriptor as GeneratedCreatorArtifactDescriptor,
+  CreatorProcessEvent as GeneratedCreatorProcessEvent,
   CreatorStep as GeneratedCreatorStep,
   CreatorTask as GeneratedCreatorTask,
   ProjectMaterial as GeneratedProjectMaterial,
@@ -23,6 +25,8 @@ import type {
   StepImpact as GeneratedStepImpact,
   StepMutationResponse,
   StepRestoreRequest as GeneratedStepRestoreRequest,
+  StepRegenerationRequest as GeneratedStepRegenerationRequest,
+  StepRegenerationResponse,
   StepRevisionMutationRequest as GeneratedStepRevisionMutationRequest,
   StepRevisionPreviewRequest as GeneratedStepRevisionPreviewRequest,
 } from '../../utils/api-types.generated'
@@ -32,6 +36,8 @@ export type CreatorStepState = GeneratedCreatorStep['state']
 export type CreatorStep = GeneratedCreatorStep
 export type CreatorTask = GeneratedCreatorTask
 export type CreatorArtifactVersion = GeneratedCreatorArtifactVersion
+export type CreatorArtifactDescriptor = GeneratedCreatorArtifactDescriptor
+export type CreatorProcessEvent = GeneratedCreatorProcessEvent
 export type ShotSummary = GeneratedShotSummary
 export type CreatorProject = GeneratedCreationView['project']
 export type CreationView = GeneratedCreationView
@@ -83,10 +89,32 @@ export type StepRestoreRequest = GeneratedStepRestoreRequest
 export type StepConfirmRequest = GeneratedStepConfirmRequest
 export type StepImpact = GeneratedStepImpact
 export type StepMutationResult = StepMutationResponse['data']
+export type StepRegenerationRequest = GeneratedStepRegenerationRequest
+export type StepRegenerationResult = StepRegenerationResponse['data']
 
 export type ProjectMaterialKind = GeneratedProjectMaterial['kind']
 export type ProjectMaterial = GeneratedProjectMaterial
 export type ProjectMaterialManifest = GeneratedProjectMaterialManifest
+
+export type CreatorVoiceMode = 'default_ip' | 'reference_clone' | 'recorded_narration'
+export type CreatorVoiceProvider = 'gpt_sovits_local' | 'chattts_local'
+
+export interface CreatorVoiceSelection {
+  mode: CreatorVoiceMode
+  provider?: CreatorVoiceProvider
+  voiceId?: string
+  referenceArtifactId?: string
+  referenceStorageRef?: string
+  referenceContentHash?: string
+  referenceMimeType?: string
+  recordedNarrationArtifactId?: string
+  recordedNarrationStorageRef?: string
+  recordedNarrationContentHash?: string
+  recordedNarrationMimeType?: string
+  referenceText?: string
+  referenceTextVerified?: boolean
+  usageRightsConfirmed?: boolean
+}
 
 export interface ProjectMaterialManifestMetadata extends ProjectMaterialManifest {
   artifactType: 'project_source_material_manifest'

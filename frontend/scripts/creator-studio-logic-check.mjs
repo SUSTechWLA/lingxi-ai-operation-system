@@ -680,9 +680,21 @@ try {
   const workspaceSource = readFileSync(new URL('../src/features/creator-studio/ProjectWorkspacePage.tsx', import.meta.url), 'utf8')
   const stripSource = readFileSync(new URL('../src/features/creator-studio/components/CreationStrip.tsx', import.meta.url), 'utf8')
   const reviewSource = readFileSync(new URL('../src/features/creator-studio/components/ArtifactReviewPanel.tsx', import.meta.url), 'utf8')
+  const creatorPrerequisiteUrls = [
+    '../src/features/creator-studio/artifactPresentation.ts',
+    '../src/features/creator-studio/components/ArtifactProofingCanvas.tsx',
+    '../src/features/creator-studio/components/CreatorProcessTimeline.tsx',
+    '../src/features/creator-studio/components/JsonArtifactViewer.tsx',
+    '../src/features/creator-studio/components/MarkdownArtifactViewer.tsx',
+    '../src/features/creator-studio/components/ProjectBriefPanel.tsx',
+    '../src/features/creator-studio/components/SimpleVideoPlayer.tsx',
+    '../src/features/creator-studio/components/StepRegenerationDialog.tsx',
+  ].map(path => new URL(path, import.meta.url))
+  for (const prerequisiteUrl of creatorPrerequisiteUrls) {
+    assert.equal(existsSync(prerequisiteUrl), true, `creator production prerequisite must be committed: ${prerequisiteUrl.pathname}`)
+  }
   const proofingSource = readFileSync(new URL('../src/features/creator-studio/components/ArtifactProofingCanvas.tsx', import.meta.url), 'utf8')
   const timelineSource = readFileSync(new URL('../src/features/creator-studio/components/CreatorProcessTimeline.tsx', import.meta.url), 'utf8')
-  const artifactDrawerSource = readFileSync(new URL('../src/features/creator-studio/components/StepArtifactDrawer.tsx', import.meta.url), 'utf8')
   const contentLibraryUrl = new URL('../src/features/creator-studio/components/CreatorContentLibrary.tsx', import.meta.url)
   const contentLibrarySource = existsSync(contentLibraryUrl) ? readFileSync(contentLibraryUrl, 'utf8') : ''
   const projectBriefUrl = new URL('../src/features/creator-studio/components/ProjectBriefPanel.tsx', import.meta.url)
@@ -823,7 +835,6 @@ try {
   assert.match(creatorStylesSource, /\.artifact-technical-data/)
   assert.match(creatorStylesSource, /max-height:\s*min\(32rem,\s*60vh\)/, 'expanded technical data must scroll internally instead of creating an unbounded page')
   assert.match(timelineSource, /完整创作过程/)
-  assert.match(artifactDrawerSource, /TAKE/)
   assert.equal(existsSync(contentLibraryUrl), true, 'the four-tab creator content library must exist')
   for (const tabLabel of ['文字与提示词', '参考图', '视频片段', '语音']) {
     assert.match(contentLibrarySource, new RegExp(tabLabel), `content library includes the ${tabLabel} tab`)
@@ -837,7 +848,6 @@ try {
     /\b(?:attempt|sizeBytes|storageType|storageRef|contentHash|promptHash|artifactType|kind)\b/,
     'creator content cards never render technical artifact descriptors',
   )
-  assert.match(artifactDrawerSource, /创作需求 · 项目记录/)
   assert.match(projectBriefSource, /创作目标/)
   assert.match(projectBriefSource, /目标时长/)
   assert.match(regenerationDialogSource, /previewStepRegeneration/)

@@ -21,6 +21,8 @@ import type {
   StepImpact,
   StepMutationResult,
   StepRestoreRequest,
+  StepRegenerationRequest,
+  StepRegenerationResult,
   StepRevisionPreviewRequest,
   StepRevisionMutationRequest,
 } from '../features/creator-studio/types'
@@ -117,6 +119,33 @@ export async function restoreStepVersion(
   assertIdempotencyKey(idempotencyKey)
   const response = await api.post<ApiResponse<StepMutationResult>>(
     creatorPath(projectId, `/steps/${encodeURIComponent(stepId)}/versions/${version}/restore`), request,
+    { headers: { 'Idempotency-Key': idempotencyKey }, signal },
+  )
+  return response.data.data
+}
+
+export async function previewStepRegeneration(
+  projectId: string,
+  stepId: CreatorStepId,
+  signal?: AbortSignal,
+): Promise<StepImpact> {
+  const response = await api.post<ApiResponse<StepImpact>>(
+    creatorPath(projectId, `/steps/${encodeURIComponent(stepId)}/regeneration-impact`), undefined, { signal },
+  )
+  return response.data.data
+}
+
+export async function regenerateStep(
+  projectId: string,
+  stepId: CreatorStepId,
+  request: StepRegenerationRequest,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<StepRegenerationResult> {
+  if (request.baseVersion !== undefined) assertPositiveVersion(request.baseVersion)
+  assertIdempotencyKey(idempotencyKey)
+  const response = await api.post<ApiResponse<StepRegenerationResult>>(
+    creatorPath(projectId, `/steps/${encodeURIComponent(stepId)}/regenerations`), request,
     { headers: { 'Idempotency-Key': idempotencyKey }, signal },
   )
   return response.data.data

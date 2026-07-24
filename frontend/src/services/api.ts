@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getAuthAccessToken, refreshAuthSession, logout } from './auth'
+import { getAuthAccessToken, isDefinitiveAuthFailure, refreshAuthSession, logout } from './auth'
 import {
   ApiResponse,
   SkillCatalogResponse,
@@ -70,7 +70,7 @@ api.interceptors.response.use(
         return api(original)
       } catch (refreshError) {
         refreshPromise = null
-        logout()
+        if (isDefinitiveAuthFailure(refreshError)) logout()
         throw refreshError
       }
     }
@@ -257,6 +257,19 @@ export const getAgentRun = async (
 ): Promise<AgentRun> => {
   const response = await api.get<ApiResponse<{ run: AgentRun; task: unknown }>>(`/agent/runs/${runId}`)
   return response.data.data.run
+}
+
+export const retryLatestFailedAgentNode = async (taskId: string): Promise<string> => {
+  const response = await api.get<ApiResponse<{
+    nodes?: Array<{ id: string; status: string; completedAt?: string | null }>
+  }>>(`/task/${encodeURIComponent(taskId)}`)
+  const failedNodes = (response.data.data.nodes ?? [])
+    .filter(node => node.status === 'FAILED')
+    .sort((left, right) => String(right.completedAt ?? '').localeCompare(String(left.completedAt ?? '')))
+  const failedNode = failedNodes[0]
+  if (!failedNode) throw new Error('没有可重试的失败步骤')
+  await api.post(`/node/${encodeURIComponent(failedNode.id)}/retry`)
+  return failedNode.id
 }
 
 export const getAgentRunTrace = async (

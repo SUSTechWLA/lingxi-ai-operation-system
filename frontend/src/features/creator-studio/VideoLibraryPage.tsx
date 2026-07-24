@@ -3,7 +3,7 @@ import { fetchVideoProjects } from '../../services/api'
 import { getCreationView } from '../../services/creatorApi'
 import type { CreationView } from './types'
 import type { VideoProject } from '../../utils/types'
-import { creatorProjectProgress, mapWithConcurrency, prioritizeCreationViewProjects } from './logic'
+import { creatorProjectEntryStep, creatorProjectProgress, mapWithConcurrency, prioritizeCreationViewProjects } from './logic'
 
 interface VideoLibraryPageProps {
   onContinueProject: (projectId: string, stepId: string) => void
@@ -87,7 +87,8 @@ function ProjectGroup({ title, projects, onContinueProject }: { title: string; p
       <div className="creator-project-grid">
         {projects.map(({ project, view }) => {
           const progress = creatorProjectProgress(project.status, view)
-          const stepId = view?.activeStep || 'requirements'
+          const stepId = creatorProjectEntryStep(project.status, view?.activeStep)
+          const historyProject = isHistoryProject(project)
           return (
             <article key={project.id} className="creator-project-card">
               <div className="creator-project-card-top">
@@ -100,7 +101,7 @@ function ProjectGroup({ title, projects, onContinueProject }: { title: string; p
                 <span>{progress.label}</span>
                 <div aria-hidden="true"><i style={{ width: `${progress.percent}%` }} /></div>
               </div>
-              <button type="button" className="creator-secondary-button" onClick={() => onContinueProject(project.id, stepId)}>继续创作</button>
+              <button type="button" className="creator-secondary-button" onClick={() => onContinueProject(project.id, stepId)}>{historyProject ? '观看成片' : '继续创作'}</button>
             </article>
           )
         })}

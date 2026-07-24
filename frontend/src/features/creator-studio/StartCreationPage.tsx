@@ -3,12 +3,20 @@ import { createVideoProject, startAgentRun } from '../../services/api'
 import { buildClientModelProvidersForRun, uploadLocalArtifactFile, type LocalArtifactUploadResponse } from '../../services/localAgent'
 import { registerProjectMaterial } from '../../services/creatorApi'
 import type { ProjectMaterial, ProjectMaterialKind } from './types'
-import { buildCreationRequest, buildProjectMaterialStorageRef, creatorStartIdempotencyKey } from './logic'
+import type { CreatorVoiceMode, CreatorVoiceProvider, CreatorVoiceSelection } from './types'
+import { buildCreationRequest, buildProjectMaterialStorageRef, creatorStartIdempotencyKey, validateCreatorVoiceSelection } from './logic'
 import type { CreatorAIGCPolicy, CreatorProductionRoute } from './logic'
 
 type MaterialStatus = 'ready' | 'uploading' | 'success' | 'failed'
 
 interface MaterialItem {
+  id: string
+  file: File
+  status: MaterialStatus
+  upload?: LocalArtifactUploadResponse
+}
+
+interface VoiceFileItem {
   id: string
   file: File
   status: MaterialStatus
@@ -44,12 +52,19 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
   const [platform, setPlatform] = useState('')
   const [productionRoute, setProductionRoute] = useState<CreatorProductionRoute>('talking_head')
   const [aigcPolicy, setAigcPolicy] = useState<CreatorAIGCPolicy>('auto')
+  const [voiceMode, setVoiceMode] = useState<CreatorVoiceMode>('default_ip')
+  const [voiceProvider, setVoiceProvider] = useState<CreatorVoiceProvider>('gpt_sovits_local')
+  const [referenceText, setReferenceText] = useState('')
+  const [referenceTextVerified, setReferenceTextVerified] = useState(false)
+  const [usageRightsConfirmed, setUsageRightsConfirmed] = useState(false)
+  const [voiceFile, setVoiceFile] = useState<VoiceFileItem>()
   const [materials, setMaterials] = useState<MaterialItem[]>([])
   const [projectId, setProjectId] = useState<string>()
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string>()
   const [optionsOpen, setOptionsOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const voiceFileInputRef = useRef<HTMLInputElement>(null)
   const activeRef = useRef(true)
   const projectIdRef = useRef<string>()
   const operationControllerRef = useRef<AbortController>()
@@ -82,6 +97,11 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
     setMaterials(current => current.map(item => item.id === id ? { ...item, ...patch } : item))
   }
 
+  const updateVoiceFile = (id: string, patch: Partial<VoiceFileItem>) => {
+    if (!activeRef.current) return
+    setVoiceFile(current => current?.id === id ? { ...current, ...patch } : current)
+  }
+
   const addMaterials = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
     event.target.value = ''
@@ -94,6 +114,22 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
         status: 'ready' as const,
       })),
     ])
+  }
+
+  const addVoiceFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!isSupportedVoiceFile(file)) {
+      setError('录音仅支持 WAV、MP3、M4A 或 FLAC。')
+      return
+    }
+    setError(undefined)
+    setVoiceFile({
+      id: `voice-${Date.now()}`,
+      file,
+      status: 'ready',
+    })
   }
 
   const processMaterial = async (item: MaterialItem, nextProjectId: string, signal: AbortSignal): Promise<boolean> => {
@@ -135,6 +171,60 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
     return allSucceeded
   }
 
+  const processVoiceFile = async (
+    item: VoiceFileItem,
+    nextProjectId: string,
+    signal: AbortSignal,
+  ): Promise<LocalArtifactUploadResponse | undefined> => {
+    updateVoiceFile(item.id, { status: 'uploading' })
+    try {
+      const upload = item.upload || await uploadLocalArtifactFile({
+        projectId: nextProjectId,
+        id: item.id,
+        storageRef: buildProjectMaterialStorageRef(nextProjectId, item.id),
+        file: item.file,
+        mimeType: voiceMimeType(item.file),
+        signal,
+        metadata: {
+          artifactType: voiceMode === 'recorded_narration' ? 'recorded_narration' : 'voice_reference',
+          source: 'creator_studio',
+          localOnly: true,
+          usageRightsConfirmed,
+        },
+      })
+      if (signal.aborted || !activeRef.current || !upload.storageRef || !upload.contentHash) return undefined
+      updateVoiceFile(item.id, { status: 'success', upload })
+      return upload
+    } catch {
+      if (!signal.aborted) updateVoiceFile(item.id, { status: 'failed' })
+      return undefined
+    }
+  }
+
+  const voiceSelectionDraft = (): CreatorVoiceSelection => {
+    if (voiceMode === 'default_ip') {
+      return {
+        mode: 'default_ip',
+        provider: 'gpt_sovits_local',
+        voiceId: 'main_ip_warm_knowledge_host_v1',
+      }
+    }
+    if (voiceMode === 'reference_clone') {
+      return {
+        mode: 'reference_clone',
+        provider: voiceProvider,
+        voiceId: `project_reference_voice_${projectIdRef.current || 'pending'}`,
+        referenceText: referenceText.trim(),
+        referenceTextVerified,
+        usageRightsConfirmed,
+      }
+    }
+    return {
+      mode: 'recorded_narration',
+      usageRightsConfirmed,
+    }
+  }
+
   const retryMaterial = async (item: MaterialItem) => {
     if (!projectId || starting) return
     const controller = beginOperation()
@@ -151,6 +241,20 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
 
   const startCreation = async () => {
     if (!prompt.trim() || starting) return
+    const selectedVoice = voiceSelectionDraft()
+    if (productionRoute === 'talking_head') {
+      const validationError = validateCreatorVoiceSelection(selectedVoice)
+      if (validationError) {
+        setError(validationError)
+        setOptionsOpen(true)
+        return
+      }
+      if (selectedVoice.mode !== 'default_ip' && !voiceFile) {
+        setError('请先选择一段本地录音。')
+        setOptionsOpen(true)
+        return
+      }
+    }
     const controller = beginOperation()
     if (!isCurrentOperation(controller)) return
     setStarting(true)
@@ -169,6 +273,7 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
         productionRoute,
         aigcPolicy,
         modelProviders,
+        voiceSelection: productionRoute === 'talking_head' ? selectedVoice : undefined,
       })
       if (!nextProjectId) {
         const project = await createVideoProject(request.project, controller.signal)
@@ -181,9 +286,42 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
         if (isCurrentOperation(controller)) setError('部分素材未准备好，请重试失败的文件后再开始创作。')
         return
       }
+      let runtimeVoiceSelection = request.agentRun.context?.voiceSelection as CreatorVoiceSelection | undefined
+      if (productionRoute === 'talking_head' && selectedVoice.mode !== 'default_ip') {
+        const currentVoiceFile = voiceFile
+        if (!currentVoiceFile) {
+          if (isCurrentOperation(controller)) setError('请先选择一段本地录音。')
+          return
+        }
+        const upload = await processVoiceFile(currentVoiceFile, nextProjectId, controller.signal)
+        if (!upload?.storageRef || !upload.contentHash) {
+          if (isCurrentOperation(controller)) setError('录音未准备好，请重试。')
+          return
+        }
+        runtimeVoiceSelection = selectedVoice.mode === 'reference_clone'
+          ? {
+              ...selectedVoice,
+              voiceId: `project_reference_voice_${nextProjectId}`,
+              referenceArtifactId: upload.id,
+              referenceStorageRef: upload.storageRef,
+              referenceContentHash: upload.contentHash,
+              referenceMimeType: upload.mimeType || voiceMimeType(currentVoiceFile.file),
+            }
+          : {
+              ...selectedVoice,
+              recordedNarrationArtifactId: upload.id,
+              recordedNarrationStorageRef: upload.storageRef,
+              recordedNarrationContentHash: upload.contentHash,
+              recordedNarrationMimeType: upload.mimeType || voiceMimeType(currentVoiceFile.file),
+            }
+      }
       await startAgentRun({
         ...request.agentRun,
-        context: { ...request.agentRun.context, projectId: nextProjectId },
+        context: {
+          ...request.agentRun.context,
+          projectId: nextProjectId,
+          ...(runtimeVoiceSelection ? { voiceSelection: runtimeVoiceSelection } : {}),
+        },
       }, {
         idempotencyKey: creatorStartIdempotencyKey(nextProjectId),
         signal: controller.signal,
@@ -275,6 +413,92 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
             </select>
           </label>
         </div>
+        {productionRoute === 'talking_head' && (
+          <fieldset className="creator-voice-options">
+            <legend>配音</legend>
+            <p>默认使用经过确认的树懒 IP 音色；自定义录音只保存在本机。</p>
+            <div className="creator-voice-mode-list">
+              <label className={voiceMode === 'default_ip' ? 'is-selected' : ''}>
+                <input
+                  type="radio"
+                  name="creator-voice-mode"
+                  value="default_ip"
+                  checked={voiceMode === 'default_ip'}
+                  onChange={() => setVoiceMode('default_ip')}
+                  disabled={starting}
+                />
+                <span><strong>默认 IP 音色</strong><small>使用已确认的树懒声音生成口播</small></span>
+              </label>
+              <label className={voiceMode === 'reference_clone' ? 'is-selected' : ''}>
+                <input
+                  type="radio"
+                  name="creator-voice-mode"
+                  value="reference_clone"
+                  checked={voiceMode === 'reference_clone'}
+                  onChange={() => setVoiceMode('reference_clone')}
+                  disabled={starting}
+                />
+                <span><strong>上传录音复刻音色</strong><small>用录音音色朗读审核通过的口播稿</small></span>
+              </label>
+              <label className={voiceMode === 'recorded_narration' ? 'is-selected' : ''}>
+                <input
+                  type="radio"
+                  name="creator-voice-mode"
+                  value="recorded_narration"
+                  checked={voiceMode === 'recorded_narration'}
+                  onChange={() => setVoiceMode('recorded_narration')}
+                  disabled={starting}
+                />
+                <span><strong>直接使用已录口播</strong><small>不复刻声音，直接使用完整成品录音</small></span>
+              </label>
+            </div>
+            {voiceMode !== 'default_ip' && (
+              <div className="creator-voice-custom">
+                {voiceMode === 'reference_clone' && (
+                  <>
+                    <label>本地声音引擎
+                      <select value={voiceProvider} onChange={(event) => setVoiceProvider(event.target.value as CreatorVoiceProvider)} disabled={starting}>
+                        <option value="gpt_sovits_local">GPT-SoVITS（推荐）</option>
+                        <option value="chattts_local">ChatTTS（需本机安装）</option>
+                      </select>
+                    </label>
+                    <label>录音中实际说出的完整文字
+                      <textarea
+                        value={referenceText}
+                        onChange={(event) => setReferenceText(event.target.value)}
+                        rows={3}
+                        placeholder="请逐字填写，标点也尽量与录音停顿一致"
+                        disabled={starting}
+                      />
+                    </label>
+                    <label className="creator-voice-check">
+                      <input type="checkbox" checked={referenceTextVerified} onChange={(event) => setReferenceTextVerified(event.target.checked)} disabled={starting} />
+                      我已核对，录音原文与音频内容完全一致
+                    </label>
+                  </>
+                )}
+                <div className="creator-voice-file-row">
+                  <button type="button" className="creator-secondary-button" onClick={() => voiceFileInputRef.current?.click()} disabled={starting}>
+                    {voiceFile ? '更换录音' : '选择录音'}
+                  </button>
+                  <input
+                    ref={voiceFileInputRef}
+                    className="creator-visually-hidden"
+                    type="file"
+                    accept="audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,audio/flac,.wav,.mp3,.m4a,.flac"
+                    onChange={addVoiceFile}
+                    disabled={starting}
+                  />
+                  <span>{voiceFile ? `${voiceFile.file.name} · ${materialStatusLabel(voiceFile.status)}` : 'WAV、MP3、M4A 或 FLAC'}</span>
+                </div>
+                <label className="creator-voice-check">
+                  <input type="checkbox" checked={usageRightsConfirmed} onChange={(event) => setUsageRightsConfirmed(event.target.checked)} disabled={starting} />
+                  我确认拥有该录音和声音的使用授权
+                </label>
+              </div>
+            )}
+          </fieldset>
+        )}
       </details>
 
       {error && <p className="creator-form-error" role="alert">{error}</p>}
@@ -309,4 +533,19 @@ function materialStatusLabel(status: MaterialStatus): string {
   if (status === 'success') return '已准备好'
   if (status === 'failed') return '未成功'
   return '等待开始'
+}
+
+function isSupportedVoiceFile(file: File): boolean {
+  if (file.type.startsWith('audio/')) return true
+  return /\.(wav|mp3|m4a|flac)$/i.test(file.name)
+}
+
+function voiceMimeType(file: File): string {
+  if (file.type.startsWith('audio/')) return file.type
+  const extension = file.name.split('.').pop()?.toLowerCase()
+  if (extension === 'wav') return 'audio/wav'
+  if (extension === 'mp3') return 'audio/mpeg'
+  if (extension === 'm4a') return 'audio/mp4'
+  if (extension === 'flac') return 'audio/flac'
+  return 'application/octet-stream'
 }

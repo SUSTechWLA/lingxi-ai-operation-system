@@ -1,44 +1,42 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ArtifactContentResponse } from '../../../utils/types'
-import { getCreatorArtifactContent, rebuildFinalAssembly } from '../../../services/creatorApi'
+import { rebuildFinalAssembly } from '../../../services/creatorApi'
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import type { CreatorStep } from '../types'
 import { deliveryArtifactPassesFinalReview, isCreatorConflict, resolveCreatorArtifactMediaUrl } from '../logic'
+import { classifyArtifactPresentation } from '../artifactPresentation'
+import ArtifactProofingCanvas from './ArtifactProofingCanvas'
+import SimpleVideoPlayer from './SimpleVideoPlayer'
 
 interface PreviewDeliveryPanelProps {
   projectId: string
   step: CreatorStep
   content: ArtifactContentResponse | null
   assemblyDirty: boolean
+  viewingHistorical?: boolean
   onAssemblyUpdated: () => Promise<void>
 }
 
-// The panel deliberately deals only in the current artifact returned by the
-// creator view. It never derives media from Shot candidates or developer data.
-export default function PreviewDeliveryPanel({ projectId, step, content, assemblyDirty, onAssemblyUpdated }: PreviewDeliveryPanelProps) {
-  const [currentContent, setCurrentContent] = useState<ArtifactContentResponse | null>(content)
+// The workspace owns artifact selection. This panel renders exactly that
+// selection and never replaces it with the step's default artifact.
+export default function PreviewDeliveryPanel({ projectId, step, content, assemblyDirty, viewingHistorical = false, onAssemblyUpdated }: PreviewDeliveryPanelProps) {
+	const currentContent = content
   const [notice, setNotice] = useState('')
   const [working, setWorking] = useState(false)
   const controllerRef = useRef<AbortController | null>(null)
   const assemblyKeyRef = useRef<string | null>(null)
   const isDelivery = step.id === 'delivery'
   const isFinalReviewPassed = isDelivery && deliveryArtifactPassesFinalReview(currentContent)
-  const previewReady = step.state === 'confirmed' || step.state === 'needs_review'
-  const mediaUrl = resolveCreatorArtifactMediaUrl(projectId, currentContent, getLocalAgentBaseUrl())
-
-  useEffect(() => {
-    controllerRef.current?.abort()
-    assemblyKeyRef.current = null
-    setCurrentContent(content)
-    const artifactId = step.currentArtifactId
-    if (!artifactId) return () => undefined
-    const controller = new AbortController()
-    controllerRef.current = controller
-    void getCreatorArtifactContent(artifactId, controller.signal).then(next => {
-      if (!controller.signal.aborted && next.artifact.id === artifactId) setCurrentContent(next)
-    }).catch(() => undefined)
-    return () => controller.abort()
-  }, [content, step.currentArtifactId, step.currentVersion])
+	const previewReady = step.state === 'confirmed' || step.state === 'needs_review'
+	const mediaUrl = resolveCreatorArtifactMediaUrl(projectId, currentContent, getLocalAgentBaseUrl())
+	const presentation = classifyArtifactPresentation({
+		kind: currentContent?.artifact.kind,
+		mimeType: currentContent?.artifact.mimeType,
+		name: currentContent?.artifact.name,
+	})
+	const proofingContent = currentContent && mediaUrl && !currentContent.mediaUrl
+		? { ...currentContent, mediaUrl }
+		: currentContent
 
   useEffect(() => () => controllerRef.current?.abort(), [])
 
@@ -90,14 +88,17 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
         <span className={`artifact-state is-${step.state}`}>{step.state === 'confirmed' ? '已确认' : '等待处理'}</span>
       </header>
 
+			{viewingHistorical && <div className="artifact-history-notice" role="status"><strong>正在查看历史产物</strong><span>当前交付版本没有被替换。</span></div>}
+
       {assemblyDirty && <div className="preview-delivery-warning" role="status">
         <strong>镜头有更新，成片需要重新拼接。</strong>
         <p>你可以继续回到镜头审核；重新拼接不会重新生成任何单个镜头。</p>
         <button className="creator-primary-button" type="button" disabled={working} onClick={() => void rebuild()}>{working ? '正在核对镜头…' : '重新拼接成片'}</button>
       </div>}
 
-      {!assemblyDirty && previewReady && mediaUrl && (!isDelivery || isFinalReviewPassed) && <video className="artifact-video-preview" controls preload="metadata" src={mediaUrl}>当前浏览器无法播放该视频。</video>}
-      {!assemblyDirty && (!previewReady || !mediaUrl) && <p className="artifact-empty">系统正在准备当前成片；完成后会在这里显示可播放的视频。</p>}
+			{!assemblyDirty && previewReady && presentation === 'video' && mediaUrl && (viewingHistorical || !isDelivery || isFinalReviewPassed) && <SimpleVideoPlayer src={mediaUrl} title={currentContent?.artifact.name || '当前成片'} downloadName={currentContent?.artifact.name} />}
+			{!assemblyDirty && previewReady && currentContent && presentation !== 'video' && <ArtifactProofingCanvas content={proofingContent} />}
+			{!assemblyDirty && (!previewReady || !currentContent || (presentation === 'video' && !mediaUrl)) && <p className="artifact-empty">系统正在准备当前产物；完成后会在这里显示可审阅内容。</p>}
 
       <section className="preview-delivery-checklist" aria-label="成片检查">
         <h3>成片检查</h3>

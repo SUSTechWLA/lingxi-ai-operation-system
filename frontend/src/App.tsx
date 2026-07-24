@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import AuthScreen from './components/AuthScreen'
-import { fetchCurrentUser, getStoredAuthSession, logout, type AuthUser } from './services/auth'
+import { fetchCurrentUser, getStoredAuthSession, isDefinitiveAuthFailure, logout, type AuthUser } from './services/auth'
 import { fetchLocalAgentHealth } from './services/localAgent'
 import CreatorShell from './features/creator-studio/CreatorShell'
 import { parseAppRoute, replaceHashRoute, type AppRoute } from './creatorRoutes'
@@ -35,15 +35,20 @@ function App() {
 
   useEffect(() => {
     const restoreSession = async () => {
-      if (!getStoredAuthSession()) {
+      const storedSession = getStoredAuthSession()
+      if (!storedSession) {
         setAuthChecking(false)
         return
       }
       try {
         const user = await fetchCurrentUser()
         setAuthUser(user)
-      } catch {
-        logout()
+      } catch (error) {
+        if (isDefinitiveAuthFailure(error)) {
+          logout()
+        } else {
+          setAuthUser(storedSession.user)
+        }
       } finally {
         setAuthChecking(false)
       }

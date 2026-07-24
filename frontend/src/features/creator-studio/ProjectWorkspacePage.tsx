@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentReviewItem, AgentRun, ArtifactContentResponse } from '../../utils/types'
-import { getAgentRun, getAgentRunReviews } from '../../services/api'
+import { getAgentRun, getAgentRunReviews, retryLatestFailedAgentNode } from '../../services/api'
 import { getCreationView, getCreatorArtifactContent, getShotSummary, getShotWorkspace, getStepVersions, listShots } from '../../services/creatorApi'
 import type { CreationView, CreatorArtifactVersion, CreatorStep, CreatorStepId, CreatorTask, ShotListFilters, ShotListItem, ShotRegenerationResult, ShotSummary, ShotUnit, ShotWorkspace } from './types'
 import {
   creatorPollDelay,
+  creatorArtifactLoadState,
   creatorStepLabel,
   creatorStepForAgentReview,
   didSelectedShotTaskChange,
@@ -19,6 +20,7 @@ import {
   type KeyedWorkspaceArtifact,
   type WorkspaceArtifactSelection,
   workspaceArtifactKey,
+  withCreatorProjectRecord,
 } from './logic'
 import CreationStrip from './components/CreationStrip'
 import ArtifactReviewPanel from './components/ArtifactReviewPanel'
@@ -27,7 +29,10 @@ import ShotReviewQueue from './components/ShotReviewQueue'
 import ShotInspector from './components/ShotInspector'
 import PreviewDeliveryPanel from './components/PreviewDeliveryPanel'
 import AgentReviewGatePanel from './components/AgentReviewGatePanel'
+import CreatorProcessTimeline from './components/CreatorProcessTimeline'
 import CreatorContentLibrary from './components/CreatorContentLibrary'
+import StepRegenerationDialog from './components/StepRegenerationDialog'
+import ProjectBriefPanel from './components/ProjectBriefPanel'
 import {
   projectCreatorReviewArtifacts,
   selectCreatorReviewArtifact,
@@ -50,6 +55,8 @@ type LoadedWorkspaceArtifact = KeyedWorkspaceArtifact<{
 export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, selectedShotId, onSelectedShotTaskChanged }: ProjectWorkspacePageProps) {
   const [view, setView] = useState<CreationView | null>(null)
   const [artifactResult, setArtifactResult] = useState<LoadedWorkspaceArtifact | null>(null)
+  const [artifactLoadError, setArtifactLoadError] = useState('')
+  const [artifactReloadNonce, setArtifactReloadNonce] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [shotItems, setShotItems] = useState<ShotListItem[]>([])
@@ -64,6 +71,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const [shotNotice, setShotNotice] = useState('')
   const [agentRun, setAgentRun] = useState<AgentRun | null>(null)
   const [agentReviews, setAgentReviews] = useState<AgentReviewItem[]>([])
+  const [recoveringAgentRun, setRecoveringAgentRun] = useState(false)
   const [selectedArtifactIds, setSelectedArtifactIds] = useState<Partial<Record<CreatorStepId, string>>>({})
   const activeTasksRef = useRef<CreationView['activeTasks']>([])
   const viewRequestTokenRef = useRef(0)
@@ -81,14 +89,18 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const isPreviewDeliveryStep = stepId === 'preview' || stepId === 'delivery'
   const activeShotId = selectedShotId && (shotItems.length === 0 || shotItems.some(item => item.id === selectedShotId)) ? selectedShotId : selectedQueueShotId
   const activeTaskSignature = useMemo(() => (view?.activeTasks ?? []).map(task => `${task.id}:${task.shotId ?? ''}:${task.status}`).sort().join('|'), [view?.activeTasks])
+  const pollingSignature = activeTaskSignature || (view?.steps.some(step => step.state === 'generating') ? 'creator-step-generating' : '')
   const currentRunId = view?.project.currentRunId
   const pendingAgentReview = nextPendingCreatorReview(agentReviews)
   const displaySteps = useMemo(() => {
-    if (!view || !pendingAgentReview) return view?.steps ?? []
-    const reviewStepId = creatorStepForAgentReview(pendingAgentReview)
-    return view.steps.map(step => step.id === reviewStepId
-      ? { ...step, state: 'needs_review' as const, allowedActions: ['confirm'] }
-      : step)
+    if (!view) return []
+    const reviewStepId = pendingAgentReview ? creatorStepForAgentReview(pendingAgentReview) : undefined
+    const reviewed = reviewStepId
+      ? view.steps.map(step => step.id === reviewStepId
+        ? { ...step, state: 'needs_review' as const, allowedActions: ['confirm'] }
+        : step)
+      : view.steps
+    return withCreatorProjectRecord(reviewed, view.project)
   }, [pendingAgentReview, view])
 
   useEffect(() => { shotItemsRef.current = shotItems }, [shotItems])
@@ -220,6 +232,20 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
     setAgentReviews(nextReviews.reviews ?? [])
   }, [])
 
+  const retryFailedAgentRun = useCallback(async () => {
+    if (!agentRun?.taskId || !currentRunId || recoveringAgentRun) return
+    setRecoveringAgentRun(true)
+    setError('')
+    try {
+      await retryLatestFailedAgentNode(agentRun.taskId)
+      await Promise.all([refreshAgentBridge(currentRunId), refreshView()])
+    } catch (retryError) {
+      setError(retryError instanceof Error ? retryError.message : '失败步骤暂时无法重试，请稍后再试。')
+    } finally {
+      setRecoveringAgentRun(false)
+    }
+  }, [agentRun?.taskId, currentRunId, recoveringAgentRun, refreshAgentBridge, refreshView])
+
   useEffect(() => {
     if (!currentRunId) {
       setAgentRun(null)
@@ -261,6 +287,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   useEffect(() => {
     const requestToken = ++artifactRequestTokenRef.current
     const requestSelection = artifactSelection
+    setArtifactLoadError('')
     if (!requestSelection) return () => undefined
     const controller = new AbortController()
     void Promise.all([
@@ -274,13 +301,15 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       ) return
       setArtifactResult({ key: workspaceArtifactKey(requestSelection), value: { content: nextContent, versions: nextVersions } })
     }).catch(() => {
-      if (!controller.signal.aborted && isLatestWorkspaceRequest(requestToken, artifactRequestTokenRef.current)) setError('暂时无法读取当前内容，请稍后重试。')
+      if (!controller.signal.aborted && isLatestWorkspaceRequest(requestToken, artifactRequestTokenRef.current)) {
+        setArtifactLoadError('暂时无法读取当前内容，请稍后重试。')
+      }
     })
     return () => controller.abort()
-  }, [artifactSelection, projectId, stepId])
+  }, [artifactReloadNonce, artifactSelection, projectId, stepId])
 
   useEffect(() => {
-    if (!activeTaskSignature) return
+    if (!pollingSignature) return
     let stopped = false
     let polling = false
     let attempt = 0
@@ -317,7 +346,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       controller.abort()
       document.removeEventListener('visibilitychange', resume)
     }
-  }, [activeTaskSignature, refreshView])
+  }, [pollingSignature, refreshView])
 
   useEffect(() => {
     if (!isShotsStep) return
@@ -335,13 +364,15 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   if (error && !view) return <section className="creator-library-state" role="alert">{error}</section>
   if (!view) return null
 
-  const selectedStep = view.steps.find(step => step.id === stepId) ?? fallbackStep(stepId)
+  const selectedStep = displaySteps.find(step => step.id === stepId) ?? fallbackStep(stepId)
   const currentArtifactResult = isCurrentWorkspaceArtifact(artifactResult, artifactSelection) && artifactResult?.value.content.artifact.id === currentArtifactId
     ? artifactResult
     : null
   const content = currentArtifactResult?.value.content ?? null
   const visibleArtifactIds = new Set(visibleArtifacts.map(artifact => artifact.artifactId))
   const versions = (currentArtifactResult?.value.versions ?? []).filter(version => visibleArtifactIds.has(version.artifactId))
+  const artifactLoadState = creatorArtifactLoadState(artifactSelection, currentArtifactResult, artifactLoadError)
+  const isRequirementsRecord = stepId === 'requirements' && visibleArtifacts.length === 0
   const viewingHistorical = Boolean(selectedArtifact && !selectedArtifact.isCurrent)
   const navigateToStep = (nextStepId: CreatorStepId) => onNavigate(`#/videos/${encodeURIComponent(projectId)}/steps/${nextStepId}`)
   return (
@@ -353,6 +384,22 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       </header>
       <CreationStrip steps={displaySteps} currentStepId={stepId} onSelect={navigateToStep} />
       <TaskRecoveryBanner tasks={view.activeTasks} />
+      <CreatorProcessTimeline events={view.processTimeline ?? []} selectedStepId={stepId} />
+      <div className="creator-step-commandbar">
+        <div>
+          <strong>{creatorStepLabel(stepId)}</strong>
+          <span>{visibleArtifacts.length > 0 ? `${visibleArtifacts.length} 项可审阅内容` : '尚无可审阅内容'}{selectedStep.isStale ? ' · 下游已过期' : ''}</span>
+        </div>
+        <StepRegenerationDialog
+          projectId={projectId}
+          step={selectedStep}
+          onViewChanged={nextView => {
+            viewRequestTokenRef.current += 1
+            activeTasksRef.current = nextView.activeTasks
+            setView(nextView)
+          }}
+        />
+      </div>
       <div className="creator-content-workspace">
         <CreatorContentLibrary
           projectId={projectId}
@@ -368,7 +415,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
           await refreshAgentBridge(currentRunId)
           await refreshView()
         }}
-      /> : isShotsStep ? <div className="shot-review-workspace">
+      /> : isRequirementsRecord ? <ProjectBriefPanel project={view.project} /> : isShotsStep ? <div className="shot-review-workspace">
         <ShotReviewQueue
           items={shotItems}
           total={filteredShotTotal}
@@ -412,8 +459,14 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
         step={selectedStep}
         content={content}
         assemblyDirty={view.assemblyDirty}
+        viewingHistorical={viewingHistorical}
         onAssemblyUpdated={async () => { await refreshView() }}
-      /> : <ArtifactReviewPanel
+      /> : artifactLoadState === 'error' ? <section className="artifact-review-panel artifact-load-error" role="alert">
+        <p className="creator-eyebrow">当前内容</p>
+        <h2>暂时无法打开这项产物</h2>
+        <p>{artifactLoadError}</p>
+        <button type="button" className="creator-secondary-button" onClick={() => setArtifactReloadNonce(value => value + 1)}>重新读取当前内容</button>
+      </section> : <ArtifactReviewPanel
         projectId={projectId}
         step={selectedStep}
         artifact={selectedArtifact}
@@ -431,12 +484,26 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
         </div>
       </div>
       {error && <p className="creator-form-error" role="alert">{error}</p>}
-      {agentRun?.status === 'FAILED' && <p className="creator-form-error" role="alert">创作任务未完成，请返回“我的视频”重试。</p>}
+      {agentRun?.status === 'FAILED' && <div className="creator-form-error" role="alert">
+        <span>创作任务遇到失败步骤，可在当前页面恢复。</span>
+        <button type="button" disabled={recoveringAgentRun || !agentRun.taskId} onClick={() => { void retryFailedAgentRun() }}>
+          {recoveringAgentRun ? '正在恢复…' : '重试失败步骤'}
+        </button>
+      </div>}
     </section>
   )
 }
 
 
 function fallbackStep(stepId: CreatorStepId): CreatorStep {
-  return { id: stepId, label: creatorStepLabel(stepId), state: 'not_started', allowedActions: [] }
+  return {
+    id: stepId,
+    label: creatorStepLabel(stepId),
+    state: 'not_started',
+    hasHistory: false,
+    attemptCount: 0,
+    artifactCount: 0,
+    isStale: false,
+    allowedActions: [],
+  }
 }
