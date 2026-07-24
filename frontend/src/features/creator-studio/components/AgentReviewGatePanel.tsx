@@ -34,6 +34,7 @@ export default function AgentReviewGatePanel({ runId, review, onApproved }: Agen
     : parsedContent.ok && parsedContent.value && typeof parsedContent.value === 'object'
       ? parsedContent.value
       : undefined
+  const jsonReviewContent = structuredContent ?? (looksLikeStructuredContent(content) ? content : undefined)
 
   useEffect(() => {
     setRegenerationHint(creatorAgentReviewRegenerationHint(review))
@@ -80,8 +81,8 @@ export default function AgentReviewGatePanel({ runId, review, onApproved }: Agen
       <p className="creator-review-guidance">{review.reviewReason || '确认当前结果后，系统会继续执行下一步。'}</p>
       {qualityReview && content
         ? <div className="creator-quality-summary"><p>{content}</p></div>
-        : structuredContent
-          ? <JsonArtifactViewer content={structuredContent} name={`${stepId}-review.json`} />
+        : jsonReviewContent !== undefined
+          ? <JsonArtifactViewer content={jsonReviewContent} />
           : content && <MarkdownArtifactViewer content={content} name={`${stepId}-review.md`} />}
       {canRegenerate && <label className="artifact-editor-label">修改要求
         <textarea
@@ -103,4 +104,8 @@ export default function AgentReviewGatePanel({ runId, review, onApproved }: Agen
       {error && <p className="creator-form-error" role="alert">{error}</p>}
     </section>
   )
+}
+
+function looksLikeStructuredContent(content: string): boolean {
+  return /^\s*[{[]/.test(content)
 }

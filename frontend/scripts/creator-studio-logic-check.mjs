@@ -827,13 +827,25 @@ try {
   assert.doesNotMatch(agentReviewSource, /creator-agent-review-content/)
   assert.doesNotMatch(agentReviewSource, /creator-agent-review-details/, 'the gate must not render the same payload a second time below the readable review')
   assert.match(agentReviewSource, /review\.reviewOutput/, 'the readable gate uses the structured source payload when available')
+  assert.match(
+    agentReviewSource,
+    /looksLikeStructuredContent\(content\)[\s\S]*<JsonArtifactViewer content=\{jsonReviewContent\}/,
+    'malformed structured review content must stay on the safe JSON path instead of falling through to readable Markdown',
+  )
   assert.match(jsonViewerSource, /buildArtifactReviewModel/)
-  assert.match(jsonViewerSource, /查看技术数据/)
+  assert.match(jsonViewerSource, /关键内容仍在准备中/)
   assert.match(jsonViewerSource, /artifact-review-script/)
-  assert.doesNotMatch(jsonViewerSource, /<details className="artifact-technical-data"[^>]*\sopen=/, 'technical JSON stays closed until a user asks for it')
+  assert.doesNotMatch(
+    jsonViewerSource,
+    /技术数据|查看原文|parsed\.raw|JSON\.stringify|JsonTree|downloadText|navigator\.clipboard|<pre\b/,
+    'creator JSON proofing must never expose raw payloads or technical field views',
+  )
+  assert.doesNotMatch(
+    proofingSource,
+    /<p>[^<]*artifact\.(?:mimeType|kind|sizeBytes)|formatBytes\s*\(|未知文件类型|打开原文件/,
+    'creator proofing fallbacks must not render or link to technical artifact descriptors',
+  )
   assert.match(creatorStylesSource, /\.artifact-review-document/)
-  assert.match(creatorStylesSource, /\.artifact-technical-data/)
-  assert.match(creatorStylesSource, /max-height:\s*min\(32rem,\s*60vh\)/, 'expanded technical data must scroll internally instead of creating an unbounded page')
   assert.match(timelineSource, /完整创作过程/)
   assert.equal(existsSync(contentLibraryUrl), true, 'the four-tab creator content library must exist')
   for (const tabLabel of ['文字与提示词', '参考图', '视频片段', '语音']) {

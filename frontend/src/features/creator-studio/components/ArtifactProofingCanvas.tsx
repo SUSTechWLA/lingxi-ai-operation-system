@@ -32,7 +32,6 @@ export default function ArtifactProofingCanvas({
   const resolvedMediaUrl = content && artifact
     ? resolveCreatorArtifactMediaUrl(artifact.projectId, content, getLocalAgentBaseUrl())
     : undefined
-  const contentWithMedia = content && resolvedMediaUrl && !content.mediaUrl ? { ...content, mediaUrl: resolvedMediaUrl } : content
   const hydrationKey = `${artifact?.id || 'none'}:${resolvedMediaUrl || 'inline'}`
   const shouldHydrateLocalText = Boolean(
     resolvedMediaUrl &&
@@ -52,9 +51,9 @@ export default function ArtifactProofingCanvas({
     void fetch(resolvedMediaUrl, { signal: controller.signal }).then(async response => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const announcedSize = Number(response.headers.get('content-length') || 0)
-      if (announcedSize > 8 * 1024 * 1024) throw new Error('文件超过 8 MB，请打开原文件审阅')
+      if (announcedSize > 8 * 1024 * 1024) throw new Error('内容过大，暂时无法在这里审阅')
       const text = await response.text()
-      if (text.length > 8 * 1024 * 1024) throw new Error('文件超过 8 MB，请打开原文件审阅')
+      if (text.length > 8 * 1024 * 1024) throw new Error('内容过大，暂时无法在这里审阅')
       if (!controller.signal.aborted) setLocalText({ key: hydrationKey, text })
     }).catch(error => {
       if (!controller.signal.aborted) setLocalText({ key: hydrationKey, error: error instanceof Error ? error.message : '读取失败' })
@@ -65,10 +64,10 @@ export default function ArtifactProofingCanvas({
   if (!content || !artifact) return <p className="artifact-empty">正在读取内容…</p>
   if (shouldHydrateLocalText && localText?.key !== hydrationKey) return <p className="artifact-empty" aria-live="polite">正在读取本地产物…</p>
   if (shouldHydrateLocalText && localText?.key === hydrationKey && localText.error) {
-    return <div className="artifact-file-fallback"><div><strong>暂时无法读取文件正文</strong><p role="alert">{localText.error}</p></div>{resolvedMediaUrl && <a className="creator-secondary-button" href={resolvedMediaUrl} target="_blank" rel="noreferrer">打开原文件</a>}</div>
+    return <div className="artifact-file-fallback" role="alert"><div><strong>关键内容仍在准备中</strong><p>暂时无法读取这份内容，请重新读取当前内容后再试。</p></div></div>
   }
   const displayedContent = localText?.key === hydrationKey && localText.text !== undefined ? localText.text : content.content
-  if (presentation === 'json') return <JsonArtifactViewer content={displayedContent} name={artifact.name || 'artifact.json'} />
+  if (presentation === 'json') return <JsonArtifactViewer content={displayedContent} />
   if (presentation === 'markdown') return <MarkdownArtifactViewer content={displayedContent} name={artifact.name || 'artifact.md'} />
   if (presentation === 'image' && resolvedMediaUrl && !mediaFailed) {
     const rect = selection?.kind === 'rect' ? selection : null
@@ -95,27 +94,17 @@ export default function ArtifactProofingCanvas({
     return <audio className="artifact-audio-preview" controls preload="metadata" src={resolvedMediaUrl} onError={() => setMediaFailed(true)}>当前客户端无法播放音频。</audio>
   }
   if (presentation === 'text') return <pre className="artifact-raw-preview" tabIndex={0}>{artifactContentText(displayedContent)}</pre>
-  return <ArtifactFileFallback content={contentWithMedia || content} mediaFailed={mediaFailed} />
+  return <ArtifactFileFallback mediaFailed={mediaFailed} />
 }
 
-function ArtifactFileFallback({ content, mediaFailed }: { content: ArtifactContentResponse; mediaFailed: boolean }) {
-  const { artifact } = content
+function ArtifactFileFallback({ mediaFailed }: { mediaFailed: boolean }) {
   return (
     <div className="artifact-file-fallback">
       <span className="artifact-file-icon" aria-hidden="true">▤</span>
       <div>
-        <strong>{artifact.name || '未命名产物'}</strong>
-        <p>{artifact.mimeType || artifact.kind || '未知文件类型'} · {formatBytes(artifact.sizeBytes)}</p>
-        {mediaFailed && <p role="alert">预览加载失败，仍可打开原文件。</p>}
+        <strong>关键内容仍在准备中</strong>
+        <p role={mediaFailed ? 'alert' : undefined}>{mediaFailed ? '暂时无法显示预览，请重新读取当前内容后再试。' : '生成完成后会显示在这里。'}</p>
       </div>
-      {content.mediaUrl && <a className="creator-secondary-button" href={content.mediaUrl} target="_blank" rel="noreferrer">打开原文件</a>}
     </div>
   )
-}
-
-function formatBytes(value?: number): string {
-  if (!value || value < 1) return '大小未知'
-  if (value < 1024) return `${value} B`
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
