@@ -174,7 +174,7 @@ func (h *Handler) ResolveReviewableText(ctx context.Context, item *Artifact) (st
 	if item == nil {
 		return "", ErrRevisionContentUnavailable
 	}
-	if item.InlineJSON != "" {
+	if item.StorageType == StorageInline {
 		return item.InlineJSON, nil
 	}
 	if hydrated, ok := h.hydrateLocalTextArtifactContent(ctx, item); ok {
@@ -418,7 +418,7 @@ func contentFromMatchingNodeArtifact(projectID, workflowRunID string, artifact *
 		return nil, false
 	}
 	for _, req := range requests {
-		if exactArtifactRequestMatch(artifact, req) && len(req.Data) > 0 {
+		if exactArtifactRequestMatch(artifact, req) && req.Data != nil {
 			return req.Data, true
 		}
 	}

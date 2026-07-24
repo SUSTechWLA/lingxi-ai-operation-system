@@ -80,6 +80,35 @@ func TestArtifactContentReviewTextPreservesInlineSourceBytes(t *testing.T) {
 	}
 }
 
+func TestArtifactContentReviewTextPreservesEmptyInlineSource(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		kind     ArtifactKind
+		mimeType string
+	}{
+		{name: "markdown", kind: KindMarkdown, mimeType: "text/markdown"},
+		{name: "json", kind: KindJSON, mimeType: "application/json"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			item := &Artifact{
+				ID: "artifact-empty-" + test.name, ProjectID: "vp-1", StageName: "script",
+				Kind: test.kind, MimeType: test.mimeType, StorageType: StorageInline, InlineJSON: "",
+			}
+			handler := newHandlerForStore(&fakeHandlerArtifactStore{artifact: item}, nil, nil).
+				WithProjectAccess(fakeArtifactProjectAccess{owners: map[string]string{"vp-1": "user-1"}})
+
+			reviewText, err := handler.ResolveReviewableText(context.Background(), item)
+			if err != nil || reviewText != "" {
+				t.Fatalf("ResolveReviewableText() = %q, %v; want exact empty source", reviewText, err)
+			}
+			data := requestArtifactContentData(t, handler, item.ID)
+			if reviewText, ok := data["reviewText"].(string); !ok || reviewText != "" {
+				t.Fatalf("endpoint reviewText = %#v, want present exact empty source", data["reviewText"])
+			}
+		})
+	}
+}
+
 func TestArtifactContentReviewTextPreservesHydratedLocalSourceBytes(t *testing.T) {
 	const reviewText = "  # 本地原稿\n\n你好🙂，保留尾随空格。  \n"
 	node := &model.Node{
@@ -107,6 +136,68 @@ func TestArtifactContentReviewTextPreservesHydratedLocalSourceBytes(t *testing.T
 
 	if got, ok := data["reviewText"].(string); !ok || got != reviewText {
 		t.Fatalf("reviewText = %#v, want exact hydrated source %q", data["reviewText"], reviewText)
+	}
+}
+
+func TestArtifactContentReviewTextPreservesExactLocalZeroBytes(t *testing.T) {
+	node := &model.Node{
+		ID: "empty_script_exec", TaskID: "task-empty-local", Status: model.NodeSuccess,
+		Input: map[string]interface{}{"parameters": map[string]interface{}{"stage": "script"}},
+		Output: map[string]interface{}{
+			"content": "",
+			"artifacts": []interface{}{map[string]interface{}{
+				"unitId": "script-content", "kind": "MARKDOWN", "name": "script.md", "mimeType": "text/markdown",
+			}},
+		},
+	}
+	item := &Artifact{
+		ID: "artifact-empty-local", ProjectID: "vp-1", WorkflowRunID: "run-missing", TaskID: node.TaskID,
+		StageName: "script", UnitID: "script-content", Kind: KindMarkdown, Name: "script.md",
+		MimeType: "text/markdown", StorageType: StorageLocal,
+	}
+	handler := newHandlerForStore(
+		&fakeHandlerArtifactStore{artifact: item},
+		unavailableWorkflowRunRepository(t),
+		&reviewTextNodeRepo{node: node},
+	).WithProjectAccess(fakeArtifactProjectAccess{owners: map[string]string{"vp-1": "user-1"}})
+
+	reviewText, err := handler.ResolveReviewableText(context.Background(), item)
+	if err != nil || reviewText != "" {
+		t.Fatalf("ResolveReviewableText() = %q, %v; want exact local zero-byte source", reviewText, err)
+	}
+	data := requestArtifactContentData(t, handler, item.ID)
+	if reviewText, ok := data["reviewText"].(string); !ok || reviewText != "" {
+		t.Fatalf("endpoint reviewText = %#v, want present exact local zero-byte source", data["reviewText"])
+	}
+}
+
+func TestResolveReviewableTextRejectsAbsentLocalData(t *testing.T) {
+	node := &model.Node{
+		ID: "missing_script_exec", TaskID: "task-missing-local", Status: model.NodeSuccess,
+		Input: map[string]interface{}{"parameters": map[string]interface{}{"stage": "script"}},
+		Output: map[string]interface{}{
+			"artifacts": []interface{}{map[string]interface{}{
+				"unitId": "script-content", "kind": "MARKDOWN", "name": "script.md", "mimeType": "text/markdown",
+			}},
+		},
+	}
+	item := &Artifact{
+		ID: "artifact-missing-local", ProjectID: "vp-1", WorkflowRunID: "run-missing", TaskID: node.TaskID,
+		StageName: "script", UnitID: "script-content", Kind: KindMarkdown, Name: "script.md",
+		MimeType: "text/markdown", StorageType: StorageLocal,
+	}
+	handler := newHandlerForStore(
+		&fakeHandlerArtifactStore{artifact: item},
+		unavailableWorkflowRunRepository(t),
+		&reviewTextNodeRepo{node: node},
+	).WithProjectAccess(fakeArtifactProjectAccess{owners: map[string]string{"vp-1": "user-1"}})
+
+	if reviewText, err := handler.ResolveReviewableText(context.Background(), item); !errors.Is(err, ErrRevisionContentUnavailable) || reviewText != "" {
+		t.Fatalf("ResolveReviewableText() = %q, %v; want unavailable", reviewText, err)
+	}
+	data := requestArtifactContentData(t, handler, item.ID)
+	if _, ok := data["reviewText"]; ok {
+		t.Fatalf("endpoint exposed absent local data as reviewText: %#v", data["reviewText"])
 	}
 }
 

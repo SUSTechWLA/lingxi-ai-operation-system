@@ -799,22 +799,51 @@ func TestArtifactSelectionTextConflictsOnStaleMismatchedOrUnavailableContent(t *
 	}
 }
 
-func TestArtifactSelectionTextIdempotencyFingerprintAndStaleRequestsMutateNothing(t *testing.T) {
-	svc, revisions, _ := newTextSelectionService("abcdef")
-	req := textSelectionRequest(t, "same-text-key", `{"kind":"text","start":1,"end":3,"text":"bc"}`)
+func TestArtifactSelectionInstructionRetryReusesExistingRevision(t *testing.T) {
+	base := &artifact.Artifact{
+		ID: "script-v3", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1",
+		StageName: "script", Version: 3, IsCurrent: true,
+	}
+	artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
+	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+	resolver := &fakeCreatorArtifactTextResolver{text: "abcdef"}
+	svc := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{
+			ID:     "vp-1",
+			Config: json.RawMessage(`{"modelProviderRefs":{"text_to_text":{"source":"local_agent","baseUrl":"https://model.test","model":"writer"}}}`),
+		}},
+		fakeCreatorShotReader{},
+		artifacts,
+	).WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review"}).
+		WithArtifactReconciler(resolver)
+	req := model.StepRevisionRequest{
+		IdempotencyKey: "same-instruction-text-key", ArtifactID: base.ID, BaseVersion: base.Version,
+		Mode: "instruction", Instruction: "rewrite only the selection",
+		ModelProviders: map[string]interface{}{"text_to_text": map[string]interface{}{
+			"baseUrl": "https://model.test", "apiKey": "secret", "model": "writer",
+		}},
+		Selection: decodeArtifactSelection(t, `{"kind":"text","start":1,"end":3,"text":"bc"}`),
+	}
 	reviews := svc.reviews.(*fakeCreatorReviewMutations)
 	reviews.reopenErr = errors.New("temporary reopen failure")
 	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); err == nil {
 		t.Fatal("expected first reopen failure")
 	}
+	createdID := revisions.artifacts.current[0].ID
 	reviews.reopenErr = nil
-	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); err != nil {
+	result, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req)
+	if err != nil {
 		t.Fatalf("identical retry error = %v", err)
 	}
-	if revisions.calls != 1 {
-		t.Fatalf("identical retry created %d revisions, want 1", revisions.calls)
+	if revisions.calls != 1 || result.Artifact.ID != createdID {
+		t.Fatalf("identical instruction retry calls = %d, artifact = %q/%q", revisions.calls, result.Artifact.ID, createdID)
 	}
+	if revisions.reviseRequest.Message != req.Instruction || len(revisions.reviseRequest.DirectContent) != 0 || resolver.resolveCalls != 2 {
+		t.Fatalf("instruction retry request = %+v, resolver calls = %d", revisions.reviseRequest, resolver.resolveCalls)
+	}
+}
 
+func TestArtifactSelectionTextFingerprintAndStaleRequestsMutateNothing(t *testing.T) {
 	base := &artifact.Artifact{ID: "script-v3", ProjectID: "vp-1", StageName: "script", Version: 3}
 	impact := model.StepImpact{AffectedStepIDs: []model.CreatorStepID{model.CreatorStepShots}}
 	fingerprint := func(selection map[string]interface{}) string {
