@@ -19,6 +19,14 @@ const tabs: ReadonlyArray<{ category: CreatorReviewCategory; label: string }> = 
   { category: 'audio', label: '语音' },
 ]
 
+function tabId(category: CreatorReviewCategory): string {
+  return `creator-content-tab-${category}`
+}
+
+function tabPanelId(category: CreatorReviewCategory): string {
+  return `creator-content-panel-${category}`
+}
+
 export default function CreatorContentLibrary({
   projectId,
   artifacts,
@@ -46,6 +54,8 @@ export default function CreatorContentLibrary({
             type="button"
             role="tab"
             key={tab.category}
+            id={tabId(tab.category)}
+            aria-controls={tabPanelId(tab.category)}
             aria-selected={activeCategory === tab.category}
             className={activeCategory === tab.category ? 'is-active' : ''}
             onClick={() => setActiveCategory(tab.category)}
@@ -55,27 +65,37 @@ export default function CreatorContentLibrary({
           </button>
         ))}
       </div>
-      {activeArtifacts.length === 0 ? (
-        <p className="creator-content-empty">关键内容仍在准备中，生成完成后会显示在这里。</p>
-      ) : (
-        <div className="creator-content-cards" role="tabpanel">
-          {activeArtifacts.map(artifact => (
-            <CreatorContentCard
-              key={artifact.artifactId}
-              projectId={projectId}
-              artifact={artifact}
-              active={activeCategory === artifact.reviewCategory}
-              selected={selectedArtifactId === artifact.artifactId}
-              showVersion={artifacts.some(candidate =>
-                candidate.reviewCategory === artifact.reviewCategory &&
-                candidate.artifactId !== artifact.artifactId &&
-                !candidate.isCurrent,
-              )}
-              onSelect={() => onSelect(artifact)}
-            />
+      {tabs.map(tab => (
+        <div
+          key={tab.category}
+          id={tabPanelId(tab.category)}
+          role="tabpanel"
+          aria-labelledby={tabId(tab.category)}
+          hidden={activeCategory !== tab.category}
+        >
+          {activeCategory === tab.category && (activeArtifacts.length === 0 ? (
+            <p className="creator-content-empty">关键内容仍在准备中，生成完成后会显示在这里。</p>
+          ) : (
+            <div className="creator-content-cards">
+              {activeArtifacts.map(artifact => (
+                <CreatorContentCard
+                  key={artifact.artifactId}
+                  projectId={projectId}
+                  artifact={artifact}
+                  active
+                  selected={selectedArtifactId === artifact.artifactId}
+                  showVersion={artifacts.some(candidate =>
+                    candidate.reviewCategory === artifact.reviewCategory &&
+                    candidate.artifactId !== artifact.artifactId &&
+                    !candidate.isCurrent,
+                  )}
+                  onSelect={() => onSelect(artifact)}
+                />
+              ))}
+            </div>
           ))}
         </div>
-      )}
+      ))}
     </aside>
   )
 }
@@ -123,6 +143,8 @@ function CreatorContentCard({
     artifact.reviewCategory !== 'text' &&
     !mediaUrl,
   )
+  const mediaLoadKey = `${artifact.artifactId}:${retries}`
+  const handleMediaError = () => setFailed(true)
 
   return (
     <article className={`creator-content-card is-${artifact.reviewCategory}${selected ? ' is-selected' : ''}`}>
@@ -145,17 +167,30 @@ function CreatorContentCard({
       ) : artifact.reviewCategory === 'text' ? (
         <p className="creator-content-excerpt">{readableExcerpt(preview.content)}</p>
       ) : artifact.reviewCategory === 'image' && mediaUrl ? (
-        <img src={mediaUrl} alt={`${artifact.reviewLabel}预览`} loading="lazy" />
+        <img key={mediaLoadKey} src={mediaUrl} alt={`${artifact.reviewLabel}预览`} loading="lazy" onError={handleMediaError} />
       ) : artifact.reviewCategory === 'video' && mediaUrl ? (
-        <video src={mediaUrl} aria-label={`${artifact.reviewLabel}预览`} muted playsInline preload="metadata" />
+        <video
+          key={mediaLoadKey}
+          src={videoPreviewUrl(mediaUrl)}
+          aria-label={`${artifact.reviewLabel}预览`}
+          controls
+          muted
+          playsInline
+          preload="auto"
+          onError={handleMediaError}
+        />
       ) : artifact.reviewCategory === 'audio' && mediaUrl ? (
         <div className="creator-content-audio">
-          <audio src={mediaUrl} aria-label={`${artifact.reviewLabel}播放控件`} controls preload="metadata" />
+          <audio key={mediaLoadKey} src={mediaUrl} aria-label={`${artifact.reviewLabel}播放控件`} controls preload="metadata" onError={handleMediaError} />
           {duration && <span>{duration}</span>}
         </div>
       ) : null}
     </article>
   )
+}
+
+function videoPreviewUrl(mediaUrl: string): string {
+  return `${mediaUrl.split('#', 1)[0]}#t=0.001`
 }
 
 function readableExcerpt(value: unknown): string {

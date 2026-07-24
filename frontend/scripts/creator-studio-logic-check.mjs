@@ -842,6 +842,14 @@ try {
   assert.match(contentLibrarySource, /getCreatorArtifactContent/)
   assert.match(contentLibrarySource, /resolveCreatorArtifactMediaUrl/)
   assert.match(contentLibrarySource, /AbortController/)
+  assert.ok((contentLibrarySource.match(/onError=\{handleMediaError\}/g) || []).length >= 3, 'image, video, and audio previews enter the bounded retry state on decode or load failure')
+  assert.ok((contentLibrarySource.match(/key=\{mediaLoadKey\}/g) || []).length >= 3, 'retry remounts every media element')
+  assert.match(contentLibrarySource, /preload="auto"/, 'video cards load enough media to expose a real first frame')
+  assert.match(contentLibrarySource, /#t=0\.001/, 'video card source requests a safe initial frame')
+  assert.match(contentLibrarySource, /id=\{tabId\(tab\.category\)\}/)
+  assert.match(contentLibrarySource, /aria-controls=\{tabPanelId\(tab\.category\)\}/)
+  assert.match(contentLibrarySource, /id=\{tabPanelId\(tab\.category\)\}/)
+  assert.match(contentLibrarySource, /aria-labelledby=\{tabId\(tab\.category\)\}/)
   assert.match(contentLibrarySource, /关键内容仍在准备中，生成完成后会显示在这里。/)
   assert.doesNotMatch(
     contentLibrarySource,
