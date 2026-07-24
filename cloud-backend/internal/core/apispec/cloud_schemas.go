@@ -700,8 +700,19 @@ func registerCloudSchemas(b *Builder) {
 		"id": {Schema: creatorStepID}, "label": {Schema: StringSchema()}, "state": {Schema: creatorStepState},
 		"currentArtifactId": {Schema: StringSchema()}, "currentVersion": {Schema: IntegerSchema()},
 		"reviewId": {Schema: StringSchema()}, "runId": {Schema: StringSchema()},
+		"hasHistory": {Schema: BoolSchema()}, "attemptCount": {Schema: IntegerSchema()}, "artifactCount": {Schema: IntegerSchema()},
+		"startedAt": {Schema: &Schema{Type: "string", Format: "date-time", Nullable: true}},
+		"updatedAt": {Schema: &Schema{Type: "string", Format: "date-time", Nullable: true}}, "isStale": {Schema: BoolSchema()},
 		"allowedActions": {Schema: ArraySchema(StringSchema())},
-	}, "id", "label", "state", "allowedActions"))
+	}, "id", "label", "state", "hasHistory", "attemptCount", "artifactCount", "isStale", "allowedActions"))
+	creatorArtifactDescriptor := Reflect(videomodel.CreatorArtifactDescriptor{})
+	creatorArtifactDescriptor.Properties["stepId"] = &SchemaRef{Schema: creatorStepID}
+	b.Schema("CreatorArtifactDescriptor", creatorArtifactDescriptor)
+	creatorProcessEvent := Reflect(videomodel.CreatorProcessEvent{})
+	creatorProcessEvent.Properties["stepId"] = &SchemaRef{Schema: creatorStepID}
+	creatorProcessEvent.Properties["state"] = &SchemaRef{Schema: enumSchema("started", "generated", "needs_review", "confirmed", "failed", "stale")}
+	creatorProcessEvent.Properties["sourceType"] = &SchemaRef{Schema: enumSchema("artifact", "review", "agent_node", "shot", "project")}
+	b.Schema("CreatorProcessEvent", creatorProcessEvent)
 	creatorTask := Reflect(videomodel.CreatorTask{})
 	creatorTask.Properties["scope"] = &SchemaRef{Schema: creatorStepID}
 	creatorTask.Properties["status"] = &SchemaRef{Schema: enumSchema("generating", "running", "processing", "queued", "dispatching")}
@@ -767,7 +778,9 @@ func registerCloudSchemas(b *Builder) {
 		"project": {Schema: RefSchema("VideoProject")}, "activeStep": {Schema: creatorStepID},
 		"steps": {Schema: ArraySchema(RefSchema("CreatorStep"))}, "shotSummary": {Schema: RefSchema("ShotSummary")},
 		"activeTasks": {Schema: ArraySchema(RefSchema("CreatorTask"))}, "assemblyDirty": {Schema: BoolSchema()},
-	}, "project", "activeStep", "steps", "shotSummary", "activeTasks", "assemblyDirty")
+		"processTimeline": {Schema: ArraySchema(RefSchema("CreatorProcessEvent"))},
+		"stepArtifacts":   {Schema: &Schema{Type: "object", AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Schema: ArraySchema(RefSchema("CreatorArtifactDescriptor"))}}}},
+	}, "project", "activeStep", "steps", "shotSummary", "activeTasks", "assemblyDirty", "processTimeline", "stepArtifacts")
 	b.Schema("CreationView", creationView)
 
 	selection := &Schema{OneOf: []*SchemaRef{
@@ -806,6 +819,11 @@ func registerCloudSchemas(b *Builder) {
 		"baseVersion": {Schema: positiveVersion()}, "runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()},
 		"reason": {Schema: StringSchema()}, "confirmedAffectedShotIds": {Schema: ArraySchema(StringSchema())},
 	}, "baseVersion", "confirmedAffectedShotIds"))
+	b.Schema("StepRegenerationRequest", requiredObject(map[string]*SchemaRef{
+		"baseArtifactId": {Schema: StringSchema()}, "baseVersion": {Schema: IntegerSchema()},
+		"instruction": {Schema: StringSchema()}, "runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()},
+		"confirmedAffectedStepIds": {Schema: ArraySchema(creatorStepID)},
+	}, "confirmedAffectedStepIds"))
 	b.Schema("RegisterProjectMaterialRequest", closedObject(materialProperties,
 		"name", "kind", "storageRef", "mimeType", "sizeBytes", "contentHash"))
 	b.Schema("ShotRegenerationRequest", requiredObject(map[string]*SchemaRef{
@@ -827,6 +845,10 @@ func registerCloudSchemas(b *Builder) {
 	b.Schema("StepMutationResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
 		"artifact": {Schema: Reflect(artifacts.Artifact{})}, "impact": {Schema: RefSchema("StepImpact")}, "view": {Schema: RefSchema("CreationView")},
 	}, "artifact", "impact", "view")))
+	b.Schema("StepRegenerationResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
+		"runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()}, "attempt": {Schema: positiveVersion()},
+		"impact": {Schema: RefSchema("StepImpact")}, "view": {Schema: RefSchema("CreationView")},
+	}, "runId", "reviewId", "attempt", "impact", "view")))
 	b.Schema("ProjectMaterialResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
 		"material": {Schema: RefSchema("ProjectMaterial")}, "artifact": {Schema: Reflect(artifacts.Artifact{})},
 	}, "material", "artifact")))

@@ -51,6 +51,56 @@ func TestCreatorViewMapsCurrentArtifactsAndShotSummaryIntoSixSteps(t *testing.T)
 	}
 }
 
+func TestCreatorViewReconcilesNodeArtifactsBeforeBuildingTheView(t *testing.T) {
+	artifacts := &mutableCreatorArtifactReader{}
+	reconciler := &recordingCreatorArtifactReconciler{
+		reconcile: func(projectID string) {
+			artifacts.artifacts = []*artifact.Artifact{{
+				ID: "script-from-node", ProjectID: "vp-1", StageName: "script_generation", UnitID: "video_script_generator",
+				Kind: artifact.KindJSON, Name: "video_script.json", Version: 1, Status: "valid",
+			}}
+		},
+	}
+
+	view, err := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "user-1"}},
+		fakeCreatorShotReader{},
+		artifacts,
+	).WithArtifactReconciler(reconciler).GetCreationView(context.Background(), "user-1", "vp-1")
+	if err != nil {
+		t.Fatalf("GetCreationView() error = %v", err)
+	}
+	if reconciler.calls != 1 || reconciler.projectID != "vp-1" {
+		t.Fatalf("reconciler calls=%d project=%q, want one call for vp-1", reconciler.calls, reconciler.projectID)
+	}
+	if got := view.Steps[2].CurrentArtifactID; got != "script-from-node" {
+		t.Fatalf("script artifact = %q, want reconciled node artifact", got)
+	}
+	if got := len(view.StepArtifacts[model.CreatorStepScript]); got != 1 {
+		t.Fatalf("script descriptors = %d, want 1 reconciled descriptor", got)
+	}
+}
+
+func TestCreatorViewUsesArtifactUnitIDForDynamicRoleStageNames(t *testing.T) {
+	view, err := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "user-1"}},
+		fakeCreatorShotReader{},
+		fakeCreatorArtifactReader{artifacts: []*artifact.Artifact{{
+			ID: "proposal-from-role", ProjectID: "vp-1", StageName: "tde3bdcfc15-proposal_generator",
+			UnitID: "proposal_generator", Kind: artifact.KindJSON, Version: 1, Status: "valid",
+		}}},
+	).GetCreationView(context.Background(), "user-1", "vp-1")
+	if err != nil {
+		t.Fatalf("GetCreationView() error = %v", err)
+	}
+	if got := view.Steps[1].CurrentArtifactID; got != "proposal-from-role" {
+		t.Fatalf("direction artifact = %q, want dynamic role artifact", got)
+	}
+	if got := len(view.StepArtifacts[model.CreatorStepDirection]); got != 1 {
+		t.Fatalf("direction descriptors = %d, want 1", got)
+	}
+}
+
 func TestCreatorViewUsesPriorityIgnoresUnknownStagesAndExposesDurableActiveTasks(t *testing.T) {
 	view, err := NewCreatorViewService(
 		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "user-1"}},
@@ -702,6 +752,29 @@ func (f fakeCreatorArtifactReader) ListCurrentByProject(context.Context, string)
 	return f.artifacts, f.err
 }
 
+type mutableCreatorArtifactReader struct {
+	artifacts []*artifact.Artifact
+}
+
+func (f *mutableCreatorArtifactReader) ListCurrentByProject(context.Context, string) ([]*artifact.Artifact, error) {
+	return f.artifacts, nil
+}
+
+type recordingCreatorArtifactReconciler struct {
+	calls     int
+	projectID string
+	reconcile func(string)
+}
+
+func (f *recordingCreatorArtifactReconciler) ReconcileProjectArtifacts(_ context.Context, projectID string) error {
+	f.calls++
+	f.projectID = projectID
+	if f.reconcile != nil {
+		f.reconcile(projectID)
+	}
+	return nil
+}
+
 type fakeCreatorShotReader struct {
 	state creatorShotReadState
 	err   error
@@ -1015,20 +1088,24 @@ func (f *fakeCreatorRevisionService) Restore(_ context.Context, req artifact.Res
 }
 
 type fakeCreatorReviewMutations struct {
-	resolvedRunID      string
-	resolvedReviewID   string
-	reopenedRunID      string
-	reopenedReviewID   string
-	reopenedArtifactID string
-	confirmedRunID     string
-	confirmedReviewID  string
-	resolveErr         error
-	reopenErr          error
-	reopenCalls        int
-	regenerateCalls    int
-	regenerationStatus string
-	regenerateKeys     map[string]bool
-	regenerateKeyErr   error
+	resolvedRunID       string
+	resolvedReviewID    string
+	reopenedRunID       string
+	reopenedReviewID    string
+	reopenedArtifactID  string
+	confirmedRunID      string
+	confirmedReviewID   string
+	resolveErr          error
+	reopenErr           error
+	reopenCalls         int
+	regenerateCalls     int
+	regenerationStatus  string
+	regenerateKeys      map[string]bool
+	regenerateKeyErr    error
+	regeneratedRunID    string
+	regeneratedReviewID string
+	regenerationHint    string
+	regenerationKey     string
 }
 
 func (f *fakeCreatorReviewMutations) ResolveReviewGate(context.Context, *artifact.Artifact, string, string) (string, string, error) {
@@ -1055,7 +1132,7 @@ func (f *fakeCreatorReviewMutations) Regenerate(context.Context, string, string,
 	return nil, f.reopenErr
 }
 
-func (f *fakeCreatorReviewMutations) RegenerateIdempotent(_ context.Context, _, _, _, _, key string) ([]string, error) {
+func (f *fakeCreatorReviewMutations) RegenerateIdempotent(_ context.Context, runID, reviewID, _ string, hint, key string) ([]string, error) {
 	if f.regenerateKeys == nil {
 		f.regenerateKeys = map[string]bool{}
 	}
@@ -1067,6 +1144,8 @@ func (f *fakeCreatorReviewMutations) RegenerateIdempotent(_ context.Context, _, 
 	}
 	f.regenerateKeys[key] = true
 	f.regenerateCalls++
+	f.regeneratedRunID, f.regeneratedReviewID = runID, reviewID
+	f.regenerationHint, f.regenerationKey = hint, key
 	return nil, f.reopenErr
 }
 

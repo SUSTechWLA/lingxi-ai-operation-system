@@ -17,50 +17,68 @@ import (
 // The mapping is deliberately closed: developer-only or future stages cannot
 // appear as an extra creator step.
 var creatorStageSteps = map[string]model.CreatorStepID{
-	"requirements":     model.CreatorStepRequirements,
-	"requirement":      model.CreatorStepRequirements,
-	"brief":            model.CreatorStepRequirements,
-	"source_materials": model.CreatorStepRequirements,
+	"requirements":         model.CreatorStepRequirements,
+	"requirement":          model.CreatorStepRequirements,
+	"requirement_analysis": model.CreatorStepRequirements,
+	"brief":                model.CreatorStepRequirements,
+	"source_materials":     model.CreatorStepRequirements,
 
-	"direction":          model.CreatorStepDirection,
-	"creative_direction": model.CreatorStepDirection,
-	"proposal":           model.CreatorStepDirection,
-	"research":           model.CreatorStepDirection,
-	"style":              model.CreatorStepDirection,
-	"character":          model.CreatorStepDirection,
-	"characters":         model.CreatorStepDirection,
-	"feasibility":        model.CreatorStepDirection,
+	"direction":                     model.CreatorStepDirection,
+	"creative_direction":            model.CreatorStepDirection,
+	"creative_direction_generation": model.CreatorStepDirection,
+	"proposal":                      model.CreatorStepDirection,
+	"proposal_generator":            model.CreatorStepDirection,
+	"research":                      model.CreatorStepDirection,
+	"knowledge_researcher":          model.CreatorStepDirection,
+	"style":                         model.CreatorStepDirection,
+	"character":                     model.CreatorStepDirection,
+	"characters":                    model.CreatorStepDirection,
+	"feasibility":                   model.CreatorStepDirection,
 
-	"script":       model.CreatorStepScript,
-	"voiceover":    model.CreatorStepScript,
-	"audio_master": model.CreatorStepScript,
-	"timing":       model.CreatorStepScript,
+	"script":                         model.CreatorStepScript,
+	"script_generation":              model.CreatorStepScript,
+	"script_generation_quality_gate": model.CreatorStepScript,
+	"voiceover":                      model.CreatorStepScript,
+	"audio_master":                   model.CreatorStepScript,
+	"timing":                         model.CreatorStepScript,
+	"time_window":                    model.CreatorStepScript,
 
-	"shots":           model.CreatorStepShots,
-	"shot":            model.CreatorStepShots,
-	"storyboard":      model.CreatorStepShots,
-	"composition":     model.CreatorStepShots,
-	"reference":       model.CreatorStepShots,
-	"continuity":      model.CreatorStepShots,
-	"visual_plan":     model.CreatorStepShots,
-	"render_strategy": model.CreatorStepShots,
-	"assets":          model.CreatorStepShots,
-	"materials":       model.CreatorStepShots,
+	"shots":                     model.CreatorStepShots,
+	"shot":                      model.CreatorStepShots,
+	"shot_design":               model.CreatorStepShots,
+	"shot_split":                model.CreatorStepShots,
+	"shot_split_quality_gate":   model.CreatorStepShots,
+	"storyboard":                model.CreatorStepShots,
+	"composition":               model.CreatorStepShots,
+	"reference":                 model.CreatorStepShots,
+	"continuity":                model.CreatorStepShots,
+	"visual_plan":               model.CreatorStepShots,
+	"visual_alignment":          model.CreatorStepShots,
+	"video_prompt":              model.CreatorStepShots,
+	"video_prompt_quality_gate": model.CreatorStepShots,
+	"ip_aroll_generation":       model.CreatorStepShots,
+	"render_strategy":           model.CreatorStepShots,
+	"assets":                    model.CreatorStepShots,
+	"materials":                 model.CreatorStepShots,
 
-	"preview":      model.CreatorStepPreview,
-	"assembly":     model.CreatorStepPreview,
-	"captions":     model.CreatorStepPreview,
-	"subtitle":     model.CreatorStepPreview,
-	"audio_mix":    model.CreatorStepPreview,
-	"quality":      model.CreatorStepPreview,
-	"final_review": model.CreatorStepPreview,
-	"final_qa":     model.CreatorStepPreview,
-	"render":       model.CreatorStepPreview,
+	"preview":        model.CreatorStepPreview,
+	"assembly":       model.CreatorStepPreview,
+	"video_assembly": model.CreatorStepPreview,
+	"final_render":   model.CreatorStepPreview,
+	"captions":       model.CreatorStepPreview,
+	"subtitle":       model.CreatorStepPreview,
+	"audio_mix":      model.CreatorStepPreview,
+	"quality":        model.CreatorStepPreview,
+	"final_review":   model.CreatorStepPreview,
+	"final_qa":       model.CreatorStepPreview,
+	"render":         model.CreatorStepPreview,
+	"visual_qa":      model.CreatorStepPreview,
 
-	"delivery": model.CreatorStepDelivery,
-	"package":  model.CreatorStepDelivery,
-	"publish":  model.CreatorStepDelivery,
-	"export":   model.CreatorStepDelivery,
+	"delivery":     model.CreatorStepDelivery,
+	"package":      model.CreatorStepDelivery,
+	"publish":      model.CreatorStepDelivery,
+	"publish_copy": model.CreatorStepDelivery,
+	"export":       model.CreatorStepDelivery,
 }
 
 var creatorStepDefinitions = []struct {
@@ -77,6 +95,10 @@ var creatorStepDefinitions = []struct {
 
 type creatorProjectReader interface {
 	GetProject(ctx context.Context, userID, projectID string) (*model.VideoProject, error)
+}
+
+type creatorProjectLifecycle interface {
+	MarkAgentRunStarted(ctx context.Context, userID, projectID, runID string) error
 }
 
 type creatorArtifactReader interface {
@@ -98,17 +120,25 @@ type creatorShotInvalidationService interface {
 	InvalidateShotsForUpstreamRevision(context.Context, string, string, string, []string, string) error
 }
 
+type creatorArtifactReconciler interface {
+	ReconcileProjectArtifacts(context.Context, string) error
+}
+
 // CreatorViewService combines only persisted project, artifact, and Shot data.
 // It has no client-derived state or workflow topology dependency.
 type CreatorViewService struct {
-	projects          creatorProjectReader
-	artifacts         creatorArtifactReader
-	shots             creatorShotReader
-	history           creatorArtifactHistoryReader
-	revisions         creatorRevisionService
-	reviews           creatorReviewMutations
-	assembly          creatorAssemblyService
-	shotInvalidations creatorShotInvalidationService
+	projects           creatorProjectReader
+	artifacts          creatorArtifactReader
+	shots              creatorShotReader
+	history            creatorArtifactHistoryReader
+	revisions          creatorRevisionService
+	reviews            creatorReviewMutations
+	assembly           creatorAssemblyService
+	shotInvalidations  creatorShotInvalidationService
+	auditRun           creatorRunAuditLookup
+	auditNodes         creatorNodeAuditReader
+	projectLifecycle   creatorProjectLifecycle
+	artifactReconciler creatorArtifactReconciler
 }
 
 type creatorArtifactHistoryReader interface {
@@ -176,6 +206,12 @@ type creatorMutationReceipt struct {
 
 func NewCreatorViewService(projects creatorProjectReader, shots creatorShotReader, artifacts creatorArtifactReader) *CreatorViewService {
 	svc := &CreatorViewService{projects: projects, artifacts: artifacts, shots: shots}
+	if lifecycle, ok := projects.(creatorProjectLifecycle); ok {
+		svc.projectLifecycle = lifecycle
+	}
+	if history, ok := artifacts.(creatorArtifactHistoryReader); ok {
+		svc.history = history
+	}
 	if assembly, ok := shots.(creatorAssemblyService); ok {
 		svc.assembly = assembly
 	}
@@ -294,6 +330,11 @@ func (s *CreatorViewService) WithStepMutations(revisions creatorRevisionService,
 	return s
 }
 
+func (s *CreatorViewService) WithArtifactReconciler(reconciler creatorArtifactReconciler) *CreatorViewService {
+	s.artifactReconciler = reconciler
+	return s
+}
+
 func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projectID string) (*model.CreationView, error) {
 	if s == nil || s.projects == nil || s.artifacts == nil || s.shots == nil {
 		return nil, fmt.Errorf("creator view service is not configured")
@@ -304,6 +345,11 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 	}
 	if project == nil {
 		return nil, fmt.Errorf("project not found")
+	}
+	if s.artifactReconciler != nil {
+		if err := s.artifactReconciler.ReconcileProjectArtifacts(ctx, projectID); err != nil {
+			return nil, fmt.Errorf("reconcile creator artifacts: %w", err)
+		}
 	}
 	artifacts, err := s.artifacts.ListCurrentByProject(ctx, projectID)
 	if err != nil {
@@ -324,7 +370,7 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 		if current == nil {
 			continue
 		}
-		stepID, ok := creatorStepForStage(current.StageName)
+		stepID, ok := creatorStepForArtifact(current)
 		if !ok {
 			continue
 		}
@@ -408,10 +454,21 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 		}
 	}
 	activeTasks = deduplicateCreatorTasks(activeTasks)
+	processTimeline, stepArtifacts, err := s.creatorAuditProjection(ctx, project, artifacts, steps)
+	if err != nil {
+		return nil, err
+	}
+	for i := range steps {
+		steps[i].AllowedActions = actionsForCreatorState(steps[i].State)
+		if steps[i].HasHistory && steps[i].ReviewID != "" && steps[i].State != model.CreatorStepGenerating {
+			steps[i].AllowedActions = append(steps[i].AllowedActions, "regenerate")
+		}
+	}
 
 	return &model.CreationView{
 		Project: project, ActiveStep: activeCreatorStep(steps), Steps: steps,
 		ShotSummary: shotState.Summary, ActiveTasks: activeTasks, AssemblyDirty: viewAssemblyDirty,
+		ProcessTimeline: processTimeline, StepArtifacts: stepArtifacts,
 	}, nil
 }
 
@@ -467,7 +524,7 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	if err != nil || base == nil || base.ProjectID != projectID {
 		return nil, ErrCreatorArtifactNotFound
 	}
-	if mapped, ok := creatorStepForStage(base.StageName); !ok || mapped != stepID {
+	if mapped, ok := creatorStepForArtifact(base); !ok || mapped != stepID {
 		return nil, ErrCreatorArtifactNotFound
 	}
 	mode := req.Mode
@@ -565,7 +622,7 @@ func (s *CreatorViewService) PreviewStepRevision(ctx context.Context, userID, pr
 	if err != nil || base == nil || base.ProjectID != projectID {
 		return model.StepImpact{}, ErrCreatorArtifactNotFound
 	}
-	if mapped, ok := creatorStepForStage(base.StageName); !ok || mapped != stepID {
+	if mapped, ok := creatorStepForArtifact(base); !ok || mapped != stepID {
 		return model.StepImpact{}, ErrCreatorArtifactNotFound
 	}
 	current, err := s.history.GetCurrent(ctx, projectID, base.StageName, base.UnitID)
@@ -731,7 +788,7 @@ func (s *CreatorViewService) currentArtifactForStep(ctx context.Context, project
 		if candidate == nil {
 			continue
 		}
-		mapped, ok := creatorStepForStage(candidate.StageName)
+		mapped, ok := creatorStepForArtifact(candidate)
 		if !ok || mapped != stepID || candidate.ProjectID != projectID {
 			continue
 		}
@@ -768,7 +825,7 @@ func validCreatorRevisionChild(candidate, parent *artifact.Artifact, projectID s
 	if candidate == nil || parent == nil || candidate.ProjectID != projectID || candidate.ParentID != parent.ID || candidate.Version != parent.Version+1 {
 		return false
 	}
-	mapped, ok := creatorStepForStage(candidate.StageName)
+	mapped, ok := creatorStepForArtifact(candidate)
 	return ok && mapped == stepID && candidate.StageName == parent.StageName && candidate.UnitID == parent.UnitID
 }
 
@@ -1001,6 +1058,16 @@ func newCreatorSteps() []model.CreatorStep {
 func creatorStepForStage(stage string) (model.CreatorStepID, bool) {
 	step, ok := creatorStageSteps[normalizeCreatorStage(stage)]
 	return step, ok
+}
+
+func creatorStepForArtifact(item *artifact.Artifact) (model.CreatorStepID, bool) {
+	if item == nil {
+		return "", false
+	}
+	if step, ok := creatorStepForStage(item.StageName); ok {
+		return step, true
+	}
+	return creatorStepForStage(item.UnitID)
 }
 
 func normalizeCreatorStage(stage string) string {

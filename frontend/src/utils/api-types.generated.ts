@@ -240,8 +240,10 @@ export interface CreationView {
   activeStep: 'requirements' | 'direction' | 'script' | 'shots' | 'preview' | 'delivery';
   activeTasks: CreatorTask[];
   assemblyDirty: boolean;
+  processTimeline: CreatorProcessEvent[];
   project: VideoProject;
   shotSummary: ShotSummary;
+  stepArtifacts: Record<string, CreatorArtifactDescriptor[]>;
   steps: CreatorStep[];
 }
 
@@ -254,12 +256,47 @@ export interface CreationViewResponse {
 }
 
 /**  */
+// CreatorArtifactDescriptor
+export interface CreatorArtifactDescriptor {
+  artifactId: string;
+  artifactType?: string;
+  attempt: number;
+  createdAt: string;
+  generationKind?: string;
+  isCurrent: boolean;
+  isStale: boolean;
+  kind: string;
+  mimeType?: string;
+  name: string;
+  relatedShotId?: string;
+  sizeBytes?: number;
+  stepId: 'requirements' | 'direction' | 'script' | 'shots' | 'preview' | 'delivery';
+  version: number;
+}
+
+/**  */
 // CreatorArtifactVersion
 export interface CreatorArtifactVersion {
   artifactId: string;
   createdAt: string;
   isCurrent: boolean;
   version: number;
+}
+
+/**  */
+// CreatorProcessEvent
+export interface CreatorProcessEvent {
+  artifactIds: string[];
+  attempt: number;
+  completedAt?: string | null;
+  id: string;
+  sourceId: string;
+  sourceType: 'artifact' | 'review' | 'agent_node' | 'shot' | 'project';
+  startedAt?: string | null;
+  state: 'started' | 'generated' | 'needs_review' | 'confirmed' | 'failed' | 'stale';
+  stepId: 'requirements' | 'direction' | 'script' | 'shots' | 'preview' | 'delivery';
+  summary?: string;
+  title: string;
 }
 
 /**  */
@@ -274,13 +311,19 @@ export interface CreatorShotUnitResponse {
 // CreatorStep
 export interface CreatorStep {
   allowedActions: string[];
+  artifactCount: number;
+  attemptCount: number;
   currentArtifactId?: string;
   currentVersion?: number;
+  hasHistory: boolean;
   id: 'requirements' | 'direction' | 'script' | 'shots' | 'preview' | 'delivery';
+  isStale: boolean;
   label: string;
   reviewId?: string;
   runId?: string;
+  startedAt?: string | null;
   state: 'not_started' | 'generating' | 'needs_review' | 'confirmed' | 'needs_attention' | 'failed';
+  updatedAt?: string | null;
 }
 
 /**  */
@@ -945,6 +988,25 @@ export interface StepImpactResponse {
 export interface StepMutationResponse {
   code: number;
   data: { artifact: { contentHash: string; createdAt: string; dependsOn?: string[]; humanApproved: boolean; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, unknown>; mimeType?: string; model?: string; name: string; parentId?: string; producedByNode?: string; producedByRole?: string; producedByTool?: string; projectId: string; promptHash?: string; provider?: string; roleAgentId?: string; sizeBytes: number; stageName: string; status: string; storageRef?: string; storageType: string; taskId?: string; unitId?: string; updatedAt: string; version: number; workflowRunId?: string }; impact: StepImpact; view: CreationView };
+  message: string;
+}
+
+/**  */
+// StepRegenerationRequest
+export interface StepRegenerationRequest {
+  baseArtifactId?: string;
+  baseVersion?: number;
+  confirmedAffectedStepIds: ('requirements' | 'direction' | 'script' | 'shots' | 'preview' | 'delivery')[];
+  instruction?: string;
+  reviewId?: string;
+  runId?: string;
+}
+
+/**  */
+// StepRegenerationResponse
+export interface StepRegenerationResponse {
+  code: number;
+  data: { attempt: number; impact: StepImpact; reviewId: string; runId: string; view: CreationView };
   message: string;
 }
 

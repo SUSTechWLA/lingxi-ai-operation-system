@@ -29,6 +29,8 @@ type creatorStepMutator interface {
 	ReviseStep(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, req model.StepRevisionRequest) (*model.StepMutationResult, error)
 	ConfirmStep(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, req model.StepConfirmRequest) (*model.CreationView, error)
 	RestoreStepVersion(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, version int, req model.StepRestoreRequest) (*model.StepMutationResult, error)
+	PreviewStepRegeneration(ctx context.Context, userID, projectID string, stepID model.CreatorStepID) (model.StepImpact, error)
+	RegenerateStep(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, req model.StepRegenerationRequest, idempotencyKey string) (*model.StepRegenerationResult, error)
 	RebuildFinalAssembly(ctx context.Context, userID, projectID, idempotencyKey string) (videoSvc.AssemblyRebuildResult, error)
 }
 
@@ -62,7 +64,43 @@ func (h *CreatorViewHandler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/:id/steps/:stepId/revisions", h.ReviseStep)
 	api.POST("/:id/steps/:stepId/confirm", h.ConfirmStep)
 	api.POST("/:id/steps/:stepId/versions/:version/restore", h.RestoreStepVersion)
+	api.POST("/:id/steps/:stepId/regeneration-impact", h.PreviewStepRegeneration)
+	api.POST("/:id/steps/:stepId/regenerations", h.RegenerateStep)
 	api.POST("/:id/assembly/rebuild", h.RebuildFinalAssembly)
+}
+
+func (h *CreatorViewHandler) PreviewStepRegeneration(c *gin.Context) {
+	userID, projectID, ok := h.authorizeProject(c)
+	if !ok || !h.mutationsAvailable(c) {
+		return
+	}
+	impact, err := h.mutations.PreviewStepRegeneration(c.Request.Context(), userID, projectID, model.CreatorStepID(c.Param("stepId")))
+	if err != nil {
+		h.failMutation(c, err)
+		return
+	}
+	httpx.OK(c, impact)
+}
+
+func (h *CreatorViewHandler) RegenerateStep(c *gin.Context) {
+	userID, projectID, ok := h.authorizeProject(c)
+	if !ok || !h.mutationsAvailable(c) {
+		return
+	}
+	var req model.StepRegenerationRequest
+	idempotencyKey := c.GetHeader("Idempotency-Key")
+	if err := c.ShouldBindJSON(&req); err != nil || idempotencyKey == "" {
+		fail(c, http.StatusBadRequest, "invalid regeneration request")
+		return
+	}
+	result, err := h.mutations.RegenerateStep(
+		c.Request.Context(), userID, projectID, model.CreatorStepID(c.Param("stepId")), req, idempotencyKey,
+	)
+	if err != nil {
+		h.failMutation(c, err)
+		return
+	}
+	httpx.OK(c, result)
 }
 
 func (h *CreatorViewHandler) RebuildFinalAssembly(c *gin.Context) {

@@ -577,7 +577,15 @@ func main() {
 			return content, nil
 		})
 		creatorViewSvc := videoSvc.NewCreatorViewService(videoProjectSvc, videoCreationSvc, artifactSvc).
-			WithStepMutations(artifactHandler.RevisionService(), agentRuntimeHandler.ReviewMutations())
+			WithStepMutations(artifactHandler.RevisionService(), agentRuntimeHandler.ReviewMutations()).
+			WithArtifactReconciler(artifactHandler).
+			WithProcessAudit(func(ctx context.Context, runID string) (*videoSvc.CreatorRunAudit, error) {
+				run, err := agentRunRepo.FindRun(ctx, runID)
+				if err != nil || run == nil {
+					return nil, err
+				}
+				return &videoSvc.CreatorRunAudit{ID: run.ID, TaskID: run.TaskID, UserID: run.UserID}, nil
+			}, nodeRepo)
 		videoHandler.NewCreatorViewHandler(videoProjectSvc, creatorViewSvc, requireAuth).RegisterRoutes(r)
 		artifactHandler.RegisterRoutes(r, requireAuth)
 

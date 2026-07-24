@@ -39,6 +39,8 @@ func TestCloudSpec_CreatorRoutesMatchHandlers(t *testing.T) {
 		{"POST", "/api/video-projects/:id/steps/:stepId/revisions", "StepRevisionMutationRequest", "StepMutationResponse", true},
 		{"POST", "/api/video-projects/:id/steps/:stepId/confirm", "StepConfirmRequest", "CreationViewResponse", false},
 		{"POST", "/api/video-projects/:id/steps/:stepId/versions/:version/restore", "StepRestoreRequest", "StepMutationResponse", true},
+		{"POST", "/api/video-projects/:id/steps/:stepId/regeneration-impact", "", "StepImpactResponse", false},
+		{"POST", "/api/video-projects/:id/steps/:stepId/regenerations", "StepRegenerationRequest", "StepRegenerationResponse", true},
 		{"POST", "/api/video-projects/:id/materials", "RegisterProjectMaterialRequest", "ProjectMaterialResponse", false},
 		{"GET", "/api/video-projects/:id/shots", "", "ShotPageResponse", false},
 		{"GET", "/api/video-projects/:id/shots/summary", "", "ShotSummaryResponse", false},
@@ -88,6 +90,7 @@ func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 		"StepRevisionPreviewRequest":     {"artifactId", "baseVersion"},
 		"StepConfirmRequest":             {"artifactId"},
 		"StepRestoreRequest":             {"baseVersion", "confirmedAffectedShotIds"},
+		"StepRegenerationRequest":        {"confirmedAffectedStepIds"},
 		"RegisterProjectMaterialRequest": {"name", "kind", "storageRef", "mimeType", "sizeBytes", "contentHash"},
 		"ShotRegenerationRequest":        {"baseVersion", "scope", "locks"},
 		"CandidateAcceptRequest":         {"baseVersion", "scope", "locks"},
@@ -106,6 +109,16 @@ func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 
 	assertSchemaEnum(t, spec, "CreatorStep", "id", []any{"requirements", "direction", "script", "shots", "preview", "delivery"})
 	assertSchemaEnum(t, spec, "CreatorStep", "state", []any{"not_started", "generating", "needs_review", "confirmed", "needs_attention", "failed"})
+	for _, property := range []string{"hasHistory", "attemptCount", "artifactCount", "isStale"} {
+		if _, ok := spec.Components.Schemas["CreatorStep"].Properties[property]; !ok {
+			t.Errorf("CreatorStep.%s missing", property)
+		}
+	}
+	for _, property := range []string{"processTimeline", "stepArtifacts"} {
+		if _, ok := spec.Components.Schemas["CreationView"].Properties[property]; !ok {
+			t.Errorf("CreationView.%s missing", property)
+		}
+	}
 	preview := spec.Components.Schemas["StepRevisionPreviewRequest"]
 	if got := sortedPropertyNames(preview); !reflect.DeepEqual(got, []string{"artifactId", "baseVersion"}) {
 		t.Fatalf("preview properties = %v", got)
@@ -134,6 +147,24 @@ func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 	assertSchemaEnum(t, spec, "ShotRegenerationRequest", "scope", []any{"prompt", "reference", "base_media", "overlay", "audio_alignment", "full_shot"})
 	assertSchemaEnum(t, spec, "CandidateAcceptRequest", "scope", []any{"candidate_accept"})
 	assertSchemaEnum(t, spec, "CandidateRestoreRequest", "scope", []any{"candidate_restore"})
+}
+
+func TestCloudSpecCreatorArtifactDescriptorAllowListsClassificationHints(t *testing.T) {
+	descriptor := BuildCloudSpec().Components.Schemas["CreatorArtifactDescriptor"]
+	for _, property := range []string{"artifactType", "generationKind", "relatedShotId"} {
+		field := descriptor.Properties[property]
+		if field == nil || field.Schema == nil || field.Schema.Type != "string" {
+			t.Errorf("CreatorArtifactDescriptor.%s = %#v, want optional string", property, field)
+		}
+		for _, required := range descriptor.Required {
+			if required == property {
+				t.Errorf("CreatorArtifactDescriptor.%s must remain optional", property)
+			}
+		}
+	}
+	if _, ok := descriptor.Properties["metadata"]; ok {
+		t.Fatal("CreatorArtifactDescriptor must not expose raw artifact metadata")
+	}
 }
 
 func TestCloudSpec_CreatorParametersAndMaterialConstraints(t *testing.T) {

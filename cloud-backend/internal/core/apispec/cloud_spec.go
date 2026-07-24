@@ -672,6 +672,28 @@ func BuildCloudSpec() *Spec {
 		ResponseJSON("404", "Project, content, or version not found", "ErrorResponse").
 		ResponseJSON("409", "Content version or idempotency conflict", "ErrorResponse").
 		ResponseJSON("500", "Content update failed", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/steps/:stepId/regeneration-impact", "Preview downstream impact before regenerating a completed creator step").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
+		creatorAuth(false).
+		ResponseJSON("200", "Exact downstream impact", "StepImpactResponse").
+		ResponseJSON("400", "Invalid creator step", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Project or review lineage not found", "ErrorResponse").
+		ResponseJSON("500", "Regeneration impact unavailable", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/steps/:stepId/regenerations", "Create a new attempt from a completed creator step while preserving history").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
+		creatorAuth(true).
+		BodyJSON("StepRegenerationRequest", "Optional base identity, instruction, and exact confirmed downstream steps", true).
+		ResponseJSON("200", "New attempt and authoritative creator workspace", "StepRegenerationResponse").
+		ResponseJSON("400", "Invalid request or impact confirmation", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Project or review lineage not found", "ErrorResponse").
+		ResponseJSON("409", "Content version or idempotency conflict", "ErrorResponse").
+		ResponseJSON("500", "Regeneration failed", "ErrorResponse")
 	b.Route("POST", "/api/video-projects/:id/materials", "Register local source-material metadata in the aggregate manifest").
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).

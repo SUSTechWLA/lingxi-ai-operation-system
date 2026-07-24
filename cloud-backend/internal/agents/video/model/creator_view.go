@@ -35,17 +35,61 @@ type CreatorStep struct {
 	CurrentVersion    int              `json:"currentVersion,omitempty"`
 	ReviewID          string           `json:"reviewId,omitempty"`
 	RunID             string           `json:"runId,omitempty"`
+	HasHistory        bool             `json:"hasHistory"`
+	AttemptCount      int              `json:"attemptCount"`
+	ArtifactCount     int              `json:"artifactCount"`
+	StartedAt         *time.Time       `json:"startedAt,omitempty"`
+	UpdatedAt         *time.Time       `json:"updatedAt,omitempty"`
+	IsStale           bool             `json:"isStale"`
 	AllowedActions    []string         `json:"allowedActions"`
+}
+
+// CreatorArtifactDescriptor is a lightweight, creator-safe reference. Artifact
+// payloads continue to load through the authenticated artifact content route.
+type CreatorArtifactDescriptor struct {
+	ArtifactID     string        `json:"artifactId"`
+	StepID         CreatorStepID `json:"stepId"`
+	Name           string        `json:"name"`
+	Kind           string        `json:"kind"`
+	MimeType       string        `json:"mimeType,omitempty"`
+	ArtifactType   string        `json:"artifactType,omitempty"`
+	GenerationKind string        `json:"generationKind,omitempty"`
+	RelatedShotID  string        `json:"relatedShotId,omitempty"`
+	Version        int           `json:"version"`
+	Attempt        int           `json:"attempt"`
+	IsCurrent      bool          `json:"isCurrent"`
+	IsStale        bool          `json:"isStale"`
+	SizeBytes      int64         `json:"sizeBytes,omitempty"`
+	CreatedAt      time.Time     `json:"createdAt"`
+}
+
+// CreatorProcessEvent deliberately contains only allow-listed presentation
+// fields. Raw node input/output, prompts, tool arguments, and reasoning are not
+// part of this contract.
+type CreatorProcessEvent struct {
+	ID          string        `json:"id"`
+	StepID      CreatorStepID `json:"stepId"`
+	Attempt     int           `json:"attempt"`
+	State       string        `json:"state"`
+	SourceType  string        `json:"sourceType"`
+	SourceID    string        `json:"sourceId"`
+	Title       string        `json:"title"`
+	Summary     string        `json:"summary,omitempty"`
+	StartedAt   *time.Time    `json:"startedAt,omitempty"`
+	CompletedAt *time.Time    `json:"completedAt,omitempty"`
+	ArtifactIDs []string      `json:"artifactIds"`
 }
 
 // CreationView is the backend-authoritative state for the creator workspace.
 type CreationView struct {
-	Project       *VideoProject `json:"project"`
-	ActiveStep    CreatorStepID `json:"activeStep"`
-	Steps         []CreatorStep `json:"steps"`
-	ShotSummary   ShotSummary   `json:"shotSummary"`
-	ActiveTasks   []CreatorTask `json:"activeTasks"`
-	AssemblyDirty bool          `json:"assemblyDirty"`
+	Project         *VideoProject                                 `json:"project"`
+	ActiveStep      CreatorStepID                                 `json:"activeStep"`
+	Steps           []CreatorStep                                 `json:"steps"`
+	ShotSummary     ShotSummary                                   `json:"shotSummary"`
+	ActiveTasks     []CreatorTask                                 `json:"activeTasks"`
+	AssemblyDirty   bool                                          `json:"assemblyDirty"`
+	ProcessTimeline []CreatorProcessEvent                         `json:"processTimeline"`
+	StepArtifacts   map[CreatorStepID][]CreatorArtifactDescriptor `json:"stepArtifacts"`
 }
 
 // CreatorTask only exposes durable work that a creator can safely resume after reconnecting.
@@ -160,6 +204,23 @@ type StepMutationResult struct {
 	Artifact *artifact.Artifact `json:"artifact"`
 	Impact   StepImpact         `json:"impact"`
 	View     *CreationView      `json:"view"`
+}
+
+type StepRegenerationRequest struct {
+	BaseArtifactID           string          `json:"baseArtifactId,omitempty"`
+	BaseVersion              int             `json:"baseVersion,omitempty"`
+	Instruction              string          `json:"instruction,omitempty"`
+	RunID                    string          `json:"runId,omitempty"`
+	ReviewID                 string          `json:"reviewId,omitempty"`
+	ConfirmedAffectedStepIDs []CreatorStepID `json:"confirmedAffectedStepIds"`
+}
+
+type StepRegenerationResult struct {
+	RunID    string        `json:"runId"`
+	ReviewID string        `json:"reviewId"`
+	Attempt  int           `json:"attempt"`
+	Impact   StepImpact    `json:"impact"`
+	View     *CreationView `json:"view"`
 }
 
 type CreatorArtifactVersion struct {
