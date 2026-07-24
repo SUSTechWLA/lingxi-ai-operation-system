@@ -114,6 +114,12 @@ try {
   assert.equal(presentation.classifyArtifactPresentation({ kind: 'MARKDOWN', mimeType: 'text/markdown' }), 'markdown')
   assert.equal(presentation.classifyArtifactPresentation({ kind: 'VIDEO', mimeType: 'video/mp4' }), 'video')
   assert.equal(presentation.classifyArtifactPresentation({ kind: 'BUNDLE', mimeType: 'application/octet-stream' }), 'file')
+  assert.equal(presentation.safeCreatorReviewText('普通提示词正文'), '普通提示词正文')
+  assert.equal(presentation.safeCreatorReviewText('# 可审阅标题\n\n正常 Markdown 正文'), '# 可审阅标题\n\n正常 Markdown 正文')
+  assert.equal(presentation.safeCreatorReviewText('[旁白] 保留这段合法脚本文字'), '[旁白] 保留这段合法脚本文字')
+  assert.equal(presentation.safeCreatorReviewText('  {"storageRef":"private"}'), undefined)
+  assert.equal(presentation.safeCreatorReviewText('\n[{"kind":"LOG"}]'), undefined)
+  assert.equal(presentation.safeCreatorReviewText({ prompt: '不得序列化' }), undefined)
   const parsedJson = presentation.parseArtifactJson('{"shots":[{"id":"s1","duration":3},{"id":"s2","duration":4}],"title":"Demo"}')
   assert.equal(parsedJson.ok, true)
   assert.deepEqual(presentation.buildJsonSummary(parsedJson.value), {
@@ -703,6 +709,7 @@ try {
   const regenerationDialogSource = readFileSync(new URL('../src/features/creator-studio/components/StepRegenerationDialog.tsx', import.meta.url), 'utf8')
   const agentReviewSource = readFileSync(new URL('../src/features/creator-studio/components/AgentReviewGatePanel.tsx', import.meta.url), 'utf8')
   const jsonViewerSource = readFileSync(new URL('../src/features/creator-studio/components/JsonArtifactViewer.tsx', import.meta.url), 'utf8')
+  const markdownViewerSource = readFileSync(new URL('../src/features/creator-studio/components/MarkdownArtifactViewer.tsx', import.meta.url), 'utf8')
   const creatorStylesSource = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
   const recoverySource = readFileSync(new URL('../src/features/creator-studio/components/TaskRecoveryBanner.tsx', import.meta.url), 'utf8')
   const queueSource = readFileSync(new URL('../src/features/creator-studio/components/ShotReviewQueue.tsx', import.meta.url), 'utf8')
@@ -816,6 +823,8 @@ try {
   assert.match(proofingSource, /onPointerCancel/)
   assert.match(proofingSource, /SimpleVideoPlayer/)
   assert.doesNotMatch(proofingSource, /<video\b/, 'artifact proofing delegates video playback to the shared player')
+  assert.match(proofingSource, /safeCreatorReviewText\(displayedContent\)/)
+  assert.doesNotMatch(proofingSource, /artifactContentText\(displayedContent\)/, 'creator plain-text proofing must never serialize non-string content')
   assert.match(reviewSource, /开始时间（秒）/)
   assert.match(reviewSource, /aria-modal="true"/)
   assert.match(reviewSource, /cycleFocusIndex/)
@@ -827,11 +836,8 @@ try {
   assert.doesNotMatch(agentReviewSource, /creator-agent-review-content/)
   assert.doesNotMatch(agentReviewSource, /creator-agent-review-details/, 'the gate must not render the same payload a second time below the readable review')
   assert.match(agentReviewSource, /review\.reviewOutput/, 'the readable gate uses the structured source payload when available')
-  assert.match(
-    agentReviewSource,
-    /looksLikeStructuredContent\(content\)[\s\S]*<JsonArtifactViewer content=\{jsonReviewContent\}/,
-    'malformed structured review content must stay on the safe JSON path instead of falling through to readable Markdown',
-  )
+  assert.match(agentReviewSource, /safeCreatorReviewText\(content\)/)
+  assert.doesNotMatch(agentReviewSource, /looksLikeStructuredContent|qualityReview && content/, 'quality review content must use the shared safe-text boundary')
   assert.match(jsonViewerSource, /buildArtifactReviewModel/)
   assert.match(jsonViewerSource, /关键内容仍在准备中/)
   assert.match(jsonViewerSource, /artifact-review-script/)
@@ -844,6 +850,13 @@ try {
     proofingSource,
     /<p>[^<]*artifact\.(?:mimeType|kind|sizeBytes)|formatBytes\s*\(|未知文件类型|打开原文件/,
     'creator proofing fallbacks must not render or link to technical artifact descriptors',
+  )
+  assert.match(markdownViewerSource, /safeCreatorReviewText\(content\)/)
+  assert.match(markdownViewerSource, /<JsonArtifactViewer content=\{content\}/)
+  assert.doesNotMatch(
+    markdownViewerSource,
+    /artifactContentText|源码|navigator\.clipboard|downloadText|artifact-raw-preview|<pre\b/,
+    'creator Markdown proofing must preserve readable Markdown without raw source, copy, download, or serialization controls',
   )
   assert.match(creatorStylesSource, /\.artifact-review-document/)
   assert.match(timelineSource, /完整创作过程/)

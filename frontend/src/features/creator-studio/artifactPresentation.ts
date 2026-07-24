@@ -177,6 +177,17 @@ export function artifactContentText(content: unknown): string {
   return JSON.stringify(content, null, 2)
 }
 
+export function safeCreatorReviewText(content: unknown): string | undefined {
+  if (typeof content !== 'string') return undefined
+  const trimmed = content.trimStart()
+  if (trimmed.startsWith('{')) return undefined
+  if (trimmed.startsWith('[')) {
+    const firstArrayValue = trimmed.slice(1).trimStart()
+    if (!firstArrayValue || /^(?:\[|\{|"|\]|-?\d|true\b|false\b|null\b)/.test(firstArrayValue)) return undefined
+  }
+  return content
+}
+
 export function artifactContentNeedsLocalHydration(value: { content?: unknown } | null | undefined): boolean {
   const content = value?.content
   if (typeof content === 'string') {

@@ -1,7 +1,7 @@
 import { useEffect, useState, type PointerEvent, type RefObject } from 'react'
 import type { ArtifactContentResponse } from '../../../utils/types'
 import type { ArtifactSelection } from '../types'
-import { artifactContentNeedsLocalHydration, artifactContentText, classifyArtifactPresentation } from '../artifactPresentation'
+import { artifactContentNeedsLocalHydration, classifyArtifactPresentation, safeCreatorReviewText } from '../artifactPresentation'
 import { resolveCreatorArtifactMediaUrl } from '../logic'
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import JsonArtifactViewer from './JsonArtifactViewer'
@@ -67,8 +67,11 @@ export default function ArtifactProofingCanvas({
     return <div className="artifact-file-fallback" role="alert"><div><strong>关键内容仍在准备中</strong><p>暂时无法读取这份内容，请重新读取当前内容后再试。</p></div></div>
   }
   const displayedContent = localText?.key === hydrationKey && localText.text !== undefined ? localText.text : content.content
+  const readableText = safeCreatorReviewText(displayedContent)
   if (presentation === 'json') return <JsonArtifactViewer content={displayedContent} />
-  if (presentation === 'markdown') return <MarkdownArtifactViewer content={displayedContent} name={artifact.name || 'artifact.md'} />
+  if (presentation === 'markdown') {
+    return readableText === undefined ? <JsonArtifactViewer content={displayedContent} /> : <MarkdownArtifactViewer content={readableText} />
+  }
   if (presentation === 'image' && resolvedMediaUrl && !mediaFailed) {
     const rect = selection?.kind === 'rect' ? selection : null
     return (
@@ -93,7 +96,11 @@ export default function ArtifactProofingCanvas({
   if (presentation === 'audio' && resolvedMediaUrl && !mediaFailed) {
     return <audio className="artifact-audio-preview" controls preload="metadata" src={resolvedMediaUrl} onError={() => setMediaFailed(true)}>当前客户端无法播放音频。</audio>
   }
-  if (presentation === 'text') return <pre className="artifact-raw-preview" tabIndex={0}>{artifactContentText(displayedContent)}</pre>
+  if (presentation === 'text') {
+    return readableText === undefined
+      ? <JsonArtifactViewer content={displayedContent} />
+      : <pre className="artifact-raw-preview" tabIndex={0}>{readableText}</pre>
+  }
   return <ArtifactFileFallback mediaFailed={mediaFailed} />
 }
 

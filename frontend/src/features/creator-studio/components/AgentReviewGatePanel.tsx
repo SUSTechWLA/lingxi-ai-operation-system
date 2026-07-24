@@ -9,7 +9,7 @@ import {
   creatorStepForAgentReview,
   creatorStepLabel,
 } from '../logic'
-import { parseArtifactJson } from '../artifactPresentation'
+import { parseArtifactJson, safeCreatorReviewText } from '../artifactPresentation'
 import JsonArtifactViewer from './JsonArtifactViewer'
 import MarkdownArtifactViewer from './MarkdownArtifactViewer'
 
@@ -34,7 +34,8 @@ export default function AgentReviewGatePanel({ runId, review, onApproved }: Agen
     : parsedContent.ok && parsedContent.value && typeof parsedContent.value === 'object'
       ? parsedContent.value
       : undefined
-  const jsonReviewContent = structuredContent ?? (looksLikeStructuredContent(content) ? content : undefined)
+  const readableContent = safeCreatorReviewText(content)
+  const jsonReviewContent = structuredContent ?? (readableContent === undefined && content ? content : undefined)
 
   useEffect(() => {
     setRegenerationHint(creatorAgentReviewRegenerationHint(review))
@@ -79,11 +80,11 @@ export default function AgentReviewGatePanel({ runId, review, onApproved }: Agen
         <span className="artifact-state is-needs_review">待审核</span>
       </div>
       <p className="creator-review-guidance">{review.reviewReason || '确认当前结果后，系统会继续执行下一步。'}</p>
-      {qualityReview && content
-        ? <div className="creator-quality-summary"><p>{content}</p></div>
+      {qualityReview && readableContent
+        ? <div className="creator-quality-summary"><p>{readableContent}</p></div>
         : jsonReviewContent !== undefined
           ? <JsonArtifactViewer content={jsonReviewContent} />
-          : content && <MarkdownArtifactViewer content={content} name={`${stepId}-review.md`} />}
+          : readableContent && <MarkdownArtifactViewer content={readableContent} />}
       {canRegenerate && <label className="artifact-editor-label">修改要求
         <textarea
           value={regenerationHint}
@@ -104,8 +105,4 @@ export default function AgentReviewGatePanel({ runId, review, onApproved }: Agen
       {error && <p className="creator-form-error" role="alert">{error}</p>}
     </section>
   )
-}
-
-function looksLikeStructuredContent(content: string): boolean {
-  return /^\s*[{[]/.test(content)
 }
