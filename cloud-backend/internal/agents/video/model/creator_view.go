@@ -162,6 +162,9 @@ type ArtifactSelection struct {
 	Height  *float64 `json:"height,omitempty"`
 	StartMs *int64   `json:"startMs,omitempty"`
 	EndMs   *int64   `json:"endMs,omitempty"`
+	Start   *int     `json:"start,omitempty"`
+	End     *int     `json:"end,omitempty"`
+	Text    string   `json:"text,omitempty"`
 }
 
 type StepRevisionRequest struct {

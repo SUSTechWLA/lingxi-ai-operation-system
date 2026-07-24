@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
@@ -124,21 +125,26 @@ type creatorArtifactReconciler interface {
 	ReconcileProjectArtifacts(context.Context, string) error
 }
 
+type creatorArtifactTextResolver interface {
+	ResolveReviewableText(context.Context, *artifact.Artifact) (string, error)
+}
+
 // CreatorViewService combines only persisted project, artifact, and Shot data.
 // It has no client-derived state or workflow topology dependency.
 type CreatorViewService struct {
-	projects           creatorProjectReader
-	artifacts          creatorArtifactReader
-	shots              creatorShotReader
-	history            creatorArtifactHistoryReader
-	revisions          creatorRevisionService
-	reviews            creatorReviewMutations
-	assembly           creatorAssemblyService
-	shotInvalidations  creatorShotInvalidationService
-	auditRun           creatorRunAuditLookup
-	auditNodes         creatorNodeAuditReader
-	projectLifecycle   creatorProjectLifecycle
-	artifactReconciler creatorArtifactReconciler
+	projects             creatorProjectReader
+	artifacts            creatorArtifactReader
+	shots                creatorShotReader
+	history              creatorArtifactHistoryReader
+	revisions            creatorRevisionService
+	reviews              creatorReviewMutations
+	assembly             creatorAssemblyService
+	shotInvalidations    creatorShotInvalidationService
+	auditRun             creatorRunAuditLookup
+	auditNodes           creatorNodeAuditReader
+	projectLifecycle     creatorProjectLifecycle
+	artifactReconciler   creatorArtifactReconciler
+	artifactTextResolver creatorArtifactTextResolver
 }
 
 type creatorArtifactHistoryReader interface {
@@ -180,6 +186,7 @@ var (
 	ErrCreatorInvalidRequest           = errors.New("creator step request is invalid")
 	ErrCreatorIdempotencyConflict      = errors.New("creator idempotency key conflict")
 	ErrCreatorModelProviderUnavailable = errors.New("creator model provider is unavailable")
+	ErrCreatorSelectionConflict        = errors.New("creator artifact selection conflict")
 )
 
 const creatorMutationReceiptKey = "creatorStepMutationReceipt"
@@ -332,6 +339,9 @@ func (s *CreatorViewService) WithStepMutations(revisions creatorRevisionService,
 
 func (s *CreatorViewService) WithArtifactReconciler(reconciler creatorArtifactReconciler) *CreatorViewService {
 	s.artifactReconciler = reconciler
+	if resolver, ok := reconciler.(creatorArtifactTextResolver); ok {
+		s.artifactTextResolver = resolver
+	}
 	return s
 }
 
@@ -548,6 +558,18 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	if err != nil {
 		return nil, err
 	}
+	if selection != nil && selection["kind"] == "text" {
+		if s.artifactTextResolver == nil {
+			return nil, ErrCreatorSelectionConflict
+		}
+		reviewText, resolveErr := s.artifactTextResolver.ResolveReviewableText(ctx, base)
+		if resolveErr != nil {
+			return nil, ErrCreatorSelectionConflict
+		}
+		if err := validateTextArtifactSelection(selection, reviewText); err != nil {
+			return nil, err
+		}
+	}
 	impact, err := s.stepImpact(ctx, userID, projectID, stepID, base)
 	if err != nil {
 		return nil, err
@@ -559,7 +581,9 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	if err != nil {
 		return nil, err
 	}
-	requestDigest := creatorRequestDigest(map[string]interface{}{"mode": mode, "instruction": message, "directContent": string(directContent)})
+	requestDigest := creatorRequestDigest(map[string]interface{}{
+		"mode": mode, "instruction": message, "directContent": string(directContent), "selection": selection,
+	})
 	if authoritative.ID != base.ID || authoritative.Version != req.BaseVersion {
 		return s.retryCreatorMutation(ctx, userID, projectID, stepID, authoritative, req.IdempotencyKey, "revise", base.ID, req.BaseVersion, "", 0, requestDigest, selection, impact, req.RunID, req.ReviewID)
 	}
@@ -836,7 +860,8 @@ func normalizeArtifactSelection(selection *model.ArtifactSelection) (map[string]
 	kind := strings.ToLower(strings.TrimSpace(selection.Kind))
 	switch kind {
 	case "rect":
-		if selection.X == nil || selection.Y == nil || selection.Width == nil || selection.Height == nil || selection.StartMs != nil || selection.EndMs != nil {
+		if selection.X == nil || selection.Y == nil || selection.Width == nil || selection.Height == nil ||
+			selection.StartMs != nil || selection.EndMs != nil || selection.Start != nil || selection.End != nil || selection.Text != "" {
 			return nil, ErrCreatorInvalidRequest
 		}
 		x, y, width, height := *selection.X, *selection.Y, *selection.Width, *selection.Height
@@ -845,16 +870,56 @@ func normalizeArtifactSelection(selection *model.ArtifactSelection) (map[string]
 		}
 		return map[string]interface{}{"kind": kind, "x": x, "y": y, "width": width, "height": height}, nil
 	case "time":
-		if selection.StartMs == nil || selection.EndMs == nil || selection.X != nil || selection.Y != nil || selection.Width != nil || selection.Height != nil {
+		if selection.StartMs == nil || selection.EndMs == nil || selection.X != nil || selection.Y != nil ||
+			selection.Width != nil || selection.Height != nil || selection.Start != nil || selection.End != nil || selection.Text != "" {
 			return nil, ErrCreatorInvalidRequest
 		}
 		if *selection.StartMs < 0 || *selection.EndMs <= *selection.StartMs {
 			return nil, ErrCreatorInvalidRequest
 		}
 		return map[string]interface{}{"kind": kind, "startMs": *selection.StartMs, "endMs": *selection.EndMs}, nil
+	case "text":
+		if selection.Start == nil || selection.End == nil || selection.Text == "" ||
+			selection.X != nil || selection.Y != nil || selection.Width != nil || selection.Height != nil ||
+			selection.StartMs != nil || selection.EndMs != nil {
+			return nil, ErrCreatorInvalidRequest
+		}
+		start, end, text := *selection.Start, *selection.End, selection.Text
+		if start < 0 || end <= start || end-start > 4000 || len(utf16.Encode([]rune(text))) > 4000 {
+			return nil, ErrCreatorInvalidRequest
+		}
+		return map[string]interface{}{"kind": kind, "start": start, "end": end, "text": text}, nil
 	default:
 		return nil, ErrCreatorInvalidRequest
 	}
+}
+
+func validateTextArtifactSelection(selection map[string]interface{}, source string) error {
+	start, startOK := selection["start"].(int)
+	end, endOK := selection["end"].(int)
+	text, textOK := selection["text"].(string)
+	if !startOK || !endOK || !textOK {
+		return ErrCreatorInvalidRequest
+	}
+	sourceUnits := utf16.Encode([]rune(source))
+	if end > len(sourceUnits) || splitsUTF16SurrogatePair(sourceUnits, start) || splitsUTF16SurrogatePair(sourceUnits, end) {
+		return ErrCreatorSelectionConflict
+	}
+	selectedUnits := utf16.Encode([]rune(text))
+	if len(selectedUnits) != end-start {
+		return ErrCreatorSelectionConflict
+	}
+	for index, unit := range selectedUnits {
+		if sourceUnits[start+index] != unit {
+			return ErrCreatorSelectionConflict
+		}
+	}
+	return nil
+}
+
+func splitsUTF16SurrogatePair(units []uint16, offset int) bool {
+	return offset > 0 && offset < len(units) &&
+		utf16.IsSurrogate(rune(units[offset-1])) && utf16.IsSurrogate(rune(units[offset]))
 }
 
 func (s *CreatorViewService) stepImpact(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, current *artifact.Artifact) (model.StepImpact, error) {

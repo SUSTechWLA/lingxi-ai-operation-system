@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -703,6 +704,224 @@ func TestArtifactSelectionValidationCoversRectAndTimeBounds(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestArtifactSelectionTextSupportsBrowserUTF16OffsetsAndExactProvenance(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		source    string
+		selection string
+		wantStart int
+		wantEnd   int
+	}{
+		{name: "emoji before Chinese", source: "🙂中文结尾", selection: `{"kind":"text","start":2,"end":4,"text":"中文"}`, wantStart: 2, wantEnd: 4},
+		{name: "emoji inside Chinese", source: "A你🙂好B", selection: `{"kind":"text","start":1,"end":5,"text":"你🙂好"}`, wantStart: 1, wantEnd: 5},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := &artifact.Artifact{
+				ID: "script-v3", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1",
+				StageName: "script", Version: 3, IsCurrent: true,
+			}
+			artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
+			revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+			resolver := &fakeCreatorArtifactTextResolver{text: test.source}
+			svc := NewCreatorViewService(
+				fakeCreatorProjectReader{project: &model.VideoProject{
+					ID: "vp-1", Config: json.RawMessage(`{"modelProviderRefs":{"text_to_text":{"source":"local_agent","baseUrl":"https://model.test","model":"writer"}}}`),
+				}},
+				fakeCreatorShotReader{},
+				artifacts,
+			).WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review"}).
+				WithArtifactReconciler(resolver)
+
+			_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, model.StepRevisionRequest{
+				IdempotencyKey: "text-" + test.name, ArtifactID: base.ID, BaseVersion: 3,
+				Mode: "instruction", Instruction: "只改选中文字",
+				ModelProviders: map[string]interface{}{"text_to_text": map[string]interface{}{
+					"baseUrl": "https://model.test", "apiKey": "secret", "model": "writer",
+				}},
+				Selection: decodeArtifactSelection(t, test.selection),
+			})
+			if err != nil {
+				t.Fatalf("ReviseStep() error = %v", err)
+			}
+			want := map[string]interface{}{"kind": "text", "start": test.wantStart, "end": test.wantEnd}
+			want["text"] = decodeArtifactSelectionText(t, test.selection)
+			if got := revisions.reviseRequest.Provenance["selection"]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("selection provenance = %#v, want %#v", got, want)
+			}
+			if resolver.resolveCalls != 1 || resolver.resolvedArtifactID != base.ID {
+				t.Fatalf("resolver calls = %d artifact = %q", resolver.resolveCalls, resolver.resolvedArtifactID)
+			}
+		})
+	}
+}
+
+func TestArtifactSelectionTextRejectsMalformedShapeBeforeMutation(t *testing.T) {
+	for name, raw := range map[string]string{
+		"empty text":     `{"kind":"text","start":0,"end":1,"text":""}`,
+		"negative start": `{"kind":"text","start":-1,"end":1,"text":"a"}`,
+		"empty range":    `{"kind":"text","start":1,"end":1,"text":"a"}`,
+		"mixed rect":     `{"kind":"text","start":0,"end":1,"text":"a","x":0,"y":0,"width":1,"height":1}`,
+		"mixed time":     `{"kind":"text","start":0,"end":1,"text":"a","startMs":0,"endMs":1}`,
+		"over limit":     fmt.Sprintf(`{"kind":"text","start":0,"end":4001,"text":%q}`, strings.Repeat("界", 4001)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, revisions, _ := newTextSelectionService("a" + strings.Repeat("界", 4001))
+			_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, textSelectionRequest(t, "malformed-"+name, raw))
+			if !errors.Is(err, ErrCreatorInvalidRequest) || revisions.calls != 0 {
+				t.Fatalf("error = %v, revision calls = %d", err, revisions.calls)
+			}
+		})
+	}
+}
+
+func TestArtifactSelectionTextConflictsOnStaleMismatchedOrUnavailableContent(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		source     string
+		selection  string
+		resolveErr error
+	}{
+		{name: "stale range", source: "短文本", selection: `{"kind":"text","start":0,"end":9,"text":"短文本"}`},
+		{name: "mismatched text", source: "abcdef", selection: `{"kind":"text","start":1,"end":3,"text":"zz"}`},
+		{name: "split surrogate", source: "A🙂B", selection: `{"kind":"text","start":2,"end":3,"text":"🙂"}`},
+		{name: "unavailable source", selection: `{"kind":"text","start":0,"end":1,"text":"a"}`, resolveErr: artifact.ErrRevisionContentUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc, revisions, resolver := newTextSelectionService(test.source)
+			resolver.err = test.resolveErr
+			_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, textSelectionRequest(t, "conflict-"+test.name, test.selection))
+			if err == nil || err.Error() != "creator artifact selection conflict" || errors.Is(err, ErrCreatorInvalidRequest) || revisions.calls != 0 {
+				t.Fatalf("error = %v, revision calls = %d", err, revisions.calls)
+			}
+		})
+	}
+}
+
+func TestArtifactSelectionTextIdempotencyFingerprintAndStaleRequestsMutateNothing(t *testing.T) {
+	svc, revisions, _ := newTextSelectionService("abcdef")
+	req := textSelectionRequest(t, "same-text-key", `{"kind":"text","start":1,"end":3,"text":"bc"}`)
+	reviews := svc.reviews.(*fakeCreatorReviewMutations)
+	reviews.reopenErr = errors.New("temporary reopen failure")
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); err == nil {
+		t.Fatal("expected first reopen failure")
+	}
+	reviews.reopenErr = nil
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); err != nil {
+		t.Fatalf("identical retry error = %v", err)
+	}
+	if revisions.calls != 1 {
+		t.Fatalf("identical retry created %d revisions, want 1", revisions.calls)
+	}
+
+	base := &artifact.Artifact{ID: "script-v3", ProjectID: "vp-1", StageName: "script", Version: 3}
+	impact := model.StepImpact{AffectedStepIDs: []model.CreatorStepID{model.CreatorStepShots}}
+	fingerprint := func(selection map[string]interface{}) string {
+		return newCreatorMutationReceipt(
+			"revise", "key", "vp-1", model.CreatorStepScript, base, nil, "run-1", "review-1",
+			impact, selection, creatorRequestDigest(map[string]interface{}{"instruction": "rewrite", "selection": selection}),
+		).Fingerprint
+	}
+	original := map[string]interface{}{"kind": "text", "start": 1, "end": 3, "text": "bc"}
+	if fingerprint(original) != fingerprint(map[string]interface{}{"kind": "text", "start": 1, "end": 3, "text": "bc"}) {
+		t.Fatal("identical selection and instruction changed the request fingerprint")
+	}
+	for name, changed := range map[string]map[string]interface{}{
+		"text":  {"kind": "text", "start": 1, "end": 3, "text": "bd"},
+		"start": {"kind": "text", "start": 0, "end": 3, "text": "abc"},
+		"end":   {"kind": "text", "start": 1, "end": 4, "text": "bcd"},
+	} {
+		if fingerprint(original) == fingerprint(changed) {
+			t.Fatalf("changing %s did not change the request fingerprint", name)
+		}
+	}
+
+	staleSvc, staleRevisions, _ := newTextSelectionService("abcdef")
+	staleReq := textSelectionRequest(t, "stale-version", `{"kind":"text","start":1,"end":3,"text":"bc"}`)
+	staleReq.BaseVersion = 2
+	if _, err := staleSvc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, staleReq); !errors.Is(err, ErrCreatorVersionConflict) || staleRevisions.calls != 0 {
+		t.Fatalf("stale version error = %v, revision calls = %d", err, staleRevisions.calls)
+	}
+}
+
+func TestArtifactSelectionResolverIsNotUsedForRectSelection(t *testing.T) {
+	svc, revisions, resolver := newTextSelectionService("unused")
+	x, y, width, height := 0.1, 0.2, 0.3, 0.4
+	req := model.StepRevisionRequest{
+		IdempotencyKey: "rect-no-text-resolve", ArtifactID: "script-v3", BaseVersion: 3,
+		Mode: "direct", DirectContent: "new",
+		Selection: &model.ArtifactSelection{Kind: "rect", X: &x, Y: &y, Width: &width, Height: &height},
+	}
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); err != nil {
+		t.Fatalf("ReviseStep() error = %v", err)
+	}
+	if resolver.resolveCalls != 0 || revisions.calls != 1 {
+		t.Fatalf("resolver calls = %d, revision calls = %d", resolver.resolveCalls, revisions.calls)
+	}
+}
+
+func decodeArtifactSelection(t *testing.T, raw string) *model.ArtifactSelection {
+	t.Helper()
+	var selection model.ArtifactSelection
+	if err := json.Unmarshal([]byte(raw), &selection); err != nil {
+		t.Fatalf("decode selection: %v", err)
+	}
+	return &selection
+}
+
+func decodeArtifactSelectionText(t *testing.T, raw string) string {
+	t.Helper()
+	var selection map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &selection); err != nil {
+		t.Fatalf("decode selection text: %v", err)
+	}
+	text, _ := selection["text"].(string)
+	return text
+}
+
+func textSelectionRequest(t *testing.T, key, raw string) model.StepRevisionRequest {
+	t.Helper()
+	return model.StepRevisionRequest{
+		IdempotencyKey: key, ArtifactID: "script-v3", BaseVersion: 3,
+		Mode: "direct", DirectContent: "new", Selection: decodeArtifactSelection(t, raw),
+	}
+}
+
+func newTextSelectionService(source string) (*CreatorViewService, *fakeCreatorRevisionService, *fakeCreatorArtifactTextResolver) {
+	base := &artifact.Artifact{
+		ID: "script-v3", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1",
+		StageName: "script", Version: 3, IsCurrent: true,
+	}
+	artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
+	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+	resolver := &fakeCreatorArtifactTextResolver{text: source}
+	svc := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1"}},
+		fakeCreatorShotReader{},
+		artifacts,
+	).WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review"}).
+		WithArtifactReconciler(resolver)
+	return svc, revisions, resolver
+}
+
+type fakeCreatorArtifactTextResolver struct {
+	text               string
+	err                error
+	resolveCalls       int
+	resolvedArtifactID string
+}
+
+func (f *fakeCreatorArtifactTextResolver) ReconcileProjectArtifacts(context.Context, string) error {
+	return nil
+}
+
+func (f *fakeCreatorArtifactTextResolver) ResolveReviewableText(_ context.Context, item *artifact.Artifact) (string, error) {
+	f.resolveCalls++
+	if item != nil {
+		f.resolvedArtifactID = item.ID
+	}
+	return f.text, f.err
 }
 
 func TestImpactConfirmationIsOrderInsensitiveButRejectsDuplicatesOmissionsAndExtras(t *testing.T) {

@@ -249,7 +249,7 @@ func (h *CreatorViewHandler) authorizeProject(c *gin.Context) (string, string, b
 func (h *CreatorViewHandler) failMutation(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, videoSvc.ErrCreatorVersionConflict), errors.Is(err, artifact.ErrArtifactVersionConflict),
-		errors.Is(err, videoSvc.ErrCreatorIdempotencyConflict),
+		errors.Is(err, videoSvc.ErrCreatorIdempotencyConflict), errors.Is(err, videoSvc.ErrCreatorSelectionConflict),
 		errors.Is(err, videoSvc.ErrShotIdempotencyConflict), errors.Is(err, videoSvc.ErrShotVersionConflict),
 		errors.Is(err, agentruntime.ErrReviewNotPending), errors.Is(err, agentruntime.ErrReviewCannotReopen),
 		errors.Is(err, agentruntime.ErrReviewGateAmbiguous):

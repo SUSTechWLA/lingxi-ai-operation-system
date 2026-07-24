@@ -214,6 +214,21 @@ func TestCreatorStepHandlerMapsStaleBaseToConflict(t *testing.T) {
 	}
 }
 
+func TestCreatorStepHandlerMapsTextSelectionConflictToConflict(t *testing.T) {
+	mutations := &fakeCreatorStepMutator{err: videoSvc.ErrCreatorSelectionConflict}
+	router := authenticatedCreatorRouter(&fakeCreatorViewProjectReader{project: &model.VideoProject{ID: "vp-1"}}, mutations)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/steps/script/revisions", bytes.NewBufferString(
+		`{"artifactId":"script-v3","baseVersion":3,"mode":"instruction","instruction":"rewrite","selection":{"kind":"text","start":0,"end":1,"text":"a"}}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "selection-conflict")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreatorStepHandlerExplainsMissingRevisionProvider(t *testing.T) {
 	mutations := &fakeCreatorStepMutator{err: videoSvc.ErrCreatorModelProviderUnavailable}
 	router := authenticatedCreatorRouter(&fakeCreatorViewProjectReader{project: &model.VideoProject{ID: "vp-1"}}, mutations)

@@ -293,7 +293,7 @@ func TestCloudSpec_ExactRevisionUnionAndClosedMaterialRequest(t *testing.T) {
 
 func TestCloudSpec_ArtifactSelectionBranchesAreClosedAndDisjoint(t *testing.T) {
 	selection := BuildCloudSpec().Components.Schemas["ArtifactSelection"]
-	if selection == nil || len(selection.OneOf) != 2 {
+	if selection == nil || len(selection.OneOf) != 3 {
 		t.Fatalf("selection schema = %+v", selection)
 	}
 	for _, branch := range selection.OneOf {
@@ -318,6 +318,13 @@ func TestCloudSpec_ArtifactSelectionBranchesAreClosedAndDisjoint(t *testing.T) {
 			if got, want := wire.Required, []string{"kind", "startMs", "endMs"}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("time required = %v, want %v", got, want)
 			}
+		case "text":
+			if got, want := sortedRawPropertyNames(wire.Properties), []string{"end", "kind", "start", "text"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("text properties = %v, want %v", got, want)
+			}
+			if got, want := wire.Required, []string{"kind", "start", "end", "text"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("text required = %v, want %v", got, want)
+			}
 		default:
 			t.Fatalf("unexpected selection kind %v", kind)
 		}
@@ -329,6 +336,18 @@ func TestCloudSpec_ArtifactSelectionBranchesAreClosedAndDisjoint(t *testing.T) {
 		if !selectionProperty.Nullable {
 			t.Fatalf("optional selection must accept JSON null: %+v", selectionProperty)
 		}
+	}
+}
+
+func TestCloudSpec_ArtifactContentResponseExposesOptionalReviewText(t *testing.T) {
+	content := BuildCloudSpec().Components.Schemas["ArtifactContentResponse"]
+	if content == nil {
+		t.Fatal("ArtifactContentResponse schema is missing")
+	}
+	data := inlineProperty(t, content, "data")
+	reviewText := inlineProperty(t, data, "reviewText")
+	if reviewText.Type != "string" {
+		t.Fatalf("reviewText schema = %+v", reviewText)
 	}
 }
 
@@ -346,7 +365,7 @@ func TestCloudSpec_SerializesCreatorSchemaRefsAsOpenAPI(t *testing.T) {
 	schemas := jsonObject(t, components["schemas"], "components.schemas")
 	selection := jsonObject(t, schemas["ArtifactSelection"], "ArtifactSelection")
 	selectionBranches := jsonArray(t, selection["oneOf"], "ArtifactSelection.oneOf")
-	if len(selectionBranches) != 2 {
+	if len(selectionBranches) != 3 {
 		t.Fatalf("ArtifactSelection.oneOf length = %d", len(selectionBranches))
 	}
 	for index, value := range selectionBranches {

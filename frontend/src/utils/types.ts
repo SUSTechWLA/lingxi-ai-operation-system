@@ -233,6 +233,7 @@ export interface ArtifactContentResponse {
   content: unknown
   mediaUrl?: string
   mediaUrls?: string[]
+  reviewText?: string
 }
 
 export interface ArtifactHistoryResponse {

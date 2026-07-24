@@ -791,6 +791,9 @@ func registerCloudSchemas(b *Builder) {
 		{Schema: closedObject(map[string]*SchemaRef{
 			"kind": {Schema: enumSchema("time")}, "startMs": {Schema: &Schema{Type: "integer", Format: "int64"}}, "endMs": {Schema: &Schema{Type: "integer", Format: "int64"}},
 		}, "kind", "startMs", "endMs")},
+		{Schema: closedObject(map[string]*SchemaRef{
+			"kind": {Schema: enumSchema("text")}, "start": {Schema: IntegerSchema()}, "end": {Schema: IntegerSchema()}, "text": {Schema: StringSchema()},
+		}, "kind", "start", "end", "text")},
 	}}
 	b.Schema("ArtifactSelection", selection)
 	b.Schema("StepRevisionPreviewRequest", requiredObject(map[string]*SchemaRef{
@@ -1098,10 +1101,11 @@ func registerCloudSchemas(b *Builder) {
 			"data": {Schema: &Schema{
 				Type: "object",
 				Properties: map[string]*SchemaRef{
-					"artifact":  {Schema: Reflect(artifacts.Artifact{})},
-					"content":   {Schema: ObjectSchema()},
-					"mediaUrl":  {Schema: StringSchema()},
-					"mediaUrls": {Schema: ArraySchema(StringSchema())},
+					"artifact":   {Schema: Reflect(artifacts.Artifact{})},
+					"content":    {Schema: ObjectSchema()},
+					"mediaUrl":   {Schema: StringSchema()},
+					"mediaUrls":  {Schema: ArraySchema(StringSchema())},
+					"reviewText": {Schema: StringSchema()},
 				},
 			}},
 		},

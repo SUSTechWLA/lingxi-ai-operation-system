@@ -7,6 +7,7 @@ import type {
   ShotWorkspace,
   StepRevisionMutationRequest,
 } from '../../src/utils/api-types.generated'
+import type { TextArtifactSelection } from '../../src/features/creator-studio/types'
 
 export const staleQAStatus: ShotQAReport['status'] = 'stale'
 export const staleCandidateStatus: ShotCandidate['status'] = 'stale'
@@ -44,6 +45,26 @@ const mixedRectAndTime = {
 
 // @ts-expect-error closed rect selection cannot carry time-range fields
 export const invalidMixedSelection: ArtifactSelection = mixedRectAndTime
+
+export const textSelection: ArtifactSelection = {
+  kind: 'text',
+  start: 2,
+  end: 6,
+  text: '🙂你好',
+}
+
+export const creatorTextSelection: TextArtifactSelection = textSelection
+
+const mixedTextAndRect = {
+  kind: 'text' as const,
+  start: 0,
+  end: 1,
+  text: 'a',
+  x: 0,
+}
+
+// @ts-expect-error closed text selection cannot carry rectangle fields
+export const invalidMixedTextSelection: ArtifactSelection = mixedTextAndRect
 
 export const nullableSelectionMutation: StepRevisionMutationRequest = {
   artifactId: 'artifact-1',

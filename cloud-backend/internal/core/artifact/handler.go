@@ -136,18 +136,41 @@ func (h *Handler) GetArtifactContent(c *gin.Context) {
 		return
 	}
 	content, mediaURL, mediaURLs := artifactContent(artifact)
-	if hydrated, ok := h.hydrateLocalTextArtifactContent(c.Request.Context(), artifact); ok {
-		content = string(hydrated)
-		mediaURLs = mediaURLsFromString(string(hydrated))
-		mediaURL = firstMediaURL(mediaURLs)
-	}
-	mediaURLs = normalizeMediaURLs(mediaURLs)
-	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": gin.H{
+	data := gin.H{
 		"artifact":  artifact,
 		"content":   content,
 		"mediaUrl":  mediaURL,
 		"mediaUrls": mediaURLs,
-	}})
+	}
+	if reviewText, err := h.ResolveReviewableText(c.Request.Context(), artifact); err == nil {
+		data["reviewText"] = reviewText
+		if artifact.StorageType == StorageLocal {
+			content = reviewText
+			mediaURLs = mediaURLsFromString(reviewText)
+			data["content"] = content
+			data["mediaUrls"] = mediaURLs
+		}
+		mediaURL = firstMediaURL(mediaURLs)
+		data["mediaUrl"] = mediaURL
+	}
+	mediaURLs = normalizeMediaURLs(mediaURLs)
+	data["mediaUrls"] = mediaURLs
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": data})
+}
+
+// ResolveReviewableText returns the canonical source string used by both
+// artifact review responses and conflict-safe creator text selections.
+func (h *Handler) ResolveReviewableText(ctx context.Context, item *Artifact) (string, error) {
+	if item == nil {
+		return "", ErrRevisionContentUnavailable
+	}
+	if item.InlineJSON != "" {
+		return item.InlineJSON, nil
+	}
+	if hydrated, ok := h.hydrateLocalTextArtifactContent(ctx, item); ok {
+		return string(hydrated), nil
+	}
+	return "", ErrRevisionContentUnavailable
 }
 
 func (h *Handler) GetArtifactHistory(c *gin.Context) {

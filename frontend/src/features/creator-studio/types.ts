@@ -83,6 +83,7 @@ export type CandidateAcceptRequest = GeneratedCandidateAcceptRequest
 export type CandidateRestoreRequest = GeneratedCandidateRestoreRequest
 
 export type ArtifactSelection = GeneratedArtifactSelection
+export type TextArtifactSelection = Extract<ArtifactSelection, { kind: 'text' }>
 export type StepRevisionPreviewRequest = GeneratedStepRevisionPreviewRequest
 export type StepRevisionMutationRequest = GeneratedStepRevisionMutationRequest
 export type StepRestoreRequest = GeneratedStepRestoreRequest
