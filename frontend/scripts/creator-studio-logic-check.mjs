@@ -174,6 +174,43 @@ try {
   assert.equal(presentation.safeCreatorReviewText('  {"storageRef":"private"}'), undefined)
   assert.equal(presentation.safeCreatorReviewText('\n[{"kind":"LOG"}]'), undefined)
   assert.equal(presentation.safeCreatorReviewText({ prompt: '不得序列化' }), undefined)
+  assert.equal(typeof presentation.creatorDirectEditText, 'function', 'direct editing needs an explicit safe canonical-text policy')
+  assert.equal(typeof presentation.reconcileCreatorEditMode, 'function', 'artifact switches need a pure edit-mode reconciler')
+  assert.equal(
+    presentation.creatorDirectEditText('json', { script: '不得序列化到编辑器' }),
+    undefined,
+    'object JSON is never direct editable',
+  )
+  assert.equal(
+    presentation.creatorDirectEditText('markdown', '  {"script":"不得放入编辑器"}'),
+    undefined,
+    'JSON-shaped strings are never direct editable',
+  )
+  assert.equal(
+    presentation.creatorDirectEditText('text', '普通提示词正文'),
+    '普通提示词正文',
+    'safe canonical plain text is direct editable',
+  )
+  assert.equal(
+    presentation.creatorDirectEditText('markdown', '# 标题\n\n安全 Markdown 正文'),
+    '# 标题\n\n安全 Markdown 正文',
+    'safe canonical Markdown is direct editable',
+  )
+  assert.equal(
+    presentation.creatorDirectEditText('json', '即使是普通字符串，结构化 JSON presentation 也不能直接编辑'),
+    undefined,
+    'structured JSON presentation never exposes direct editing',
+  )
+  assert.equal(
+    presentation.reconcileCreatorEditMode('direct', undefined),
+    'instruction',
+    'switching from a direct-editable artifact to structured content exits direct mode',
+  )
+  assert.equal(
+    presentation.reconcileCreatorEditMode('direct', '安全正文'),
+    'direct',
+    'direct mode remains available for safe canonical text',
+  )
   const parsedJson = presentation.parseArtifactJson('{"shots":[{"id":"s1","duration":3},{"id":"s2","duration":4}],"title":"Demo"}')
   assert.equal(parsedJson.ok, true)
   assert.deepEqual(presentation.buildJsonSummary(parsedJson.value), {
@@ -874,6 +911,21 @@ try {
   assert.match(reviewSource, /createTimeSelection/)
   assert.match(reviewSource, /CREATOR_CONFLICT_COPY/)
   assert.match(reviewSource, /contentLoadedRef/)
+  assert.match(reviewSource, /creatorDirectEditText\(presentation, content\?\.reviewText\)/)
+  assert.match(reviewSource, /reconcileCreatorEditMode\(current, directEditText\)/)
+  assert.match(reviewSource, /setDirectContent\(directEditText \?\? ''\)/)
+  assert.match(reviewSource, /\{canDirectEdit && <button[\s\S]*?>直接编辑<\/button>\}/)
+  assert.match(reviewSource, /\{mode === 'direct' && canDirectEdit && \(/)
+  assert.doesNotMatch(
+    reviewSource,
+    /function contentText\b|JSON\.stringify\(content/,
+    'direct editing must never serialize arbitrary artifact content',
+  )
+  assert.doesNotMatch(
+    reviewSource,
+    /\['json', 'markdown', 'text'\]\.includes\(presentation\)/,
+    'structured JSON presentation must not share the direct-edit eligibility flag',
+  )
   assert.match(proofingSource, /artifact-selection-overlay/)
   assert.match(proofingSource, /fetch\(resolvedMediaUrl/)
   assert.match(proofingSource, /AbortController/)

@@ -188,6 +188,21 @@ export function safeCreatorReviewText(content: unknown): string | undefined {
   return content
 }
 
+export function creatorDirectEditText(
+  presentation: ArtifactPresentationKind,
+  reviewText: unknown,
+): string | undefined {
+  if (presentation !== 'markdown' && presentation !== 'text') return undefined
+  return safeCreatorReviewText(reviewText)
+}
+
+export function reconcileCreatorEditMode(
+  mode: 'instruction' | 'direct',
+  directEditText: string | undefined,
+): 'instruction' | 'direct' {
+  return mode === 'direct' && directEditText === undefined ? 'instruction' : mode
+}
+
 export function artifactContentNeedsLocalHydration(value: { content?: unknown } | null | undefined): boolean {
   const content = value?.content
   if (typeof content === 'string') {

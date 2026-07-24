@@ -26,7 +26,11 @@ import {
   normalizeRectSelection,
 } from '../logic'
 import { cycleFocusIndex } from '../focusCycle'
-import { classifyArtifactPresentation } from '../artifactPresentation'
+import {
+  classifyArtifactPresentation,
+  creatorDirectEditText,
+  reconcileCreatorEditMode,
+} from '../artifactPresentation'
 import type { CreatorReviewArtifact } from '../creatorReviewArtifacts'
 import type { TextSelectionDraft } from '../textSelection'
 import ArtifactProofingCanvas from './ArtifactProofingCanvas'
@@ -51,7 +55,7 @@ type PendingAction =
 
 export default function ArtifactReviewPanel({ projectId, step, artifact, content, versions, viewingHistorical = false, onViewChanged, onConflict }: ArtifactReviewPanelProps) {
   const [instruction, setInstruction] = useState('')
-  const [directContent, setDirectContent] = useState(contentText(content?.content))
+  const [directContent, setDirectContent] = useState('')
   const [mode, setMode] = useState<'instruction' | 'direct'>('instruction')
   const [selection, setSelection] = useState<ArtifactSelection | null>(null)
   const [textSelectionDraft, setTextSelectionDraft] = useState<TextSelectionDraft | null>(null)
@@ -77,7 +81,8 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
   })
   const isImage = presentation === 'image'
   const isVideo = presentation === 'video'
-  const isText = ['json', 'markdown', 'text'].includes(presentation)
+  const directEditText = creatorDirectEditText(presentation, content?.reviewText)
+  const canDirectEdit = directEditText !== undefined
   const canConfirm = !viewingHistorical && canConfirmCreatorStep(step)
   const canRevise = !viewingHistorical && Boolean(artifactId && baseVersion && step.allowedActions.includes('revise'))
   const versionList = useMemo(() => [...versions].sort((left, right) => right.version - left.version), [versions])
@@ -105,8 +110,9 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     const key = `${artifactId || 'none'}:${baseVersion || 0}`
     if (!content || content.artifact.id !== artifactId || contentLoadedRef.current === key) return
     contentLoadedRef.current = key
-    setDirectContent(contentText(content.content))
-  }, [artifactId, baseVersion, content])
+    setDirectContent(directEditText ?? '')
+    setMode(current => reconcileCreatorEditMode(current, directEditText))
+  }, [artifactId, baseVersion, content, directEditText])
 
   const withErrorHandling = async (operation: (signal: AbortSignal, isCurrent: () => boolean) => Promise<void>) => {
     operationControllerRef.current?.abort()
@@ -153,6 +159,12 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     if (!artifactId || !baseVersion) return
     setTextSelectionDraft(null)
     window.getSelection()?.removeAllRanges()
+    if (mode === 'direct' && !canDirectEdit) {
+      setDirectContent('')
+      setMode('instruction')
+      setError('当前内容请使用修改说明整体优化。')
+      return
+    }
     const trimmedInstruction = instruction.trim()
     const trimmedContent = directContent.trim()
     if (mode === 'instruction' && !trimmedInstruction) {
@@ -329,7 +341,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
           <div className="artifact-actions">
             <button type="button" className="creator-primary-button" disabled={!canConfirm || working} onClick={handleConfirm}>确认并继续</button>
             <button type="button" className="creator-secondary-button" disabled={!canRevise || working} onClick={() => setMode('instruction')}>告诉 AI 怎么改</button>
-            {isText && <button type="button" className="creator-secondary-button" disabled={!canRevise || working} onClick={() => setMode('direct')}>直接编辑</button>}
+            {canDirectEdit && <button type="button" className="creator-secondary-button" disabled={!canRevise || working} onClick={() => setMode('direct')}>直接编辑</button>}
           </div>
 
           {mode === 'instruction' && (
@@ -337,7 +349,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
               <textarea ref={instructionRef} value={instruction} onChange={event => setInstruction(event.target.value)} placeholder="例如：把开头改得更有悬念" />
             </label>
           )}
-          {mode === 'direct' && isText && (
+          {mode === 'direct' && canDirectEdit && (
             <label className="artifact-editor-label">直接编辑内容
               <textarea value={directContent} onChange={event => setDirectContent(event.target.value)} />
               <button type="button" className="creator-secondary-button" disabled={!canRevise || working} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>
@@ -426,10 +438,4 @@ function stateCopy(state: CreatorStep['state']): string {
   if (state === 'generating') return '生成中'
   if (state === 'failed') return '生成失败'
   return '未开始'
-}
-
-function contentText(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (content === undefined || content === null) return ''
-  return JSON.stringify(content, null, 2)
 }
