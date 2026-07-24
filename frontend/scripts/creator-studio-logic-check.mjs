@@ -98,6 +98,17 @@ try {
   assert.equal(projectedReviewArtifacts[0].shotLabel, 'SHOT_02')
   assert.equal(reviewArtifacts.selectCreatorReviewArtifact(projectedReviewArtifacts, 'older-script').artifactId, 'older-script')
   assert.equal(reviewArtifacts.selectCreatorReviewArtifact(projectedReviewArtifacts).artifactId, 'current-script')
+  assert.equal(
+    reviewArtifacts.selectCreatorReviewArtifact(
+      reviewArtifacts.projectCreatorReviewArtifacts([
+        { artifactId: 'hidden-selected', kind: 'LOG', name: 'worker.log', version: 4, isCurrent: true, isStale: false },
+        { artifactId: 'visible-current', kind: 'VIDEO_SCRIPT', name: 'script.json', version: 3, isCurrent: true, isStale: false },
+      ]),
+      'hidden-selected',
+    ).artifactId,
+    'visible-current',
+    'a hidden artifact id can never become the selected creator artifact',
+  )
 
   assert.equal(presentation.classifyArtifactPresentation({ kind: 'JSON', mimeType: 'application/json' }), 'json')
   assert.equal(presentation.classifyArtifactPresentation({ kind: 'MARKDOWN', mimeType: 'text/markdown' }), 'markdown')
@@ -672,6 +683,8 @@ try {
   const proofingSource = readFileSync(new URL('../src/features/creator-studio/components/ArtifactProofingCanvas.tsx', import.meta.url), 'utf8')
   const timelineSource = readFileSync(new URL('../src/features/creator-studio/components/CreatorProcessTimeline.tsx', import.meta.url), 'utf8')
   const artifactDrawerSource = readFileSync(new URL('../src/features/creator-studio/components/StepArtifactDrawer.tsx', import.meta.url), 'utf8')
+  const contentLibraryUrl = new URL('../src/features/creator-studio/components/CreatorContentLibrary.tsx', import.meta.url)
+  const contentLibrarySource = existsSync(contentLibraryUrl) ? readFileSync(contentLibraryUrl, 'utf8') : ''
   const projectBriefUrl = new URL('../src/features/creator-studio/components/ProjectBriefPanel.tsx', import.meta.url)
   assert.equal(existsSync(projectBriefUrl), true, 'requirements need a readable persisted project record')
   const projectBriefSource = readFileSync(projectBriefUrl, 'utf8')
@@ -747,7 +760,6 @@ try {
   assert.match(librarySource, /prioritizeCreationViewProjects/)
   assert.match(librarySource, /creatorProjectEntryStep/)
   assert.match(librarySource, /观看成片/)
-  assert.match(workspaceSource, /isPreviewDeliveryStep \? 'VIDEO' : undefined/)
   assert.match(workspaceSource, /getCreationView\(projectId/)
   assert.match(workspaceSource, /document\.visibilityState !== 'visible'/)
   assert.match(workspaceSource, /controller\.abort\(\)/)
@@ -756,7 +768,16 @@ try {
   assert.match(workspaceSource, /selectedShotId/)
   assert.match(workspaceSource, /retryLatestFailedAgentNode/)
   assert.match(workspaceSource, /CreatorProcessTimeline/)
-  assert.match(workspaceSource, /StepArtifactDrawer/)
+  assert.match(workspaceSource, /import CreatorContentLibrary from '.\/components\/CreatorContentLibrary'/, 'workspace imports the creator content library')
+  assert.match(workspaceSource, /<CreatorContentLibrary\b/, 'workspace renders the creator content library')
+  assert.doesNotMatch(workspaceSource, /StepArtifactDrawer/, 'the audit drawer is retired from creator workspace usage')
+  assert.match(workspaceSource, /const visibleArtifacts = (?:useMemo\([^]*?)?projectCreatorReviewArtifacts\(/, 'creator artifacts are projected before workspace use')
+  assert.ok(
+    workspaceSource.indexOf('projectCreatorReviewArtifacts(') < workspaceSource.indexOf('selectCreatorReviewArtifact('),
+    'projection happens before artifact selection',
+  )
+  assert.match(workspaceSource, /artifacts=\{visibleArtifacts\}/, 'library counts and cards receive visible artifacts only')
+  assert.match(workspaceSource, /artifact=\{selectedArtifact\}/, 'the review panel receives the projected selected artifact')
   assert.match(workspaceSource, /ProjectBriefPanel/)
   assert.match(workspaceSource, /creatorArtifactLoadState/)
   assert.match(workspaceSource, /重新读取当前内容/)
@@ -803,6 +824,19 @@ try {
   assert.match(creatorStylesSource, /max-height:\s*min\(32rem,\s*60vh\)/, 'expanded technical data must scroll internally instead of creating an unbounded page')
   assert.match(timelineSource, /完整创作过程/)
   assert.match(artifactDrawerSource, /TAKE/)
+  assert.equal(existsSync(contentLibraryUrl), true, 'the four-tab creator content library must exist')
+  for (const tabLabel of ['文字与提示词', '参考图', '视频片段', '语音']) {
+    assert.match(contentLibrarySource, new RegExp(tabLabel), `content library includes the ${tabLabel} tab`)
+  }
+  assert.match(contentLibrarySource, /getCreatorArtifactContent/)
+  assert.match(contentLibrarySource, /resolveCreatorArtifactMediaUrl/)
+  assert.match(contentLibrarySource, /AbortController/)
+  assert.match(contentLibrarySource, /关键内容仍在准备中，生成完成后会显示在这里。/)
+  assert.doesNotMatch(
+    contentLibrarySource,
+    /\b(?:attempt|sizeBytes|storageType|storageRef|contentHash|promptHash|artifactType|kind)\b/,
+    'creator content cards never render technical artifact descriptors',
+  )
   assert.match(artifactDrawerSource, /创作需求 · 项目记录/)
   assert.match(projectBriefSource, /创作目标/)
   assert.match(projectBriefSource, /目标时长/)

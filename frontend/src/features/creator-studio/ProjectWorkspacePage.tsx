@@ -27,6 +27,12 @@ import ShotReviewQueue from './components/ShotReviewQueue'
 import ShotInspector from './components/ShotInspector'
 import PreviewDeliveryPanel from './components/PreviewDeliveryPanel'
 import AgentReviewGatePanel from './components/AgentReviewGatePanel'
+import CreatorContentLibrary from './components/CreatorContentLibrary'
+import {
+  projectCreatorReviewArtifacts,
+  selectCreatorReviewArtifact,
+  type CreatorReviewArtifact,
+} from './creatorReviewArtifacts'
 
 interface ProjectWorkspacePageProps {
   projectId: string
@@ -58,6 +64,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const [shotNotice, setShotNotice] = useState('')
   const [agentRun, setAgentRun] = useState<AgentRun | null>(null)
   const [agentReviews, setAgentReviews] = useState<AgentReviewItem[]>([])
+  const [selectedArtifactIds, setSelectedArtifactIds] = useState<Partial<Record<CreatorStepId, string>>>({})
   const activeTasksRef = useRef<CreationView['activeTasks']>([])
   const viewRequestTokenRef = useRef(0)
   const artifactRequestTokenRef = useRef(0)
@@ -69,7 +76,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const shotNextCursorRef = useRef('')
   const shotQueueLoadingRef = useRef(false)
   const previousActiveTaskSignatureRef = useRef<string | null>(null)
-  const currentStep = view?.steps.find(step => step.id === stepId)
+  const previousVisibleArtifactsRef = useRef<Partial<Record<CreatorStepId, readonly CreatorReviewArtifact[]>>>({})
   const isShotsStep = stepId === 'shots'
   const isPreviewDeliveryStep = stepId === 'preview' || stepId === 'delivery'
   const activeShotId = selectedShotId && (shotItems.length === 0 || shotItems.some(item => item.id === selectedShotId)) ? selectedShotId : selectedQueueShotId
@@ -86,11 +93,45 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
 
   useEffect(() => { shotItemsRef.current = shotItems }, [shotItems])
   useEffect(() => { selectedQueueShotIdRef.current = selectedQueueShotId }, [selectedQueueShotId])
-  const currentArtifactId = currentStep?.currentArtifactId
-  const currentVersion = currentStep?.currentVersion
+  const visibleArtifacts = useMemo(
+    () => projectCreatorReviewArtifacts(view?.stepArtifacts?.[stepId] ?? []),
+    [stepId, view?.stepArtifacts],
+  )
+  const explicitArtifactId = selectedArtifactIds[stepId]
+  const explicitArtifact = explicitArtifactId
+    ? visibleArtifacts.find(artifact => artifact.artifactId === explicitArtifactId)
+    : undefined
+  const previousExplicitArtifact = explicitArtifactId
+    ? previousVisibleArtifactsRef.current[stepId]?.find(artifact => artifact.artifactId === explicitArtifactId)
+    : undefined
+  const selectedBecameStale = Boolean(explicitArtifact?.isStale && previousExplicitArtifact && !previousExplicitArtifact.isStale)
+  const selectedArtifact = selectCreatorReviewArtifact(
+    visibleArtifacts,
+    selectedBecameStale ? undefined : explicitArtifactId,
+  )
+  const currentArtifactId = selectedArtifact?.artifactId
+  const currentVersion = selectedArtifact?.version
   const artifactSelection = useMemo<WorkspaceArtifactSelection | null>(() => (
     currentArtifactId && currentVersion ? { stepId, artifactId: currentArtifactId, version: currentVersion } : null
   ), [currentArtifactId, currentVersion, stepId])
+
+  useEffect(() => {
+    const selectedBecameHidden = Boolean(explicitArtifactId && !explicitArtifact)
+    if (selectedBecameHidden || selectedBecameStale) {
+      setSelectedArtifactIds(current => {
+        if (current[stepId] !== explicitArtifactId) return current
+        return { ...current, [stepId]: selectedArtifact?.artifactId }
+      })
+    }
+    previousVisibleArtifactsRef.current[stepId] = visibleArtifacts
+  }, [
+    explicitArtifact,
+    explicitArtifactId,
+    selectedArtifact?.artifactId,
+    selectedBecameStale,
+    stepId,
+    visibleArtifacts,
+  ])
 
   const reloadShotWorkspace = useCallback(async (shotId = selectedShotIdRef.current, signal?: AbortSignal) => {
     if (!shotId) return
@@ -299,7 +340,9 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
     ? artifactResult
     : null
   const content = currentArtifactResult?.value.content ?? null
-  const versions = currentArtifactResult?.value.versions ?? []
+  const visibleArtifactIds = new Set(visibleArtifacts.map(artifact => artifact.artifactId))
+  const versions = (currentArtifactResult?.value.versions ?? []).filter(version => visibleArtifactIds.has(version.artifactId))
+  const viewingHistorical = Boolean(selectedArtifact && !selectedArtifact.isCurrent)
   const navigateToStep = (nextStepId: CreatorStepId) => onNavigate(`#/videos/${encodeURIComponent(projectId)}/steps/${nextStepId}`)
   return (
     <section className="creator-workspace" aria-labelledby="creator-page-title">
@@ -310,6 +353,14 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       </header>
       <CreationStrip steps={displaySteps} currentStepId={stepId} onSelect={navigateToStep} />
       <TaskRecoveryBanner tasks={view.activeTasks} />
+      <div className="creator-content-workspace">
+        <CreatorContentLibrary
+          projectId={projectId}
+          artifacts={visibleArtifacts}
+          selectedArtifactId={selectedArtifact?.artifactId}
+          onSelect={artifact => setSelectedArtifactIds(current => ({ ...current, [stepId]: artifact.artifactId }))}
+        />
+        <div className="creator-proofing-canvas">
       {pendingAgentReview && currentRunId ? <AgentReviewGatePanel
         runId={currentRunId}
         review={pendingAgentReview}
@@ -365,8 +416,10 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       /> : <ArtifactReviewPanel
         projectId={projectId}
         step={selectedStep}
+        artifact={selectedArtifact}
         content={content}
         versions={versions}
+        viewingHistorical={viewingHistorical}
         onConflict={async signal => { await refreshView(signal) }}
         onViewChanged={(nextView, navigateToActiveStep) => {
           viewRequestTokenRef.current += 1
@@ -375,6 +428,8 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
           if (navigateToActiveStep) navigateToStep(nextView.activeStep)
         }}
       />}
+        </div>
+      </div>
       {error && <p className="creator-form-error" role="alert">{error}</p>}
       {agentRun?.status === 'FAILED' && <p className="creator-form-error" role="alert">创作任务未完成，请返回“我的视频”重试。</p>}
     </section>

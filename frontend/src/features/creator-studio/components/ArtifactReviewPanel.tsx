@@ -26,12 +26,15 @@ import {
   normalizeRectSelection,
 } from '../logic'
 import { cycleFocusIndex } from '../focusCycle'
+import type { CreatorReviewArtifact } from '../creatorReviewArtifacts'
 
 interface ArtifactReviewPanelProps {
   projectId: string
   step: CreatorStep
+  artifact?: CreatorReviewArtifact
   content: ArtifactContentResponse | null
   versions: readonly CreatorArtifactVersion[]
+  viewingHistorical?: boolean
   onViewChanged: (view: CreationView, navigateToActiveStep?: boolean) => void
   onConflict: (signal: AbortSignal) => Promise<unknown>
 }
@@ -40,7 +43,7 @@ type PendingAction =
   | { kind: 'revision'; request: StepRevisionMutationRequest; impact: StepImpact }
   | { kind: 'restore'; version: number; impact: StepImpact }
 
-export default function ArtifactReviewPanel({ projectId, step, content, versions, onViewChanged, onConflict }: ArtifactReviewPanelProps) {
+export default function ArtifactReviewPanel({ projectId, step, artifact, content, versions, viewingHistorical = false, onViewChanged, onConflict }: ArtifactReviewPanelProps) {
   const [instruction, setInstruction] = useState('')
   const [directContent, setDirectContent] = useState(contentText(content?.content))
   const [mode, setMode] = useState<'instruction' | 'direct'>('instruction')
@@ -55,15 +58,15 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
   const contentLoadedRef = useRef<string | null>(null)
   const impactTriggerRef = useRef<HTMLButtonElement | null>(null)
 
-  const artifactId = step.currentArtifactId
-  const baseVersion = step.currentVersion
+  const artifactId = artifact?.artifactId
+  const baseVersion = artifact?.version
   const mimeType = content?.artifact.mimeType || ''
   const isImage = mimeType.startsWith('image/')
   const isVideo = mimeType.startsWith('video/')
   const isAudio = mimeType.startsWith('audio/')
   const isText = mimeType.startsWith('text/') || ['JSON', 'MARKDOWN', 'LOG'].includes(content?.artifact.kind || '')
-  const canConfirm = canConfirmCreatorStep(step)
-  const canRevise = Boolean(artifactId && baseVersion && step.allowedActions.includes('revise'))
+  const canConfirm = !viewingHistorical && canConfirmCreatorStep(step)
+  const canRevise = !viewingHistorical && Boolean(artifactId && baseVersion && step.allowedActions.includes('revise'))
   const versionList = useMemo(() => [...versions].sort((left, right) => right.version - left.version), [versions])
 
   useEffect(() => {
@@ -76,7 +79,6 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
 
   useEffect(() => {
     operationControllerRef.current?.abort()
-    setInstruction('')
     setDirectContent('')
     setMode('instruction')
     setSelection(null)
@@ -241,13 +243,15 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
       <div className="artifact-review-heading">
         <div>
           <p className="creator-eyebrow">当前内容</p>
-          <h2 id="artifact-review-title">{creatorStepLabel(step.id)}</h2>
+          <h2 id="artifact-review-title">{artifact?.reviewLabel || creatorStepLabel(step.id)}</h2>
+          {versionList.length > 1 && <small>版本 {baseVersion} · 共 {versionList.length} 版</small>}
         </div>
         <span className={`artifact-state is-${step.state}`}>{stateCopy(step.state)}</span>
       </div>
 
       {!artifactId ? <p className="artifact-empty">这一步还没有可查看的内容。</p> : (
         <>
+          {viewingHistorical && <div className="artifact-history-notice" role="status"><strong>正在查看历史产物</strong><span>当前版本不会被覆盖；需要时可从版本列表恢复。</span></div>}
           <ContentPreview
             content={content}
             isImage={isImage}
@@ -282,7 +286,7 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
           )}
           {mode === 'instruction' && <button type="button" className="creator-secondary-button artifact-preview-button" disabled={!canRevise || working} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>}
 
-          <details className="artifact-history">
+          {versionList.length > 1 && <details className="artifact-history">
             <summary>查看版本</summary>
             <ul>
               {versionList.map(version => (
@@ -292,7 +296,7 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
                 </li>
               ))}
             </ul>
-          </details>
+          </details>}
         </>
       )}
 
@@ -383,12 +387,12 @@ function ImpactConfirmation({ pending, working, onCancel, onConfirm }: { pending
 }
 
 function stateCopy(state: CreatorStep['state']): string {
-  if (state === 'confirmed') return '✓ 已确认'
-  if (state === 'needs_review') return '● 待确认'
-  if (state === 'needs_attention') return '! 需要处理'
-  if (state === 'generating') return '◌ 生成中'
-  if (state === 'failed') return '× 生成失败'
-  return '○ 未开始'
+  if (state === 'confirmed') return '已确认'
+  if (state === 'needs_review') return '等待审阅'
+  if (state === 'needs_attention') return '等待处理'
+  if (state === 'generating') return '生成中'
+  if (state === 'failed') return '生成失败'
+  return '未开始'
 }
 
 function contentText(content: unknown): string {
