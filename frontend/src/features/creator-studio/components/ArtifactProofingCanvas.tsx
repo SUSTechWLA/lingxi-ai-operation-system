@@ -7,8 +7,12 @@ import { resolveCreatorArtifactMediaUrl } from '../logic'
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import JsonArtifactViewer from './JsonArtifactViewer'
 import MarkdownArtifactViewer from './MarkdownArtifactViewer'
-import SimpleVideoPlayer from './SimpleVideoPlayer'
+import MediaRangeControls from './MediaRangeControls'
+import SimpleAudioPlayer from './SimpleAudioPlayer'
+import SimpleVideoPlayer, { type MediaPlaybackState } from './SimpleVideoPlayer'
 import { CanonicalTextSelectionSurface } from './TextSelectionAssistant'
+
+type TimeSelection = Extract<ArtifactSelection, { kind: 'time' }>
 
 interface ArtifactProofingCanvasProps {
   content: ArtifactContentResponse | null
@@ -20,7 +24,13 @@ interface ArtifactProofingCanvasProps {
   onImagePointerCancel?: () => void
   textSurfaceRef?: RefObject<HTMLPreElement>
   onTextSelectionChange?: (draft: TextSelectionDraft | null) => void
+  mediaRangeResetKey?: string | number
+  mediaRangeDisabled?: boolean
+  onMediaSelectionChange?: (selection: TimeSelection | null) => void
+  onMediaRangePendingChange?: (pending: boolean) => void
 }
+
+const EMPTY_PLAYBACK_STATE: MediaPlaybackState = { currentTimeMs: 0, durationMs: 0, isPlaying: false }
 
 export default function ArtifactProofingCanvas({
   content,
@@ -32,8 +42,14 @@ export default function ArtifactProofingCanvas({
   onImagePointerCancel,
   textSurfaceRef,
   onTextSelectionChange,
+  mediaRangeResetKey,
+  mediaRangeDisabled,
+  onMediaSelectionChange,
+  onMediaRangePendingChange,
 }: ArtifactProofingCanvasProps) {
   const [mediaFailed, setMediaFailed] = useState(false)
+  const [playbackUnavailable, setPlaybackUnavailable] = useState(false)
+  const [playbackState, setPlaybackState] = useState<MediaPlaybackState>(EMPTY_PLAYBACK_STATE)
   const [localText, setLocalText] = useState<{ key: string; text?: string; error?: string } | null>(null)
   const artifact = content?.artifact
   const presentation = classifyArtifactPresentation({ kind: artifact?.kind, mimeType: artifact?.mimeType, name: artifact?.name })
@@ -49,6 +65,10 @@ export default function ArtifactProofingCanvas({
   )
 
   useEffect(() => setMediaFailed(false), [artifact?.id, resolvedMediaUrl])
+  useEffect(() => {
+    setPlaybackState(EMPTY_PLAYBACK_STATE)
+    setPlaybackUnavailable(false)
+  }, [hydrationKey])
 
   useEffect(() => {
     if (!shouldHydrateLocalText || !resolvedMediaUrl) {
@@ -124,10 +144,50 @@ export default function ArtifactProofingCanvas({
     )
   }
   if (presentation === 'video' && resolvedMediaUrl && !mediaFailed) {
-    return <SimpleVideoPlayer src={resolvedMediaUrl} title={artifact.name || '视频产物'} downloadName={artifact.name} onError={() => setMediaFailed(true)} />
+    return (
+      <div className="artifact-media-proofing">
+        <SimpleVideoPlayer
+          src={resolvedMediaUrl}
+          title={artifact.name || '视频产物'}
+          downloadName={artifact.name}
+          onError={() => setMediaFailed(true)}
+          onPlaybackStateChange={setPlaybackState}
+        />
+        {onMediaSelectionChange && <MediaRangeControls
+          currentTimeMs={playbackState.currentTimeMs}
+          selection={selection?.kind === 'time' ? selection : null}
+          resetKey={`${hydrationKey}:${mediaRangeResetKey ?? 0}`}
+          disabled={mediaRangeDisabled}
+          onSelectionChange={onMediaSelectionChange}
+          onPendingChange={onMediaRangePendingChange}
+        />}
+      </div>
+    )
   }
   if (presentation === 'audio' && resolvedMediaUrl && !mediaFailed) {
-    return <audio className="artifact-audio-preview" controls preload="metadata" src={resolvedMediaUrl} onError={() => setMediaFailed(true)}>当前客户端无法播放音频。</audio>
+    return (
+      <div className="artifact-media-proofing">
+        <SimpleAudioPlayer
+          src={resolvedMediaUrl}
+          title={artifact.name || '语音产物'}
+          downloadName={artifact.name}
+          onError={() => {
+            setPlaybackUnavailable(true)
+            onMediaSelectionChange?.(null)
+            onMediaRangePendingChange?.(false)
+          }}
+          onPlaybackStateChange={setPlaybackState}
+        />
+        {!playbackUnavailable && onMediaSelectionChange && <MediaRangeControls
+          currentTimeMs={playbackState.currentTimeMs}
+          selection={selection?.kind === 'time' ? selection : null}
+          resetKey={`${hydrationKey}:${mediaRangeResetKey ?? 0}`}
+          disabled={mediaRangeDisabled}
+          onSelectionChange={onMediaSelectionChange}
+          onPendingChange={onMediaRangePendingChange}
+        />}
+      </div>
+    )
   }
   if (presentation === 'text') {
     return selectionEnabled && selectionSource !== undefined && textSurfaceRef && onTextSelectionChange

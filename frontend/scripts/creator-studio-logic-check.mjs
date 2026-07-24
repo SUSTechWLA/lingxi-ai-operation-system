@@ -14,6 +14,7 @@ const presentationBundle = join(temp, 'artifact-presentation.mjs')
 const authBundle = join(temp, 'auth.mjs')
 const reviewArtifactsBundle = join(temp, 'creator-review-artifacts.mjs')
 const textSelectionBundle = join(temp, 'text-selection.mjs')
+const mediaRangeBundle = join(temp, 'media-range.mjs')
 
 try {
   const textSelectionUrl = new URL('../src/features/creator-studio/textSelection.ts', import.meta.url)
@@ -74,6 +75,34 @@ try {
     outfile: textSelectionBundle,
   })
   const textSelection = await import(pathToFileURL(textSelectionBundle))
+  const mediaRangeUrl = new URL('../src/features/creator-studio/mediaRange.ts', import.meta.url)
+  assert.equal(existsSync(mediaRangeUrl), true, 'video and audio review need shared playhead range state')
+  await build({
+    entryPoints: [mediaRangeUrl.pathname],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    outfile: mediaRangeBundle,
+  })
+  const mediaRange = await import(pathToFileURL(mediaRangeBundle))
+
+  assert.equal(mediaRange.secondsToIntegerMilliseconds(1.2346), 1235, 'the current playhead is stored as integer milliseconds')
+  assert.equal(mediaRange.secondsToIntegerMilliseconds(-1), 0, 'negative media times clamp to zero')
+  const pendingEndRange = mediaRange.updateMediaRangeBoundary(null, {}, 'end', 2800.4)
+  assert.deepEqual(pendingEndRange, {
+    selection: null,
+    draft: { endMs: 2800 },
+  }, 'one boundary remains a pending range')
+  assert.deepEqual(
+    mediaRange.updateMediaRangeBoundary(pendingEndRange.selection, pendingEndRange.draft, 'start', 4200),
+    {
+      selection: { kind: 'time', startMs: 2800, endMs: 4200 },
+      draft: {},
+    },
+    'setting end before start normalizes the completed range through createTimeSelection',
+  )
+  assert.deepEqual(mediaRange.clearMediaRange(), { selection: null, draft: {} }, 'clearing removes both pending and completed ranges')
+  assert.equal(mediaRange.formatMediaTimecode(62_345), '01:02.345', 'range boundaries use readable timecode')
 
   assert.deepEqual(
     textSelection.buildTextSelection('开头正文结尾', 2, 4),
@@ -816,6 +845,13 @@ try {
   const playerUrl = new URL('../src/features/creator-studio/components/SimpleVideoPlayer.tsx', import.meta.url)
   assert.equal(existsSync(playerUrl), true, 'completed videos need one reusable built-in player')
   const playerSource = readFileSync(playerUrl, 'utf8')
+  const audioPlayerUrl = new URL('../src/features/creator-studio/components/SimpleAudioPlayer.tsx', import.meta.url)
+  assert.equal(existsSync(audioPlayerUrl), true, 'audio proofing needs the same built-in transport semantics as video')
+  const audioPlayerSource = readFileSync(audioPlayerUrl, 'utf8')
+  const mediaRangeSource = readFileSync(mediaRangeUrl, 'utf8')
+  const mediaRangeControlsUrl = new URL('../src/features/creator-studio/components/MediaRangeControls.tsx', import.meta.url)
+  assert.equal(existsSync(mediaRangeControlsUrl), true, 'video and audio review need shared playhead range controls')
+  const mediaRangeControlsSource = readFileSync(mediaRangeControlsUrl, 'utf8')
   for (const functionName of [
     'getCreationView', 'getStepVersions', 'previewStepRevision', 'reviseStep', 'confirmStep',
     'restoreStepVersion', 'previewStepRegeneration', 'regenerateStep', 'registerProjectMaterial', 'listShots', 'getShotSummary',
@@ -917,7 +953,6 @@ try {
   assert.match(reviewSource, /previewStepRevision/)
   assert.match(reviewSource, /confirmedAffectedShotIds/)
   assert.match(reviewSource, /normalizeRectSelection/)
-  assert.match(reviewSource, /createTimeSelection/)
   assert.match(reviewSource, /CREATOR_CONFLICT_COPY/)
   assert.match(reviewSource, /contentLoadedRef/)
   assert.match(reviewSource, /creatorDirectEditText\(presentation, content\?\.reviewText\)/)
@@ -950,7 +985,27 @@ try {
     /buildTextSelection\((?:displayedContent|readableText)/,
     'scoped selection must never derive offsets from hydrated, decorated, or projected display content',
   )
-  assert.match(reviewSource, /开始时间（秒）/)
+  assert.doesNotMatch(reviewSource, /开始时间（秒）|结束时间（秒）|type="number"/, 'creator review no longer exposes numeric seconds inputs')
+  assert.doesNotMatch(mediaRangeControlsSource, /type="number"/, 'playhead ranges never expose numeric millisecond inputs')
+  assert.match(mediaRangeControlsSource, /从这里开始/)
+  assert.match(mediaRangeControlsSource, /到这里结束/)
+  assert.match(mediaRangeControlsSource, /清除范围/)
+  assert.match(mediaRangeSource, /createTimeSelection/)
+  assert.ok((proofingSource.match(/<MediaRangeControls\b/g) || []).length >= 2, 'video and audio use the same MediaRangeControls')
+  assert.match(proofingSource, /<SimpleAudioPlayer\b/)
+  assert.match(
+    proofingSource,
+    /<SimpleAudioPlayer[\s\S]*?onError=\{\(\) => \{[\s\S]*?setPlaybackUnavailable\(true\)[\s\S]*?onMediaSelectionChange\?\.\(null\)[\s\S]*?\}\}[\s\S]*?\{!playbackUnavailable && onMediaSelectionChange && <MediaRangeControls/,
+    'terminal audio failure retains its error card but clears and hides stale playhead range controls',
+  )
+  assert.ok((proofingSource.match(/disabled=\{mediaRangeDisabled\}/g) || []).length >= 2, 'video and audio range controls freeze while revision impact is loading')
+  assert.match(reviewSource, /mediaRangeDisabled=\{!canRevise \|\| working\}/, 'historical and busy review surfaces cannot change a media range')
+  assert.match(reviewSource, /disabled=\{!canRevise \|\| working \|\| mediaRangePending\}/, 'a one-boundary range disables revision submission')
+  for (const label of ['调整语气', '优化语速', '调整停顿', '修正发音', '重新生成整段语音']) {
+    assert.match(reviewSource, new RegExp(label), `audio review exposes ${label}`)
+  }
+  assert.ok((reviewSource.match(/<button type="button" disabled=\{!canRevise \|\| working\}/g) || []).length >= 5, 'audio quick actions freeze with the revision request snapshot')
+  assert.match(reviewSource, /if \(regenerateFullAudio\) \{\s*setSelection\(null\)\s*setMediaRangePending\(false\)/, 'full audio regeneration clears the time selection')
   assert.match(reviewSource, /aria-modal="true"/)
   assert.match(reviewSource, /cycleFocusIndex/)
   assert.match(reviewSource, /operationControllerRef\.current === controller/)
@@ -1120,6 +1175,9 @@ try {
   assert.match(previewSource, /SimpleVideoPlayer/)
   assert.doesNotMatch(previewSource, /<video\b/, 'preview delegates video playback to the shared player')
   assert.equal((playerSource.match(/<video\b/g) || []).length, 1, 'the shared player mounts exactly one media element')
+  assert.match(playerSource, /interface MediaPlaybackState/)
+  assert.match(playerSource, /onPlaybackStateChange\?:/)
+  assert.match(playerSource, /secondsToIntegerMilliseconds\(currentTime\)/)
   assert.match(playerSource, /\.play\(\)/)
   assert.match(playerSource, /\.pause\(\)/)
   assert.match(playerSource, /currentTime/)
@@ -1136,6 +1194,21 @@ try {
   assert.match(playerSource, /aria-label=\{isMuted \? '取消静音' : '静音'\}/, 'the audio control announces its next action')
   for (const label of ['进度', '音量', '播放速度', '全屏', '下载视频']) {
     assert.match(playerSource, new RegExp(`aria-label="${label}"`), `player exposes the ${label} control`)
+  }
+  assert.equal((audioPlayerSource.match(/<audio\b/g) || []).length, 1, 'the audio player mounts exactly one media element')
+  assert.match(audioPlayerSource, /\.play\(\)/)
+  assert.match(audioPlayerSource, /\.pause\(\)/)
+  assert.match(audioPlayerSource, /currentTime/)
+  assert.match(audioPlayerSource, /\.volume/)
+  assert.match(audioPlayerSource, /playbackRate/)
+  assert.match(audioPlayerSource, /\bdownload\b/)
+  assert.match(audioPlayerSource, /retries < 2/, 'audio playback recovery is bounded')
+  assert.match(audioPlayerSource, /key=\{`\$\{src\}:\$\{retries\}`\}/, 'audio recovery remounts the failed media element')
+  for (const rate of ['0.75×', '1×', '1.25×', '1.5×', '2×']) {
+    assert.match(audioPlayerSource, new RegExp(rate.replace('×', '\\×')), `audio exposes the ${rate} rate`)
+  }
+  for (const label of ['进度', '音量', '播放速度', '下载音频']) {
+    assert.match(audioPlayerSource, new RegExp(`aria-label="${label}"`), `audio exposes the ${label} control`)
   }
 
   console.log('creator studio logic and client contract checks passed')

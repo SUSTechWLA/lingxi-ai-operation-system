@@ -1,13 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { secondsToIntegerMilliseconds } from '../mediaRange'
+import type { MediaPlaybackState } from './SimpleVideoPlayer'
 
-export interface MediaPlaybackState {
-  currentTimeMs: number
-  durationMs: number
-  isPlaying: boolean
-}
-
-interface SimpleVideoPlayerProps {
+interface SimpleAudioPlayerProps {
   src: string
   title?: string
   downloadName?: string
@@ -15,15 +10,14 @@ interface SimpleVideoPlayerProps {
   onPlaybackStateChange?: (state: MediaPlaybackState) => void
 }
 
-export default function SimpleVideoPlayer({
+export default function SimpleAudioPlayer({
   src,
-  title = '成片预览',
+  title = '语音预览',
   downloadName,
   onError,
   onPlaybackStateChange,
-}: SimpleVideoPlayerProps) {
-  const playerRef = useRef<HTMLDivElement>(null)
-  const videoRef = useRef<HTMLVideoElement>(null)
+}: SimpleAudioPlayerProps) {
+  const audioRef = useRef<HTMLAudioElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -31,12 +25,14 @@ export default function SimpleVideoPlayer({
   const [isMuted, setIsMuted] = useState(false)
   const [playbackRate, setPlaybackRate] = useState(1)
   const [failed, setFailed] = useState(false)
+  const [retries, setRetries] = useState(0)
 
   useEffect(() => {
     setIsPlaying(false)
     setCurrentTime(0)
     setDuration(0)
     setFailed(false)
+    setRetries(0)
   }, [src])
 
   useEffect(() => {
@@ -48,49 +44,44 @@ export default function SimpleVideoPlayer({
   }, [currentTime, duration, isPlaying, onPlaybackStateChange])
 
   const togglePlayback = () => {
-    const video = videoRef.current
-    if (!video) return
-    if (video.paused) {
-      void video.play().catch(() => setIsPlaying(false))
+    const audio = audioRef.current
+    if (!audio) return
+    if (audio.paused) {
+      void audio.play().catch(() => setIsPlaying(false))
     } else {
-      video.pause()
+      audio.pause()
     }
   }
 
   const seekTo = (nextTime: number) => {
-    const video = videoRef.current
-    if (!video) return
-    const upperBound = Number.isFinite(video.duration) ? video.duration : duration
-    video.currentTime = clamp(nextTime, 0, upperBound || 0)
-    setCurrentTime(video.currentTime)
+    const audio = audioRef.current
+    if (!audio) return
+    const upperBound = Number.isFinite(audio.duration) ? audio.duration : duration
+    audio.currentTime = clamp(nextTime, 0, upperBound || 0)
+    setCurrentTime(audio.currentTime)
   }
 
   const toggleMute = () => {
-    const video = videoRef.current
-    if (!video) return
-    video.muted = !video.muted
-    setIsMuted(video.muted)
+    const audio = audioRef.current
+    if (!audio) return
+    audio.muted = !audio.muted
+    setIsMuted(audio.muted)
   }
 
   const changeVolume = (nextVolume: number) => {
-    const video = videoRef.current
-    if (!video) return
-    video.volume = clamp(nextVolume, 0, 1)
-    if (video.volume > 0) video.muted = false
-    setVolume(video.volume)
-    setIsMuted(video.muted)
+    const audio = audioRef.current
+    if (!audio) return
+    audio.volume = clamp(nextVolume, 0, 1)
+    if (audio.volume > 0) audio.muted = false
+    setVolume(audio.volume)
+    setIsMuted(audio.muted)
   }
 
   const changePlaybackRate = (nextRate: number) => {
-    const video = videoRef.current
-    if (!video) return
-    video.playbackRate = nextRate
-    setPlaybackRate(video.playbackRate)
-  }
-
-  const enterFullscreen = () => {
-    const request = playerRef.current?.requestFullscreen()
-    if (request) void request.catch(() => undefined)
+    const audio = audioRef.current
+    if (!audio) return
+    audio.playbackRate = nextRate
+    setPlaybackRate(audio.playbackRate)
   }
 
   const handleKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -108,65 +99,60 @@ export default function SimpleVideoPlayer({
     } else if (event.key.toLowerCase() === 'm') {
       event.preventDefault()
       toggleMute()
-    } else if (event.key.toLowerCase() === 'f') {
-      event.preventDefault()
-      enterFullscreen()
     }
   }
 
   const handleError = () => {
     setFailed(true)
     setIsPlaying(false)
-    onError?.()
+    if (retries >= 2) onError?.()
   }
 
   if (failed) {
     return (
-      <div className="simple-video-player is-error" role="group" aria-label={title}>
-        <div className="simple-video-error" role="alert">
-          <strong>当前视频无法播放</strong>
-          <span>可以下载文件后使用系统播放器查看。</span>
-          <a className="creator-secondary-button" href={src} download={downloadName || true} aria-label="下载视频">下载视频</a>
+      <div className="simple-audio-player is-error" role="group" aria-label={title}>
+        <div className="simple-audio-error" role="alert">
+          <strong>当前音频无法播放</strong>
+          <span>可以重新加载预览，或下载后使用系统播放器收听。</span>
+          <div>
+            {retries < 2 && <button type="button" className="creator-secondary-button" onClick={() => {
+              setRetries(value => value + 1)
+              setFailed(false)
+            }}>重新加载预览</button>}
+            <a className="creator-text-button" href={src} download={downloadName || true} aria-label="下载音频">下载音频</a>
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div
-      ref={playerRef}
-      className="simple-video-player"
-      role="group"
-      aria-label={title}
-      tabIndex={0}
-      onKeyDown={handleKeyboard}
-    >
-      <div className="simple-video-stage">
-        <video
-          ref={videoRef}
-          className="artifact-video-preview"
-          preload="metadata"
-          src={src}
-          onClick={togglePlayback}
-          onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-          onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-          onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
-          onEnded={() => setIsPlaying(false)}
-          onVolumeChange={(event) => {
-            setVolume(event.currentTarget.volume)
-            setIsMuted(event.currentTarget.muted)
-          }}
-          onRateChange={(event) => setPlaybackRate(event.currentTarget.playbackRate)}
-          onError={handleError}
-        >
-          当前客户端无法播放视频。
-        </video>
-        {!isPlaying && <button type="button" className="simple-video-center-play" aria-label="播放" onClick={togglePlayback}><span aria-hidden="true">▶</span></button>}
+    <div className="simple-audio-player" role="group" aria-label={title} tabIndex={0} onKeyDown={handleKeyboard}>
+      <audio
+        key={`${src}:${retries}`}
+        ref={audioRef}
+        preload="metadata"
+        src={src}
+        onLoadedMetadata={event => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+        onDurationChange={event => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+        onTimeUpdate={event => setCurrentTime(event.currentTarget.currentTime)}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onEnded={() => setIsPlaying(false)}
+        onVolumeChange={event => {
+          setVolume(event.currentTarget.volume)
+          setIsMuted(event.currentTarget.muted)
+        }}
+        onRateChange={event => setPlaybackRate(event.currentTarget.playbackRate)}
+        onError={handleError}
+      >
+        当前客户端无法播放音频。
+      </audio>
+      <div className="simple-audio-heading">
+        <span aria-hidden="true">{isPlaying ? '◉' : '◌'}</span>
+        <div><strong>{title}</strong><small>{isPlaying ? '正在播放' : '移动播放头可选择需要修改的范围'}</small></div>
       </div>
-
-      <div className="simple-video-controls">
+      <div className="simple-video-controls simple-audio-controls">
         <button type="button" className="simple-video-icon-button" aria-label={isPlaying ? '暂停' : '播放'} onClick={togglePlayback}>
           <span aria-hidden="true">{isPlaying ? '❚❚' : '▶'}</span>
         </button>
@@ -179,7 +165,7 @@ export default function SimpleVideoPlayer({
           step="0.05"
           value={Math.min(currentTime, duration || 0)}
           aria-label="进度"
-          onChange={(event) => seekTo(Number(event.target.value))}
+          onChange={event => seekTo(Number(event.target.value))}
         />
         <button type="button" className="simple-video-icon-button" aria-label={isMuted ? '取消静音' : '静音'} onClick={toggleMute}>
           <span aria-hidden="true">{isMuted || volume === 0 ? '⌁' : '◖'}</span>
@@ -192,21 +178,18 @@ export default function SimpleVideoPlayer({
           step="0.05"
           value={isMuted ? 0 : volume}
           aria-label="音量"
-          onChange={(event) => changeVolume(Number(event.target.value))}
+          onChange={event => changeVolume(Number(event.target.value))}
         />
-        <select className="simple-video-rate" value={playbackRate} aria-label="播放速度" onChange={(event) => changePlaybackRate(Number(event.target.value))}>
+        <select className="simple-video-rate" value={playbackRate} aria-label="播放速度" onChange={event => changePlaybackRate(Number(event.target.value))}>
           <option value="0.75">0.75×</option>
           <option value="1">1×</option>
           <option value="1.25">1.25×</option>
           <option value="1.5">1.5×</option>
           <option value="2">2×</option>
         </select>
-        <button type="button" className="simple-video-icon-button" aria-label="全屏" onClick={enterFullscreen}>
-          <span aria-hidden="true">⛶</span>
-        </button>
-        <a className="simple-video-download" href={src} download={downloadName || true} aria-label="下载视频">下载</a>
+        <a className="simple-video-download" href={src} download={downloadName || true} aria-label="下载音频">下载</a>
       </div>
-      <p className="simple-video-shortcuts">空格播放 · ←/→ 快退快进 5 秒 · M 静音 · F 全屏</p>
+      <p className="simple-video-shortcuts">空格播放 · ←/→ 快退快进 5 秒 · M 静音</p>
     </div>
   )
 }

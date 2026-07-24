@@ -19,7 +19,6 @@ import type {
 import {
   CREATOR_CONFLICT_COPY,
   canConfirmCreatorStep,
-  createTimeSelection,
   buildProjectMaterialStorageRef,
   creatorMutationIdempotencyKey,
   creatorStepLabel,
@@ -61,6 +60,8 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
   const [directContent, setDirectContent] = useState('')
   const [mode, setMode] = useState<'instruction' | 'direct'>('instruction')
   const [selection, setSelection] = useState<ArtifactSelection | null>(null)
+  const [mediaRangePending, setMediaRangePending] = useState(false)
+  const [mediaRangeResetVersion, setMediaRangeResetVersion] = useState(0)
   const [textSelectionDraft, setTextSelectionDraft] = useState<TextSelectionDraft | null>(null)
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [imageDialogSrc, setImageDialogSrc] = useState('')
@@ -85,7 +86,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     name: content?.artifact.name,
   })
   const isImage = presentation === 'image'
-  const isVideo = presentation === 'video'
+  const isAudio = presentation === 'audio'
   const directEditText = creatorDirectEditText(presentation, content?.reviewText)
   const canDirectEdit = directEditText !== undefined
   const canConfirm = !viewingHistorical && canConfirmCreatorStep(step)
@@ -105,6 +106,8 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     setDirectContent('')
     setMode('instruction')
     setSelection(null)
+    setMediaRangePending(false)
+    setMediaRangeResetVersion(0)
     setTextSelectionDraft(null)
     setPending(null)
     setImageDialogOpen(false)
@@ -171,6 +174,10 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
 
   const previewRevision = (preparedInstruction?: string) => {
     if (!artifactId || !baseVersion) return
+    if (mediaRangePending) {
+      setError('请先设置完整的开始和结束时间，或清除范围。')
+      return
+    }
     setTextSelectionDraft(null)
     window.getSelection()?.removeAllRanges()
     const effectiveMode = preparedInstruction === undefined ? mode : 'instruction'
@@ -384,6 +391,17 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     window.requestAnimationFrame(() => instructionRef.current?.focus())
   }
 
+  const chooseAudioQuickAction = (nextInstruction: string, regenerateFullAudio = false) => {
+    setMode('instruction')
+    setInstruction(nextInstruction)
+    if (regenerateFullAudio) {
+      setSelection(null)
+      setMediaRangePending(false)
+      setMediaRangeResetVersion(value => value + 1)
+    }
+    window.requestAnimationFrame(() => instructionRef.current?.focus())
+  }
+
   return (
     <section className="artifact-review-panel" aria-labelledby="artifact-review-title">
       <div className="artifact-review-heading">
@@ -411,6 +429,13 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
             onImagePointerCancel={() => { selectionStart.current = null }}
             textSurfaceRef={textSurfaceRef}
             onTextSelectionChange={handleTextSelectionChange}
+            mediaRangeResetKey={`${artifactId || 'none'}:${baseVersion || 0}:${mediaRangeResetVersion}`}
+            mediaRangeDisabled={!canRevise || working}
+            onMediaSelectionChange={nextSelection => {
+              setTextSelectionDraft(null)
+              setSelection(nextSelection)
+            }}
+            onMediaRangePendingChange={setMediaRangePending}
           />
           {textSelectionDraft && <TextSelectionAssistant
             draft={textSelectionDraft}
@@ -420,10 +445,15 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
             onClear={() => handleTextSelectionChange(null)}
           />}
           {isImage && <p className="artifact-selection-help">在图片上拖拽框选需要调整的区域。</p>}
-          {isVideo && <TimeSelection selection={selection} onChange={nextSelection => {
-            setTextSelectionDraft(null)
-            setSelection(nextSelection)
-          }} />}
+          {isAudio && <div className="audio-review-quick-actions" aria-label="语音修改快捷操作">
+            <span>快捷修改</span>
+            <button type="button" disabled={!canRevise || working} onClick={() => chooseAudioQuickAction('调整这段语音的语气和情绪，使表达更自然。')}>调整语气</button>
+            <button type="button" disabled={!canRevise || working} onClick={() => chooseAudioQuickAction('优化这段语音的语速和节奏，使表达更流畅。')}>优化语速</button>
+            <button type="button" disabled={!canRevise || working} onClick={() => chooseAudioQuickAction('调整这段语音的停顿位置和停顿时长。')}>调整停顿</button>
+            <button type="button" disabled={!canRevise || working} onClick={() => chooseAudioQuickAction('修正这段语音中的发音问题。')}>修正发音</button>
+            <button type="button" disabled={!canRevise || working} onClick={() => chooseAudioQuickAction('重新生成整段语音。', true)}>重新生成整段语音</button>
+          </div>}
+          {mediaRangePending && <p className="artifact-selection-help" role="status">已设置一个时间点。请设置另一端，或清除范围后再提交修改。</p>}
           {selection && <p className="artifact-selection-help">已保留本次选择范围，修改时会一并发送。</p>}
 
           <div className="artifact-actions">
@@ -443,7 +473,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
               <button type="button" className="creator-secondary-button" disabled={!canRevise || working} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>
             </label>
           )}
-          {mode === 'instruction' && <button type="button" className="creator-secondary-button artifact-preview-button" disabled={!canRevise || working} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>}
+          {mode === 'instruction' && <button type="button" className="creator-secondary-button artifact-preview-button" disabled={!canRevise || working || mediaRangePending} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>}
 
           {versionList.length > 1 && <details className="artifact-history">
             <summary>查看版本</summary>
@@ -484,16 +514,6 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
       />}
       {error && <p className="creator-form-error" role="alert">{error}</p>}
     </section>
-  )
-}
-
-function TimeSelection({ selection, onChange }: { selection: ArtifactSelection | null; onChange: (selection: ArtifactSelection) => void }) {
-  const current = selection?.kind === 'time' ? selection : { startMs: 0, endMs: 1000 }
-  return (
-    <div className="artifact-time-selection" aria-label="视频评论时间范围">
-      <label>开始时间（秒）<input type="number" min="0" step="0.1" value={current.startMs / 1000} onChange={event => onChange(createTimeSelection(Math.round(Number(event.target.value) * 1000), current.endMs))} /></label>
-      <label>结束时间（秒）<input type="number" min="0" step="0.1" value={current.endMs / 1000} onChange={event => onChange(createTimeSelection(current.startMs, Math.round(Number(event.target.value) * 1000)))} /></label>
-    </div>
   )
 }
 
