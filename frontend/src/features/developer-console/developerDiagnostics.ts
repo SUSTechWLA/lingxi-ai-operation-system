@@ -28,6 +28,10 @@ export interface DeveloperDiagnosticsSnapshot {
 const REDACTED = '[REDACTED]'
 const CIRCULAR = '[Circular]'
 const UNAVAILABLE = '[Unavailable]'
+const ACCESSOR = '[Accessor]'
+const FUNCTION = '[Function]'
+const SYMBOL = '[Symbol]'
+const UNDEFINED = '[Undefined]'
 
 const secretKeys = new Set([
   'authorization',
@@ -58,25 +62,39 @@ function redactLocalPath(value: string): string {
 
 function redactValue(value: unknown, ancestors: WeakSet<object>): unknown {
   if (typeof value === 'string') return redactLocalPath(value)
+  if (typeof value === 'bigint') return String(value)
+  if (typeof value === 'function') return FUNCTION
+  if (typeof value === 'symbol') return SYMBOL
+  if (typeof value === 'undefined') return UNDEFINED
   if (value === null || typeof value !== 'object') return value
   if (ancestors.has(value)) return CIRCULAR
 
   ancestors.add(value)
   try {
     if (Array.isArray(value)) {
-      let length = 0
+      let lengthDescriptor: PropertyDescriptor | undefined
+      let keys: string[]
       try {
-        length = value.length
+        lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+        keys = Object.keys(value)
       } catch {
         return UNAVAILABLE
       }
 
-      const clone: unknown[] = []
-      for (let index = 0; index < length; index += 1) {
+      const length = typeof lengthDescriptor?.value === 'number' ? lengthDescriptor.value : 0
+      const clone: unknown[] = new Array(length)
+      for (const key of keys) {
+        if (!/^(0|[1-9]\d*)$/.test(key)) continue
+        const index = Number(key)
+        if (!Number.isSafeInteger(index) || index >= length) continue
+
         try {
-          clone.push(redactValue(value[index], ancestors))
+          const descriptor = Object.getOwnPropertyDescriptor(value, key)
+          clone[index] = descriptor && 'value' in descriptor
+            ? redactValue(descriptor.value, ancestors)
+            : ACCESSOR
         } catch {
-          clone.push(UNAVAILABLE)
+          clone[index] = UNAVAILABLE
         }
       }
       return clone
@@ -97,9 +115,23 @@ function redactValue(value: unknown, ancestors: WeakSet<object>): unknown {
       }
 
       try {
-        clone[key] = redactValue((value as Record<string, unknown>)[key], ancestors)
+        const descriptor = Object.getOwnPropertyDescriptor(value, key)
+        const redacted = descriptor && 'value' in descriptor
+          ? redactValue(descriptor.value, ancestors)
+          : ACCESSOR
+        Object.defineProperty(clone, key, {
+          configurable: true,
+          enumerable: true,
+          value: redacted,
+          writable: true,
+        })
       } catch {
-        clone[key] = UNAVAILABLE
+        Object.defineProperty(clone, key, {
+          configurable: true,
+          enumerable: true,
+          value: UNAVAILABLE,
+          writable: true,
+        })
       }
     }
     return clone
@@ -115,6 +147,14 @@ export function redactDiagnosticValue(value: unknown): unknown {
     return redactValue(value, new WeakSet())
   } catch {
     return UNAVAILABLE
+  }
+}
+
+export function serializeRedactedDiagnosticValue(value: unknown): string {
+  try {
+    return JSON.stringify(redactDiagnosticValue(value)) ?? 'null'
+  } catch {
+    return JSON.stringify(UNAVAILABLE)
   }
 }
 
@@ -167,26 +207,35 @@ export function diagnosticDurationMs(startedAt?: string, completedAt?: string): 
   return completed - started
 }
 
+function hasTransportSignal(value: string, signal: 'mcp' | 'control' | 'tool'): boolean {
+  const normalized = value.toLowerCase()
+  return normalized === signal || normalized.startsWith(`${signal}__`) ||
+    ['_', ':', '.', '/', '-'].some((separator) => normalized.startsWith(`${signal}${separator}`))
+}
+
 export function classifyDiagnosticTransport(node: unknown): DiagnosticsNode['transport'] {
   const record = recordValue(node)
   if (!record) return 'unknown'
 
   const transport = stringField(record, ['transport'])?.toLowerCase()
-  if (transport === 'mcp' || transport?.includes('mcp')) return 'mcp'
-  if (transport === 'control' || transport?.includes('control')) return 'control'
-  if (transport === 'tool' || transport?.includes('tool')) return 'tool'
+  if (transport && hasTransportSignal(transport, 'mcp')) return 'mcp'
+  if (transport && hasTransportSignal(transport, 'control')) return 'control'
+  if (transport && hasTransportSignal(transport, 'tool')) return 'tool'
 
-  const server = stringField(record, ['server', 'serverName', 'mcpServer'])
+  const server = stringField(record, ['server', 'serverName', 'mcpServer', 'mcp_server'])
   const provider = stringField(record, ['provider'])?.toLowerCase()
-  if (server || provider?.includes('mcp')) return 'mcp'
+  if (server || (provider && hasTransportSignal(provider, 'mcp'))) return 'mcp'
 
   const type = stringField(record, ['type', 'kind'])?.toLowerCase()
-  if (type?.includes('mcp')) return 'mcp'
-  if (type?.includes('control')) return 'control'
+  if (type && hasTransportSignal(type, 'mcp')) return 'mcp'
+  if (type && hasTransportSignal(type, 'control')) return 'control'
+  if (type && hasTransportSignal(type, 'tool')) return 'tool'
 
-  const toolName = stringField(record, ['toolName', 'tool', 'name'])
-  if (toolName && /(^|[_:.-])mcp([_:.-]|$)/i.test(toolName)) return 'mcp'
-  if (toolName || type?.includes('tool')) return 'tool'
+  const toolName = stringField(record, ['toolName', 'tool'])
+  const name = stringField(record, ['name'])
+  if ([toolName, name].some((value) => value && hasTransportSignal(value, 'mcp'))) return 'mcp'
+  if ([toolName, name].some((value) => value && hasTransportSignal(value, 'control'))) return 'control'
+  if (toolName || (name && hasTransportSignal(name, 'tool'))) return 'tool'
 
   return 'unknown'
 }
@@ -214,7 +263,7 @@ export function buildDiagnosticsNodes(trace: unknown): DiagnosticsNode[] {
         const request = firstField(record, ['request', 'input', 'arguments'])
         const response = firstField(record, ['response', 'output', 'result'])
         const errorValue = firstField(record, ['error', 'errorMessage'])
-        const redactedError = redactDiagnosticValue(errorValue)
+        const redactedError = errorValue === undefined ? undefined : redactDiagnosticValue(errorValue)
 
         const node: DiagnosticsNode & { sortIndex: number } = {
           id,

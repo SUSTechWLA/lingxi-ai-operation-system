@@ -125,6 +125,7 @@ try {
     classifyDiagnosticTransport,
     diagnosticDurationMs,
     redactDiagnosticValue,
+    serializeRedactedDiagnosticValue,
   } = await import(pathToFileURL(developerDiagnosticsOutfile))
   const directorPageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
   const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
@@ -249,15 +250,73 @@ try {
   assert.doesNotThrow(() => classifyDiagnosticTransport(revokedDiagnostic.proxy))
   assert.deepEqual(buildDiagnosticsNodes(revokedDiagnostic.proxy), [])
 
+  let diagnosticCallbackCalls = 0
+  const inheritedToJSON = Object.create({
+    toJSON() {
+      diagnosticCallbackCalls += 1
+      return { leaked: 'inherited-secret' }
+    },
+  })
+  inheritedToJSON.visible = 7n
+  const accessorValue = {}
+  Object.defineProperty(accessorValue, 'value', {
+    enumerable: true,
+    get() {
+      diagnosticCallbackCalls += 1
+      return 'accessor-secret'
+    },
+  })
+  const serializationCycle = {}
+  serializationCycle.self = serializationCycle
+  const serializationInput = {
+    password: 'top-level-secret',
+    ownToJSON: {
+      visible: 3n,
+      toJSON() {
+        diagnosticCallbackCalls += 1
+        return { leaked: 'own-secret' }
+      },
+    },
+    inheritedToJSON,
+    callback() {
+      diagnosticCallbackCalls += 1
+    },
+    values: [2n, undefined, Symbol('private-symbol'), accessorValue, serializationCycle],
+  }
+  const serializationSafeDiagnostic = redactDiagnosticValue(serializationInput)
+  assert.equal(diagnosticCallbackCalls, 0)
+  assert.doesNotThrow(() => JSON.stringify(serializationSafeDiagnostic))
+  assert.deepEqual(JSON.parse(JSON.stringify(serializationSafeDiagnostic)), {
+    password: '[REDACTED]',
+    ownToJSON: { visible: '3', toJSON: '[Function]' },
+    inheritedToJSON: { visible: '7' },
+    callback: '[Function]',
+    values: ['2', '[Undefined]', '[Symbol]', { value: '[Accessor]' }, { self: '[Circular]' }],
+  })
+  assert.equal(
+    serializeRedactedDiagnosticValue(serializationInput),
+    '{"password":"[REDACTED]","ownToJSON":{"visible":"3","toJSON":"[Function]"},"inheritedToJSON":{"visible":"7"},"callback":"[Function]","values":["2","[Undefined]","[Symbol]",{"value":"[Accessor]"},{"self":"[Circular]"}]}',
+  )
+  assert.equal(serializeRedactedDiagnosticValue(() => 'callable-secret'), '"[Function]"')
+  assert.equal(diagnosticCallbackCalls, 0)
+
   assert.equal(diagnosticDurationMs('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.250Z'), 1250)
   assert.equal(diagnosticDurationMs('invalid', '2026-01-01T00:00:01.250Z'), undefined)
   assert.equal(diagnosticDurationMs('2026-01-01T00:00:02.000Z', '2026-01-01T00:00:01.250Z'), undefined)
   assert.equal(diagnosticDurationMs(Symbol('malformed'), '2026-01-01T00:00:01.250Z'), undefined)
   assert.equal(classifyDiagnosticTransport({ transport: 'control' }), 'control')
+  assert.equal(classifyDiagnosticTransport({ transport: 'control:cancel' }), 'control')
+  assert.equal(classifyDiagnosticTransport({ transport: 'tool/run' }), 'tool')
   assert.equal(classifyDiagnosticTransport({ server: 'filesystem' }), 'mcp')
+  assert.equal(classifyDiagnosticTransport({ provider: 'mcp-provider' }), 'mcp')
   assert.equal(classifyDiagnosticTransport({ provider: 'mcp://video-qa' }), 'mcp')
   assert.equal(classifyDiagnosticTransport({ toolName: 'mcp__video_qa__inspect' }), 'mcp')
   assert.equal(classifyDiagnosticTransport({ tool: 'render_video' }), 'tool')
+  assert.equal(classifyDiagnosticTransport({ transport: 'not-mcp' }), 'unknown')
+  assert.equal(classifyDiagnosticTransport({ provider: 'not-mcp' }), 'unknown')
+  assert.equal(classifyDiagnosticTransport({ transport: 'uncontrolled' }), 'unknown')
+  assert.equal(classifyDiagnosticTransport({ type: 'controller' }), 'unknown')
+  assert.equal(classifyDiagnosticTransport({ transport: 'toolbox' }), 'unknown')
   assert.equal(classifyDiagnosticTransport(null), 'unknown')
 
   assert.deepEqual(
