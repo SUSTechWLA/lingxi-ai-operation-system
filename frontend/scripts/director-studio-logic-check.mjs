@@ -346,6 +346,35 @@ try {
   assert.equal(serializeRedactedDiagnosticValue(() => 'callable-secret'), '"[Function]"')
   assert.equal(diagnosticCallbackCalls, 0)
 
+  const embeddedSensitiveNodes = buildDiagnosticsNodes({
+    nodes: [{
+      id: 'embedded-sensitive',
+      status: 'FAILED',
+      error: 'Request failed: Authorization: Bearer super-secret at /Users/alice/.config/key.json; retry remains available',
+      request: {
+        message: String.raw`Upload failed with Cookie: session=abc123; theme=dark from C:\Users\alice\AppData\Local\agent\session.json; keep this context`,
+        context: 'Worker rejected credential=client-credential token: oauth-token secret=hidden-secret; useful tail remains',
+        download: 'https://cdn.example.test/render.mp4?X-Amz-Credential=AKIA-EXAMPLE&X-Amz-Signature=deadbeef&variant=preview',
+        publicUrl: 'https://cdn.example.test/assets/video.mp4?variant=preview',
+      },
+    }],
+  })
+  const embeddedSensitiveError = embeddedSensitiveNodes[0]?.error ?? ''
+  assert.match(embeddedSensitiveError, /Request failed:/)
+  assert.match(embeddedSensitiveError, /retry remains available/)
+  assert.doesNotMatch(embeddedSensitiveError, /super-secret|\/Users\/alice/)
+  const embeddedSensitiveJson = serializeRedactedDiagnosticValue(embeddedSensitiveNodes[0]?.request)
+  for (const sensitiveValue of ['session=abc123', 'theme=dark', String.raw`C:\Users\alice`, 'client-credential', 'oauth-token', 'hidden-secret', 'AKIA-EXAMPLE', 'deadbeef']) {
+    assert.doesNotMatch(embeddedSensitiveJson, new RegExp(sensitiveValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  }
+  assert.match(embeddedSensitiveJson, /Upload failed with/)
+  assert.match(embeddedSensitiveJson, /keep this context/)
+  assert.match(embeddedSensitiveJson, /Worker rejected/)
+  assert.match(embeddedSensitiveJson, /useful tail remains/)
+  assert.match(embeddedSensitiveJson, /https:\/\/cdn\.example\.test\/render\.mp4/)
+  assert.match(embeddedSensitiveJson, /variant=preview/)
+  assert.match(embeddedSensitiveJson, /https:\/\/cdn\.example\.test\/assets\/video\.mp4\?variant=preview/)
+
   assert.equal(diagnosticDurationMs('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.250Z'), 1250)
   assert.equal(diagnosticDurationMs('invalid', '2026-01-01T00:00:01.250Z'), undefined)
   assert.equal(diagnosticDurationMs('2026-01-01T00:00:02.000Z', '2026-01-01T00:00:01.250Z'), undefined)

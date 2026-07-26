@@ -187,7 +187,7 @@ const secretKeys = new Set([
   'signature',
 ])
 
-function redactLocalPath(value: string): string {
+function redactWholeLocalPath(value: string): string {
   if (value.startsWith('local://')) return value
 
   const windowsPath = value.match(/^[A-Za-z]:\\(?:[^\\]+\\)*([^\\]+)\\?$/)
@@ -199,8 +199,46 @@ function redactLocalPath(value: string): string {
   return value
 }
 
+function localPathPlaceholder(value: string, separator: '/' | '\\'): string {
+  const trimmed = value.endsWith(separator) ? value.slice(0, -1) : value
+  const fileName = trimmed.slice(trimmed.lastIndexOf(separator) + 1)
+  return `<local-path>${separator}${fileName}`
+}
+
+function redactDiagnosticString(value: string): string {
+  const wholePath = redactWholeLocalPath(value)
+  if (wholePath !== value) return wholePath
+
+  return value
+    .replace(
+      /([?&](?:x-amz-(?:credential|signature|security-token)|x-goog-(?:credential|signature)|googleaccessid|signature|sig|access[_-]?token|token)=)[^&#\s]+/gi,
+      (_match, prefix: string) => `${prefix}${REDACTED}`,
+    )
+    .replace(
+      /(\bauthorization\s*[:=]\s*)(?:["']?)(?:[A-Za-z][\w-]*\s+)?[^\s,;"']+(?:["']?)/gi,
+      (_match, prefix: string) => `${prefix}${REDACTED}`,
+    )
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${REDACTED}`)
+    .replace(
+      /(\b(?:set-cookie|cookie)\s*:\s*)(?:["']?)((?:[^=\s;,]+=[^;\s,"']+)(?:\s*;\s*[^=\s;,]+=[^;\s,"']+)*)(?:["']?)/gi,
+      (_match, prefix: string) => `${prefix}${REDACTED}`,
+    )
+    .replace(
+      /(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|credential|password|secret|token|signature)\b\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;&]+)/gi,
+      (_match, prefix: string) => `${prefix}${REDACTED}`,
+    )
+    .replace(
+      /\b[A-Za-z]:\\(?:[^\\\s"'<>|?*,;:()[\]{}]+\\)+[^\\\s"'<>|?*,;:()[\]{}]+/g,
+      (path) => localPathPlaceholder(path, '\\'),
+    )
+    .replace(
+      /(^|[\s("'=])((?:\/[^/\s"'<>?,;:()[\]{}]+){2,})/g,
+      (_match, prefix: string, path: string) => `${prefix}${localPathPlaceholder(path, '/')}`,
+    )
+}
+
 function redactValue(value: unknown, ancestors: WeakSet<object>): unknown {
-  if (typeof value === 'string') return redactLocalPath(value)
+  if (typeof value === 'string') return redactDiagnosticString(value)
   if (typeof value === 'bigint') return String(value)
   if (typeof value === 'function') return FUNCTION
   if (typeof value === 'symbol') return SYMBOL
