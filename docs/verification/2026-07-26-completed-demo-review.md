@@ -15,6 +15,7 @@ End-to-end regeneration and interactive playback could not be executed in this r
 | Creator review contracts | `npm run test:creator` | PASS |
 | Settings and theme | `npm run test:settings` | PASS |
 | Diagnostics production modes | `npm run test:developer-build` | PASS |
+| Director studio contracts | `npm run test:director` | PASS |
 | Frontend TypeScript and production bundle | `npm run build` | PASS |
 | Frontend lint | `npm run lint` | PASS |
 | Deployment/build contracts | `python3 scripts/test_one_click_deploy.py` | PASS, 9 tests |
