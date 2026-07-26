@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DeveloperDiagnosticsView } from '../../creatorRoutes'
 import {
   fetchProjectArtifactRegistry,
@@ -16,6 +16,7 @@ import DiagnosticsTimeline from './components/DiagnosticsTimeline'
 import ToolCallInspector from './components/ToolCallInspector'
 import ArtifactRegistry from './components/ArtifactRegistry'
 import GateInspector from './components/GateInspector'
+import RecoveryPanel from './components/RecoveryPanel'
 import {
   diagnosticsSnapshotForScope,
   isTerminalAgentRunStatus,
@@ -87,6 +88,7 @@ export default function DeveloperConsolePage({
   const [diagnostics, setDiagnostics] = useState<ProjectDiagnosticsLoadResult | null>(null)
   const [diagnosticsLoadState, setDiagnosticsLoadState] = useState<DiagnosticsLoadState>('idle')
   const requestScopeRef = useRef('')
+  const manualRefreshControllerRef = useRef<AbortController | null>(null)
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId),
@@ -99,6 +101,7 @@ export default function DeveloperConsolePage({
   )
   const handleProjectSelect = (projectId: string) => {
     const project = projects.find((candidate) => candidate.id === projectId)
+    manualRefreshControllerRef.current?.abort()
     requestScopeRef.current = project?.currentRunId ? `${project.id}:${project.currentRunId}` : ''
     setDiagnostics(null)
     setDiagnosticsLoadState(project?.currentRunId ? 'loading' : 'idle')
@@ -154,6 +157,42 @@ export default function DeveloperConsolePage({
       })
 
     return () => controller.abort()
+  }, [selectedProject?.currentRunId, selectedProject?.id])
+
+  useEffect(() => () => manualRefreshControllerRef.current?.abort(), [])
+
+  const refreshDiagnostics = useCallback(async () => {
+    const projectId = selectedProject?.id
+    const runId = selectedProject?.currentRunId
+    if (!projectId || !runId) throw new Error('所选项目没有可刷新的运行')
+
+    const requestScope = `${projectId}:${runId}`
+    const controller = new AbortController()
+    manualRefreshControllerRef.current?.abort()
+    manualRefreshControllerRef.current = controller
+    try {
+      const result = await loadProjectDiagnostics({
+        projectId,
+        runId,
+        signal: controller.signal,
+        api: diagnosticsApi,
+      })
+      if (controller.signal.aborted || requestScopeRef.current !== requestScope) {
+        const error = new Error('诊断范围已变更，已取消刷新')
+        error.name = 'AbortError'
+        throw error
+      }
+      setDiagnostics((current) => (
+        requestScopeRef.current === requestScope
+          ? mergeProjectDiagnostics(current, result)
+          : current
+      ))
+      if (!result.run) throw new Error('刷新未能读取运行摘要；当前快照已保留')
+    } finally {
+      if (manualRefreshControllerRef.current === controller) {
+        manualRefreshControllerRef.current = null
+      }
+    }
   }, [selectedProject?.currentRunId, selectedProject?.id])
 
   const selectedRunStatus = scopedDiagnostics?.run?.status
@@ -269,6 +308,7 @@ export default function DeveloperConsolePage({
             diagnostics={scopedDiagnostics}
             selectedRunFailed={selectedRunFailed}
             partialSections={partialSections}
+            onRefresh={refreshDiagnostics}
           />
         </section>
       </main>
@@ -287,6 +327,7 @@ function DiagnosticsContent({
   diagnostics,
   selectedRunFailed,
   partialSections,
+  onRefresh,
 }: {
   projectLoading: boolean
   diagnosticsLoading: boolean
@@ -298,6 +339,7 @@ function DiagnosticsContent({
   diagnostics: ProjectDiagnosticsLoadResult | null
   selectedRunFailed: boolean
   partialSections: DiagnosticsDataSection[]
+  onRefresh: () => Promise<void>
 }) {
   if (projectLoading || diagnosticsLoading) {
     return <DiagnosticsNotice title="正在加载诊断数据" detail="正在读取所选项目的运行摘要与关联记录。" />
@@ -319,7 +361,16 @@ function DiagnosticsContent({
         ? <ArtifactRegistry artifacts={diagnostics.artifacts ?? []} scopeKey={`${diagnostics.projectId}:${diagnostics.runId}`} />
       : currentView === 'gates'
         ? <GateInspector reviews={diagnostics.reviews ?? []} nodes={diagnostics.nodes ?? []} />
-      : (
+      : currentView === 'recovery' && selectedProject
+        ? (
+            <RecoveryPanel
+              key={`${diagnostics.projectId}:${diagnostics.runId}`}
+              project={selectedProject}
+              diagnostics={diagnostics}
+              onRefresh={onRefresh}
+            />
+          )
+        : (
           <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <DiagnosticsMetric label="运行状态" value={diagnostics.run.status} />
             <DiagnosticsMetric label="任务" value={diagnostics.run.taskId ?? '未关联'} />

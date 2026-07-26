@@ -15,6 +15,7 @@ const developerDiagnosticsOutfile = join(tempDir, 'developerDiagnostics.mjs')
 const toolCallInspectorOutfile = join(tempDir, 'toolCallInspector.mjs')
 const artifactRegistryOutfile = join(tempDir, 'artifactRegistry.cjs')
 const gateInspectorOutfile = join(tempDir, 'gateInspector.mjs')
+const recoveryPanelOutfile = join(tempDir, 'recoveryPanel.cjs')
 
 try {
   await build({
@@ -88,6 +89,15 @@ try {
     bundle: true,
     format: 'esm',
     platform: 'node',
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/features/developer-console/components/RecoveryPanel.tsx', import.meta.url).pathname],
+    outfile: recoveryPanelOutfile,
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    define: { 'import.meta.env': '{}' },
     logLevel: 'silent',
   })
 
@@ -169,6 +179,11 @@ try {
     filterArtifactRegistryRows,
   } = await import(pathToFileURL(artifactRegistryOutfile))
   const { buildGateInspectionItems } = await import(pathToFileURL(gateInspectorOutfile))
+  const {
+    buildDiagnosticPackage,
+    selectLatestFailedNode,
+    serializeDiagnosticPackage,
+  } = await import(pathToFileURL(recoveryPanelOutfile))
   const diagnosticsApiSource = await readFile(new URL('../src/services/api.ts', import.meta.url), 'utf8')
   const directorPageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
   const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
@@ -180,6 +195,7 @@ try {
   const toolCallInspectorSource = await readFile(new URL('../src/features/developer-console/components/ToolCallInspector.tsx', import.meta.url), 'utf8')
   const artifactRegistrySource = await readFile(new URL('../src/features/developer-console/components/ArtifactRegistry.tsx', import.meta.url), 'utf8')
   const gateInspectorSource = await readFile(new URL('../src/features/developer-console/components/GateInspector.tsx', import.meta.url), 'utf8')
+  const recoveryPanelSource = await readFile(new URL('../src/features/developer-console/components/RecoveryPanel.tsx', import.meta.url), 'utf8')
   const globalStylesSource = await readFile(new URL('../src/index.css', import.meta.url), 'utf8')
   assert.match(creatorShellSource, /开始创作/)
   assert.match(creatorShellSource, /我的视频/)
@@ -277,18 +293,30 @@ try {
   assert.doesNotMatch(toolCallInspectorSource, /<details[^>]*\sopen(?:=|\s|>)/)
   assert.match(developerConsoleSource, /currentView === 'artifacts'/)
   assert.match(developerConsoleSource, /currentView === 'gates'/)
+  assert.match(developerConsoleSource, /currentView === 'recovery'/)
+  assert.match(developerConsoleSource, /<RecoveryPanel/)
   assert.match(artifactRegistrySource, /fetchArtifactContent\([^,]+,\s*controller\.signal\)/)
   assert.match(artifactRegistrySource, /fetchArtifactHistory\([^,]+,\s*controller\.signal\)/)
   assert.match(artifactRegistrySource, /controller\.abort\(\)/)
   assert.match(artifactRegistrySource, /serializeRedactedDiagnosticValue/)
   assert.doesNotMatch(artifactRegistrySource, /<details[^>]*\sopen(?:=|\s|>)/)
   assert.doesNotMatch(gateInspectorSource, /approveAgentReview|rejectAgentReview|approve|reject/)
+  for (const controlLabel of ['刷新快照', '重试最新失败节点', '复制脱敏诊断包', '下载脱敏诊断 JSON']) {
+    assert.match(recoveryPanelSource, new RegExp(controlLabel))
+  }
+  assert.match(recoveryPanelSource, /window\.confirm/)
+  assert.match(recoveryPanelSource, /retryLatestFailedAgentNode/)
+  assert.match(recoveryPanelSource, /navigator\.clipboard\.writeText/)
+  assert.match(recoveryPanelSource, /disabled=/)
+  assert.match(recoveryPanelSource, /role="status"/)
+  assert.doesNotMatch(recoveryPanelSource, /retry all|retryAll|全部重试|重试全部/i)
   assert.match(globalStylesSource, /\.diagnostics-metric-grid/)
   assert.match(globalStylesSource, /\.diagnostics-timeline/)
   assert.match(globalStylesSource, /\.diagnostics-json-panel/)
   assert.match(globalStylesSource, /\.diagnostics-tool-inspector/)
   assert.match(globalStylesSource, /\.diagnostics-artifact-registry/)
   assert.match(globalStylesSource, /\.diagnostics-gate-inspector/)
+  assert.match(globalStylesSource, /\.diagnostics-recovery-panel/)
   assert.match(globalStylesSource, /@media\s*\(max-width:\s*390px\)/)
   assert.equal(replaceHashRoute('#/create'), '#/create')
   assert.equal(cycleFocusIndex(0, 2, false), 1)
@@ -296,6 +324,51 @@ try {
   assert.equal(cycleFocusIndex(0, 2, true), 1)
   assert.equal(cycleFocusIndex(1, 2, true), 0)
   assert.equal(cycleFocusIndex(0, 0, false), -1)
+
+  const failedNodeTie = [
+    { id: 'node-b', name: 'Node B', status: 'FAILED', completedAt: '2026-01-01T00:00:02.000Z' },
+    { id: 'node-c', name: 'Node C', status: 'FAILED', completedAt: '2026-01-01T00:00:02.000Z' },
+    { id: 'node-a', name: 'Node A', status: 'FAILED', completedAt: '2026-01-01T00:00:01.000Z' },
+    { id: 'node-running', name: 'Node running', status: 'RUNNING', completedAt: '2026-01-01T00:00:03.000Z' },
+  ]
+  assert.equal(selectLatestFailedNode(failedNodeTie)?.id, 'node-b')
+  assert.equal(selectLatestFailedNode([...failedNodeTie].reverse())?.id, 'node-b')
+  assert.equal(selectLatestFailedNode([{ id: 'node-ok', status: 'SUCCESS' }]), undefined)
+
+  const diagnosticPackage = buildDiagnosticPackage({
+    generatedAt: '2026-01-02T03:04:05.000Z',
+    project: { id: 'project-1', name: 'Project One' },
+    diagnostics: {
+      projectId: 'project-1',
+      runId: 'run-1',
+      errors: [],
+      run: { id: 'run-1', taskId: 'task-1', status: 'FAILED', secret: 'run-secret' },
+      task: { id: 'task-1', Authorization: 'Bearer task-secret' },
+      nodes: failedNodeTie,
+      reviews: [{ id: 'review-1', credential: 'review-secret' }],
+      artifacts: [{
+        id: 'artifact-1',
+        name: 'preview.mp4',
+        storageRef: 'local://projects/project-1/preview.mp4',
+        body: 'raw-body',
+        content: 'raw-content',
+        data: 'base64-media-data',
+      }],
+      context: [{ id: 'context-1', password: 'context-secret' }],
+    },
+  })
+  assert.deepEqual(Object.keys(diagnosticPackage), [
+    'generatedAt', 'project', 'run', 'task', 'nodes', 'reviews', 'artifacts', 'contexts',
+  ])
+  assert.equal(diagnosticPackage.run.secret, '[REDACTED]')
+  assert.equal(diagnosticPackage.task.Authorization, '[REDACTED]')
+  assert.equal(diagnosticPackage.reviews[0].credential, '[REDACTED]')
+  assert.equal(diagnosticPackage.contexts[0].password, '[REDACTED]')
+  assert.equal('body' in diagnosticPackage.artifacts[0], false)
+  assert.equal('content' in diagnosticPackage.artifacts[0], false)
+  assert.equal('data' in diagnosticPackage.artifacts[0], false)
+  const serializedPackage = serializeDiagnosticPackage(diagnosticPackage)
+  assert.doesNotMatch(serializedPackage, /run-secret|task-secret|review-secret|context-secret|raw-body|raw-content|base64-media-data/)
 
   assert.deepEqual(
     redactDiagnosticValue({

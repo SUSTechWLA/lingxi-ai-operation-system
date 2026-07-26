@@ -284,17 +284,49 @@ export async function getTaskContext(taskId: string, signal?: AbortSignal): Prom
   return Array.isArray(response.data.data) ? response.data.data : []
 }
 
-export const retryLatestFailedAgentNode = async (taskId: string): Promise<string> => {
+export interface FailedAgentNodeCandidate {
+  id: string
+  status: string
+  completedAt?: string | null
+}
+
+export interface RetryFailedAgentNodeResult {
+  taskId: string
+  nodeId: string
+}
+
+function completedAtTime(value?: string | null): number {
+  if (!value) return 0
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+export function selectLatestFailedAgentNode<T extends FailedAgentNodeCandidate>(
+  nodes: readonly T[],
+): T | undefined {
+  return nodes
+    .filter((node) => node.status === 'FAILED')
+    .slice()
+    .sort((left, right) => (
+      completedAtTime(right.completedAt) - completedAtTime(left.completedAt) ||
+      left.id.localeCompare(right.id)
+    ))[0]
+}
+
+export const retryLatestFailedAgentNode = async (
+  taskId: string,
+  expectedNodeId?: string,
+): Promise<RetryFailedAgentNodeResult> => {
   const response = await api.get<ApiResponse<{
     nodes?: Array<{ id: string; status: string; completedAt?: string | null }>
   }>>(`/task/${encodeURIComponent(taskId)}`)
-  const failedNodes = (response.data.data.nodes ?? [])
-    .filter(node => node.status === 'FAILED')
-    .sort((left, right) => String(right.completedAt ?? '').localeCompare(String(left.completedAt ?? '')))
-  const failedNode = failedNodes[0]
+  const failedNode = selectLatestFailedAgentNode(response.data.data.nodes ?? [])
   if (!failedNode) throw new Error('没有可重试的失败步骤')
+  if (expectedNodeId && failedNode.id !== expectedNodeId) {
+    throw new Error(`最新失败节点已从 ${expectedNodeId} 变为 ${failedNode.id}，请刷新快照后确认`)
+  }
   await api.post(`/node/${encodeURIComponent(failedNode.id)}/retry`)
-  return failedNode.id
+  return { taskId, nodeId: failedNode.id }
 }
 
 export const getAgentRunTrace = async (
