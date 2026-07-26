@@ -410,9 +410,9 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 				applyArtifact(&steps[index], current, candidate)
 			}
 		}
-		if isActiveArtifact(current) && current.TaskID != "" {
+		if taskStatus, active := creatorTaskStatus(current.Status); active && current.TaskID != "" {
 			activeTasks = append(activeTasks, model.CreatorTask{
-				ID: current.TaskID, Scope: string(stepID), Status: current.Status,
+				ID: current.TaskID, Scope: string(stepID), Status: taskStatus,
 				Label: creatorTaskLabel(stepID),
 			})
 		}
@@ -425,12 +425,13 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 	shotsIndex := stepIndexes[model.CreatorStepShots]
 	steps[shotsIndex].State = mergeCreatorState(steps[shotsIndex].State, stateForShots(shotState.Summary))
 	for _, task := range latestCreatorShotTasks(shotState.Tasks) {
-		if !isActiveShotRegeneration(task.Status) || task.TaskID == "" {
+		taskStatus, publicStatus := creatorTaskStatus(task.Status)
+		if !isActiveShotRegeneration(task.Status) || !publicStatus || task.TaskID == "" {
 			continue
 		}
 		activeTasks = append(activeTasks, model.CreatorTask{
 			ID: task.TaskID, Scope: string(model.CreatorStepShots), ShotID: task.ShotID,
-			Status: task.Status, Label: "正在重新生成镜头",
+			Status: taskStatus, Label: "正在重新生成镜头",
 		})
 	}
 	if shotState.AssemblyDirty {
@@ -492,9 +493,9 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 			steps[index].State = model.CreatorStepNeedsAttention
 		}
 		if project.Status == model.StatusRunning && s.reviews != nil && steps[index].RunID != "" && steps[index].ReviewID != "" {
-			status, statusErr := s.reviews.RegenerationStatus(ctx, steps[index].RunID, steps[index].ReviewID)
-			status = strings.ToUpper(strings.TrimSpace(status))
-			if statusErr == nil && isActiveCreatorRegenerationStatus(status) {
+			durableStatus, statusErr := s.reviews.RegenerationStatus(ctx, steps[index].RunID, steps[index].ReviewID)
+			status, active := creatorTaskStatusForDurableRegeneration(durableStatus)
+			if statusErr == nil && active {
 				steps[index].State = model.CreatorStepGenerating
 				activeTasks = append(activeTasks, model.CreatorTask{
 					ID: steps[index].ReviewID, Scope: string(model.CreatorStepDelivery), Status: status,
@@ -1451,21 +1452,35 @@ func applyArtifact(step *model.CreatorStep, current *artifact.Artifact, state mo
 	step.ReviewID = ""
 }
 
-func isActiveArtifact(current *artifact.Artifact) bool {
-	switch normalizeCreatorStage(current.Status) {
-	case "generating", "running", "processing":
-		return true
+func creatorTaskStatus(status string) (model.CreatorTaskStatus, bool) {
+	switch normalizeCreatorStage(status) {
+	case "generating":
+		return model.CreatorTaskGenerating, true
+	case "running":
+		return model.CreatorTaskRunning, true
+	case "processing":
+		return model.CreatorTaskProcessing, true
+	case "queued":
+		return model.CreatorTaskQueued, true
+	case "dispatching":
+		return model.CreatorTaskDispatching, true
 	default:
-		return false
+		return "", false
 	}
 }
 
-func isActiveCreatorRegenerationStatus(status string) bool {
+func creatorTaskStatusForDurableRegeneration(status string) (model.CreatorTaskStatus, bool) {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
-	case "CREATED", "READY", "RUNNING", "WAITING_LOCAL", "LOCAL_CLAIMED", "LOCAL_RUNNING", "LOCAL_COMPLETED", "RETRYING":
-		return true
+	case "CREATED", "READY", "WAITING_LOCAL":
+		return model.CreatorTaskQueued, true
+	case "LOCAL_CLAIMED":
+		return model.CreatorTaskDispatching, true
+	case "RUNNING", "LOCAL_RUNNING":
+		return model.CreatorTaskRunning, true
+	case "LOCAL_COMPLETED", "RETRYING":
+		return model.CreatorTaskProcessing, true
 	default:
-		return false
+		return "", false
 	}
 }
 

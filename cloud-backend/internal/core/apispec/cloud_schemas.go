@@ -715,7 +715,10 @@ func registerCloudSchemas(b *Builder) {
 	b.Schema("CreatorProcessEvent", creatorProcessEvent)
 	creatorTask := Reflect(videomodel.CreatorTask{})
 	creatorTask.Properties["scope"] = &SchemaRef{Schema: creatorStepID}
-	creatorTask.Properties["status"] = &SchemaRef{Schema: enumSchema("generating", "running", "processing", "queued", "dispatching")}
+	creatorTask.Properties["status"] = &SchemaRef{Schema: enumSchema(
+		string(videomodel.CreatorTaskGenerating), string(videomodel.CreatorTaskRunning), string(videomodel.CreatorTaskProcessing),
+		string(videomodel.CreatorTaskQueued), string(videomodel.CreatorTaskDispatching),
+	)}
 	b.Schema("CreatorTask", creatorTask)
 	b.Schema("ShotSummary", Reflect(videomodel.ShotSummary{}))
 	shotListItem := Reflect(videomodel.ShotListItem{})

@@ -922,7 +922,7 @@ try {
   )
   assert.notEqual(
     logic.creatorPollingSignature({
-      activeTasks: [{ id: 'delivery-review', scope: 'delivery', status: 'RUNNING', label: '正在重新生成交付文件' }],
+      activeTasks: [{ id: 'delivery-review', scope: 'delivery', status: 'running', label: '正在重新生成交付文件' }],
       steps: [{ id: 'delivery', state: 'generating' }],
     }),
     '',
@@ -1420,6 +1420,16 @@ try {
   assert.match(typeSource, /StepRevisionMutationRequest = GeneratedStepRevisionMutationRequest/)
   assert.match(typeSource, /StepRegenerationRequest = GeneratedStepRegenerationRequest/)
   assert.match(typeSource, /StepRegenerationResult = StepRegenerationResponse\['data'\]/)
+  assert.match(
+    generatedSource,
+    /export interface CreatorTask \{[\s\S]*status: 'generating' \| 'running' \| 'processing' \| 'queued' \| 'dispatching';[\s\S]*\}/,
+    'generated CreatorTask status remains a closed creator-facing union',
+  )
+  assert.doesNotMatch(
+    generatedSource.match(/export interface CreatorTask \{[\s\S]*?\n\}/)?.[0] || '',
+    /CREATED|READY|WAITING_LOCAL|LOCAL_CLAIMED|LOCAL_RUNNING|LOCAL_COMPLETED|RETRYING/,
+    'generated CreatorTask must not expose durable node lifecycle values',
+  )
   assert.match(generatedSource, /scope: 'candidate_accept'/)
   assert.match(generatedSource, /scope: 'candidate_restore'/)
   assert.match(generatedSource, /export interface StepRevisionPreviewRequest \{\s+artifactId: string;\s+baseVersion: number;\s+\}/)

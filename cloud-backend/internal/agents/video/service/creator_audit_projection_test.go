@@ -295,8 +295,49 @@ func TestCreatorViewMissingFinalVideoNeverSubstitutesPublishOrExportArtifact(t *
 			break
 		}
 	}
-	if deliveryTask == nil || deliveryTask.ID != "delivery-review" || deliveryTask.Status != "RUNNING" {
+	if deliveryTask == nil || deliveryTask.ID != "delivery-review" || deliveryTask.Status != "running" {
 		t.Fatalf("queued delivery recovery active tasks = %+v, want durable delivery polling task", result.View.ActiveTasks)
+	}
+	for _, test := range []struct {
+		durableStatus string
+		creatorStatus string
+	}{
+		{durableStatus: "CREATED", creatorStatus: "queued"},
+		{durableStatus: "READY", creatorStatus: "queued"},
+		{durableStatus: "RUNNING", creatorStatus: "running"},
+		{durableStatus: "WAITING_LOCAL", creatorStatus: "queued"},
+		{durableStatus: "LOCAL_CLAIMED", creatorStatus: "dispatching"},
+		{durableStatus: "LOCAL_RUNNING", creatorStatus: "running"},
+		{durableStatus: "LOCAL_COMPLETED", creatorStatus: "processing"},
+		{durableStatus: "RETRYING", creatorStatus: "processing"},
+	} {
+		t.Run("projects "+test.durableStatus, func(t *testing.T) {
+			reviews.regenerationStatus = test.durableStatus
+			projected, projectionErr := svc.GetCreationView(context.Background(), "user-1", "vp-complete")
+			if projectionErr != nil {
+				t.Fatalf("GetCreationView() error = %v", projectionErr)
+			}
+			var projectedStatus string
+			for _, task := range projected.ActiveTasks {
+				if task.Scope == string(videoModel.CreatorStepDelivery) {
+					projectedStatus = string(task.Status)
+					break
+				}
+			}
+			if projectedStatus != test.creatorStatus || projected.Steps[5].State != videoModel.CreatorStepGenerating {
+				t.Fatalf("durable status %q projected task status %q and step %q, want %q/generating", test.durableStatus, projectedStatus, projected.Steps[5].State, test.creatorStatus)
+			}
+		})
+	}
+	reviews.regenerationStatus = "UNKNOWN_VENDOR_STATE"
+	unknownView, err := svc.GetCreationView(context.Background(), "user-1", "vp-complete")
+	if err != nil {
+		t.Fatalf("unknown delivery status view error = %v", err)
+	}
+	for _, task := range unknownView.ActiveTasks {
+		if task.Scope == string(videoModel.CreatorStepDelivery) {
+			t.Fatalf("unknown durable status escaped the creator contract: %+v", task)
+		}
 	}
 	reviews.regenerationStatus = "COMPLETED"
 	completedView, err := svc.GetCreationView(context.Background(), "user-1", "vp-complete")

@@ -10,6 +10,7 @@ import (
 
 type CreatorStepID string
 type CreatorStepState string
+type CreatorTaskStatus string
 
 const (
 	CreatorStepRequirements CreatorStepID = "requirements"
@@ -25,6 +26,12 @@ const (
 	CreatorStepConfirmed      CreatorStepState = "confirmed"
 	CreatorStepNeedsAttention CreatorStepState = "needs_attention"
 	CreatorStepFailed         CreatorStepState = "failed"
+
+	CreatorTaskGenerating  CreatorTaskStatus = "generating"
+	CreatorTaskRunning     CreatorTaskStatus = "running"
+	CreatorTaskProcessing  CreatorTaskStatus = "processing"
+	CreatorTaskQueued      CreatorTaskStatus = "queued"
+	CreatorTaskDispatching CreatorTaskStatus = "dispatching"
 )
 
 // CreatorStep is the stable, creator-facing summary of a production step.
@@ -97,11 +104,11 @@ type CreationView struct {
 
 // CreatorTask only exposes durable work that a creator can safely resume after reconnecting.
 type CreatorTask struct {
-	ID     string `json:"id"`
-	Scope  string `json:"scope"`
-	ShotID string `json:"shotId,omitempty"`
-	Status string `json:"status"`
-	Label  string `json:"label"`
+	ID     string            `json:"id"`
+	Scope  string            `json:"scope"`
+	ShotID string            `json:"shotId,omitempty"`
+	Status CreatorTaskStatus `json:"status"`
+	Label  string            `json:"label"`
 }
 
 // ShotPageQuery scopes a creator-facing Shot review list without returning full media payloads.

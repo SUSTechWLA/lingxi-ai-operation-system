@@ -236,7 +236,6 @@ func TestCloudSpec_CreatorResponsesAndFiniteStates(t *testing.T) {
 	}
 
 	assertSchemaEnum(t, spec, "CreatorTask", "scope", []any{"requirements", "direction", "script", "shots", "preview", "delivery"})
-	assertSchemaEnum(t, spec, "CreatorTask", "status", []any{"generating", "running", "processing", "queued", "dispatching"})
 	assertSchemaEnum(t, spec, "ShotListItem", "reviewStatus", []any{"pending", "approved", "rejected", "stale"})
 	assertSchemaEnum(t, spec, "ShotListItem", "generationStatus", []any{"PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale", "queued", "dispatching", "running", "failed", "cancelled"})
 	assertSchemaEnum(t, spec, "ShotListItem", "qaStatus", []any{"PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale"})
@@ -252,6 +251,12 @@ func TestCloudSpec_CreatorResponsesAndFiniteStates(t *testing.T) {
 	if config.Type != "object" || config.AdditionalProperties == nil {
 		t.Fatalf("known VideoProject.config must be a free-form object: %+v", config)
 	}
+}
+
+func TestCloudSpec_CreatorTaskStatusIsClosedAndCreatorFacing(t *testing.T) {
+	assertSchemaEnum(t, BuildCloudSpec(), "CreatorTask", "status", []any{
+		"generating", "running", "processing", "queued", "dispatching",
+	})
 }
 
 func TestCloudSpec_ExactRevisionUnionAndClosedMaterialRequest(t *testing.T) {
