@@ -1282,14 +1282,25 @@ body {
   }
 
   .simple-audio-controls {
-    grid-template-columns: auto minmax(4rem, 1fr) auto auto;
+    grid-template-areas:
+      "play time seek mute"
+      "volume volume rate download";
+    grid-template-columns: auto minmax(4.5rem, auto) minmax(4rem, 1fr) auto;
   }
 
   .simple-video-time,
-  .simple-video-volume,
   .simple-video-shortcuts {
     display: none;
   }
+
+  .simple-video-volume { display: none; }
+  .simple-audio-play { grid-area: play; }
+  .simple-audio-time { display: inline; grid-area: time; }
+  .simple-audio-seek { grid-area: seek; }
+  .simple-audio-mute { grid-area: mute; }
+  .simple-audio-volume { display: block; grid-area: volume; width: 100%; }
+  .simple-audio-rate { grid-area: rate; }
+  .simple-audio-download { grid-area: download; }
 
   .simple-video-center-play {
     width: 3.25rem;

@@ -4,6 +4,7 @@ import type { ArtifactSelection } from '../types'
 import type { TextSelectionDraft } from '../textSelection'
 import { artifactContentNeedsLocalHydration, classifyArtifactPresentation, safeCreatorReviewText } from '../artifactPresentation'
 import { resolveCreatorArtifactMediaUrl } from '../logic'
+import { mediaReviewAfterPlaybackFailure } from '../mediaRange'
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import JsonArtifactViewer from './JsonArtifactViewer'
 import MarkdownArtifactViewer from './MarkdownArtifactViewer'
@@ -26,6 +27,7 @@ interface ArtifactProofingCanvasProps {
   onTextSelectionChange?: (draft: TextSelectionDraft | null) => void
   mediaRangeResetKey?: string | number
   mediaRangeDisabled?: boolean
+  mediaRangePending?: boolean
   onMediaSelectionChange?: (selection: TimeSelection | null) => void
   onMediaRangePendingChange?: (pending: boolean) => void
 }
@@ -44,11 +46,12 @@ export default function ArtifactProofingCanvas({
   onTextSelectionChange,
   mediaRangeResetKey,
   mediaRangeDisabled,
+  mediaRangePending,
   onMediaSelectionChange,
   onMediaRangePendingChange,
 }: ArtifactProofingCanvasProps) {
   const [mediaFailed, setMediaFailed] = useState(false)
-  const [playbackUnavailable, setPlaybackUnavailable] = useState(false)
+  const [playbackAvailable, setPlaybackAvailable] = useState(false)
   const [playbackState, setPlaybackState] = useState<MediaPlaybackState>(EMPTY_PLAYBACK_STATE)
   const [localText, setLocalText] = useState<{ key: string; text?: string; error?: string } | null>(null)
   const artifact = content?.artifact
@@ -67,7 +70,7 @@ export default function ArtifactProofingCanvas({
   useEffect(() => setMediaFailed(false), [artifact?.id, resolvedMediaUrl])
   useEffect(() => {
     setPlaybackState(EMPTY_PLAYBACK_STATE)
-    setPlaybackUnavailable(false)
+    setPlaybackAvailable(false)
   }, [hydrationKey])
 
   useEffect(() => {
@@ -98,6 +101,17 @@ export default function ArtifactProofingCanvas({
   const readableText = safeCreatorReviewText(displayedContent)
   const selectionSource = safeCreatorReviewText(content.reviewText)
   const selectionEnabled = Boolean(textSurfaceRef && onTextSelectionChange)
+  const invalidateMediaReview = () => {
+    const next = mediaReviewAfterPlaybackFailure({
+      playbackAvailable,
+      selection: selection?.kind === 'time' ? selection : null,
+      pending: mediaRangePending ?? false,
+    })
+    setPlaybackAvailable(next.playbackAvailable)
+    onMediaSelectionChange?.(next.selection)
+    onMediaRangePendingChange?.(next.pending)
+  }
+  const markPlaybackReady = () => setPlaybackAvailable(true)
   if (presentation === 'json') {
     return <JsonArtifactViewer
       content={displayedContent}
@@ -150,7 +164,10 @@ export default function ArtifactProofingCanvas({
           src={resolvedMediaUrl}
           title={artifact.name || '视频产物'}
           downloadName={artifact.name}
-          onError={() => setMediaFailed(true)}
+          onError={() => {
+            invalidateMediaReview()
+            setMediaFailed(true)
+          }}
           onPlaybackStateChange={setPlaybackState}
         />
         {onMediaSelectionChange && <MediaRangeControls
@@ -171,14 +188,11 @@ export default function ArtifactProofingCanvas({
           src={resolvedMediaUrl}
           title={artifact.name || '语音产物'}
           downloadName={artifact.name}
-          onError={() => {
-            setPlaybackUnavailable(true)
-            onMediaSelectionChange?.(null)
-            onMediaRangePendingChange?.(false)
-          }}
+          onError={invalidateMediaReview}
+          onReady={markPlaybackReady}
           onPlaybackStateChange={setPlaybackState}
         />
-        {!playbackUnavailable && onMediaSelectionChange && <MediaRangeControls
+        {playbackAvailable && onMediaSelectionChange && <MediaRangeControls
           currentTimeMs={playbackState.currentTimeMs}
           selection={selection?.kind === 'time' ? selection : null}
           resetKey={`${hydrationKey}:${mediaRangeResetKey ?? 0}`}

@@ -25,9 +25,11 @@ export default function MediaRangeControls({
   onPendingChange,
 }: MediaRangeControlsProps) {
   const [draft, setDraft] = useState<MediaRangeDraft>({})
+  const [announcement, setAnnouncement] = useState('')
 
   useEffect(() => {
     setDraft({})
+    setAnnouncement('')
     onPendingChange?.(false)
     return () => onPendingChange?.(false)
   }, [resetKey, onPendingChange])
@@ -37,6 +39,9 @@ export default function MediaRangeControls({
     setDraft(next.draft)
     onSelectionChange(next.selection)
     onPendingChange?.(next.selection === null)
+    setAnnouncement(next.selection
+      ? `已选范围 ${formatMediaTimecode(next.selection.startMs)} 到 ${formatMediaTimecode(next.selection.endMs)}`
+      : `已设置${boundary === 'start' ? '开始' : '结束'}位置 ${formatMediaTimecode(currentTimeMs)}`)
   }
 
   const clear = () => {
@@ -44,6 +49,7 @@ export default function MediaRangeControls({
     setDraft(next.draft)
     onSelectionChange(next.selection)
     onPendingChange?.(false)
+    setAnnouncement('已清除播放范围')
   }
 
   const hasPendingBoundary = draft.startMs !== undefined || draft.endMs !== undefined
@@ -51,7 +57,7 @@ export default function MediaRangeControls({
 
   return (
     <div className="media-range-controls" role="group" aria-label="播放范围">
-      <div className="media-range-summary" aria-live="polite">
+      <div className="media-range-summary">
         {hasRange ? (
           <><span>已选范围</span><strong>{formatMediaTimecode(selection.startMs)} – {formatMediaTimecode(selection.endMs)}</strong></>
         ) : draft.startMs !== undefined ? (
@@ -62,6 +68,7 @@ export default function MediaRangeControls({
           <><span>播放头</span><strong>{formatMediaTimecode(currentTimeMs)}</strong></>
         )}
       </div>
+      <span className="creator-visually-hidden" aria-live="polite" aria-atomic="true">{announcement}</span>
       <div className="media-range-actions">
         <button type="button" className="creator-secondary-button" disabled={disabled} onClick={() => applyBoundary('start')}>从这里开始</button>
         <button type="button" className="creator-secondary-button" disabled={disabled} onClick={() => applyBoundary('end')}>到这里结束</button>

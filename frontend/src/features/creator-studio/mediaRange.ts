@@ -13,6 +13,21 @@ interface MediaRangeState {
   draft: MediaRangeDraft
 }
 
+interface MediaReviewPlaybackState {
+  playbackAvailable: boolean
+  selection: TimeSelection | null
+  pending: boolean
+}
+
+interface MediaTransportState {
+  currentTime: number
+  duration: number
+  volume: number
+  isMuted: boolean
+  playbackRate: number
+  isPlaying: boolean
+}
+
 export function secondsToIntegerMilliseconds(seconds: number): number {
   if (!Number.isFinite(seconds)) return 0
   return Math.max(0, Math.round(seconds * 1000))
@@ -62,4 +77,35 @@ export function formatMediaTimecode(milliseconds: number): string {
   const fraction = normalized % 1000
   const minuteTime = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(fraction).padStart(3, '0')}`
   return hours > 0 ? `${String(hours).padStart(2, '0')}:${minuteTime}` : minuteTime
+}
+
+export function mediaReviewAfterPlaybackFailure(state: MediaReviewPlaybackState): MediaReviewPlaybackState {
+  return {
+    ...state,
+    playbackAvailable: false,
+    selection: null,
+    pending: false,
+  }
+}
+
+export function audioPlaybackFailure(retries: number): { canRetry: boolean; playbackAvailable: false } {
+  return {
+    canRetry: retries < 2,
+    playbackAvailable: false,
+  }
+}
+
+export function resetMediaTransportState(): MediaTransportState {
+  return {
+    currentTime: 0,
+    duration: 0,
+    volume: 1,
+    isMuted: false,
+    playbackRate: 1,
+    isPlaying: false,
+  }
+}
+
+export function creatorRevisionInputsLocked(working: boolean, hasPendingConfirmation: boolean): boolean {
+  return working || hasPendingConfirmation
 }

@@ -33,6 +33,7 @@ import {
   reconcileCreatorEditMode,
 } from '../artifactPresentation'
 import type { CreatorReviewArtifact } from '../creatorReviewArtifacts'
+import { creatorRevisionInputsLocked, type TimeSelection } from '../mediaRange'
 import type { TextSelectionDraft } from '../textSelection'
 import ArtifactProofingCanvas from './ArtifactProofingCanvas'
 import ImageReviewDialog from './ImageReviewDialog'
@@ -91,6 +92,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
   const canDirectEdit = directEditText !== undefined
   const canConfirm = !viewingHistorical && canConfirmCreatorStep(step)
   const canRevise = !viewingHistorical && Boolean(artifactId && baseVersion && step.allowedActions.includes('revise'))
+  const revisionInputsLocked = creatorRevisionInputsLocked(working, pending !== null)
   const versionList = useMemo(() => [...versions].sort((left, right) => right.version - left.version), [versions])
 
   useEffect(() => {
@@ -373,6 +375,17 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     setSelection(current => draft?.selection ?? (current?.kind === 'text' ? null : current))
   }
 
+  const handleMediaSelectionChange = (nextSelection: TimeSelection | null) => {
+    if (revisionInputsLocked) {
+      operationControllerRef.current?.abort()
+      operationControllerRef.current = null
+      setWorking(false)
+      closeImpact()
+    }
+    setTextSelectionDraft(null)
+    setSelection(nextSelection)
+  }
+
   const chooseTextQuickAction = (nextInstruction: string) => {
     if (!textSelectionDraft) return
     setSelection(textSelectionDraft.selection)
@@ -424,17 +437,15 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
               setImageDialogSrc(src)
               setImageDialogOpen(true)
             }}
-            onImagePointerDown={startRectangle}
-            onImagePointerUp={finishRectangle}
-            onImagePointerCancel={() => { selectionStart.current = null }}
+            onImagePointerDown={revisionInputsLocked ? undefined : startRectangle}
+            onImagePointerUp={revisionInputsLocked ? undefined : finishRectangle}
+            onImagePointerCancel={revisionInputsLocked ? undefined : () => { selectionStart.current = null }}
             textSurfaceRef={textSurfaceRef}
-            onTextSelectionChange={handleTextSelectionChange}
+            onTextSelectionChange={revisionInputsLocked ? undefined : handleTextSelectionChange}
             mediaRangeResetKey={`${artifactId || 'none'}:${baseVersion || 0}:${mediaRangeResetVersion}`}
-            mediaRangeDisabled={!canRevise || working}
-            onMediaSelectionChange={nextSelection => {
-              setTextSelectionDraft(null)
-              setSelection(nextSelection)
-            }}
+            mediaRangeDisabled={!canRevise || revisionInputsLocked}
+            mediaRangePending={mediaRangePending}
+            onMediaSelectionChange={handleMediaSelectionChange}
             onMediaRangePendingChange={setMediaRangePending}
           />
           {textSelectionDraft && <TextSelectionAssistant
@@ -447,11 +458,11 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
           {isImage && <p className="artifact-selection-help">在图片上拖拽框选需要调整的区域。</p>}
           {isAudio && <div className="audio-review-quick-actions" aria-label="语音修改快捷操作">
             <span>快捷修改</span>
-            <button type="button" disabled={!canRevise || working} onClick={() => chooseAudioQuickAction('调整这段语音的语气和情绪，使表达更自然。')}>调整语气</button>
-            <button type="button" disabled={!canRevise || working} onClick={() => chooseAudioQuickAction('优化这段语音的语速和节奏，使表达更流畅。')}>优化语速</button>
-            <button type="button" disabled={!canRevise || working} onClick={() => chooseAudioQuickAction('调整这段语音的停顿位置和停顿时长。')}>调整停顿</button>
-            <button type="button" disabled={!canRevise || working} onClick={() => chooseAudioQuickAction('修正这段语音中的发音问题。')}>修正发音</button>
-            <button type="button" disabled={!canRevise || working} onClick={() => chooseAudioQuickAction('重新生成整段语音。', true)}>重新生成整段语音</button>
+            <button type="button" disabled={!canRevise || revisionInputsLocked} onClick={() => chooseAudioQuickAction('调整这段语音的语气和情绪，使表达更自然。')}>调整语气</button>
+            <button type="button" disabled={!canRevise || revisionInputsLocked} onClick={() => chooseAudioQuickAction('优化这段语音的语速和节奏，使表达更流畅。')}>优化语速</button>
+            <button type="button" disabled={!canRevise || revisionInputsLocked} onClick={() => chooseAudioQuickAction('调整这段语音的停顿位置和停顿时长。')}>调整停顿</button>
+            <button type="button" disabled={!canRevise || revisionInputsLocked} onClick={() => chooseAudioQuickAction('修正这段语音中的发音问题。')}>修正发音</button>
+            <button type="button" disabled={!canRevise || revisionInputsLocked} onClick={() => chooseAudioQuickAction('重新生成整段语音。', true)}>重新生成整段语音</button>
           </div>}
           {mediaRangePending && <p className="artifact-selection-help" role="status">已设置一个时间点。请设置另一端，或清除范围后再提交修改。</p>}
           {selection && <p className="artifact-selection-help">已保留本次选择范围，修改时会一并发送。</p>}
@@ -464,12 +475,12 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
 
           {mode === 'instruction' && (
             <label className="artifact-editor-label">修改说明
-              <textarea ref={instructionRef} value={instruction} onChange={event => setInstruction(event.target.value)} placeholder="例如：把开头改得更有悬念" />
+              <textarea ref={instructionRef} value={instruction} disabled={revisionInputsLocked} onChange={event => setInstruction(event.target.value)} placeholder="例如：把开头改得更有悬念" />
             </label>
           )}
           {mode === 'direct' && canDirectEdit && (
             <label className="artifact-editor-label">直接编辑内容
-              <textarea value={directContent} onChange={event => setDirectContent(event.target.value)} />
+              <textarea value={directContent} disabled={revisionInputsLocked} onChange={event => setDirectContent(event.target.value)} />
               <button type="button" className="creator-secondary-button" disabled={!canRevise || working} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>
             </label>
           )}

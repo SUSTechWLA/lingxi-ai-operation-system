@@ -103,6 +103,48 @@ try {
   )
   assert.deepEqual(mediaRange.clearMediaRange(), { selection: null, draft: {} }, 'clearing removes both pending and completed ranges')
   assert.equal(mediaRange.formatMediaTimecode(62_345), '01:02.345', 'range boundaries use readable timecode')
+  const completedMediaFailure = mediaRange.mediaReviewAfterPlaybackFailure({
+    playbackAvailable: true,
+    selection: { kind: 'time', startMs: 1200, endMs: 2800 },
+    pending: false,
+  })
+  assert.deepEqual(completedMediaFailure, {
+    playbackAvailable: false,
+    selection: null,
+    pending: false,
+  }, 'playback failure clears a completed media range')
+  assert.deepEqual(mediaRange.mediaReviewAfterPlaybackFailure({
+    playbackAvailable: true,
+    selection: null,
+    pending: true,
+  }), {
+    playbackAvailable: false,
+    selection: null,
+    pending: false,
+  }, 'playback failure clears a pending media boundary')
+  assert.deepEqual(mediaRange.audioPlaybackFailure(0), {
+    canRetry: true,
+    playbackAvailable: false,
+  }, 'the first retryable audio failure immediately makes playback unavailable')
+  assert.deepEqual(mediaRange.audioPlaybackFailure(1), {
+    canRetry: true,
+    playbackAvailable: false,
+  }, 'the second retryable audio failure remains available')
+  assert.deepEqual(mediaRange.audioPlaybackFailure(2), {
+    canRetry: false,
+    playbackAvailable: false,
+  }, 'terminal audio failure also keeps playback unavailable')
+  assert.deepEqual(mediaRange.resetMediaTransportState(), {
+    currentTime: 0,
+    duration: 0,
+    volume: 1,
+    isMuted: false,
+    playbackRate: 1,
+    isPlaying: false,
+  }, 'retry remounts reset every retained transport value to the media element defaults')
+  assert.equal(mediaRange.creatorRevisionInputsLocked(true, false), true, 'request-bearing inputs lock while impact preview is loading')
+  assert.equal(mediaRange.creatorRevisionInputsLocked(false, true), true, 'request-bearing inputs stay locked while confirmation owns the snapshot')
+  assert.equal(mediaRange.creatorRevisionInputsLocked(false, false), false, 'inputs unlock after impact confirmation closes')
 
   assert.deepEqual(
     textSelection.buildTextSelection('开头正文结尾', 2, 4),
@@ -995,17 +1037,30 @@ try {
   assert.match(proofingSource, /<SimpleAudioPlayer\b/)
   assert.match(
     proofingSource,
-    /<SimpleAudioPlayer[\s\S]*?onError=\{\(\) => \{[\s\S]*?setPlaybackUnavailable\(true\)[\s\S]*?onMediaSelectionChange\?\.\(null\)[\s\S]*?\}\}[\s\S]*?\{!playbackUnavailable && onMediaSelectionChange && <MediaRangeControls/,
-    'terminal audio failure retains its error card but clears and hides stale playhead range controls',
+    /<SimpleAudioPlayer[\s\S]*?onError=\{invalidateMediaReview\}[\s\S]*?onReady=\{markPlaybackReady\}[\s\S]*?\{playbackAvailable && onMediaSelectionChange && <MediaRangeControls/,
+    'every audio failure clears and hides range controls until the remounted media is ready',
   )
+  assert.match(proofingSource, /onError=\{\(\) => \{\s*invalidateMediaReview\(\)\s*setMediaFailed\(true\)\s*\}\}/, 'video failure clears completed and pending ranges before fallback')
+  assert.match(proofingSource, /mediaReviewAfterPlaybackFailure\(/, 'video and audio share executable range invalidation behavior')
   assert.ok((proofingSource.match(/disabled=\{mediaRangeDisabled\}/g) || []).length >= 2, 'video and audio range controls freeze while revision impact is loading')
-  assert.match(reviewSource, /mediaRangeDisabled=\{!canRevise \|\| working\}/, 'historical and busy review surfaces cannot change a media range')
+  assert.match(reviewSource, /const revisionInputsLocked = creatorRevisionInputsLocked\(working, pending !== null\)/, 'one lock covers loading and pending confirmation snapshots')
+  assert.match(reviewSource, /mediaRangeDisabled=\{!canRevise \|\| revisionInputsLocked\}/, 'historical and locked review surfaces cannot change a media range')
   assert.match(reviewSource, /disabled=\{!canRevise \|\| working \|\| mediaRangePending\}/, 'a one-boundary range disables revision submission')
   for (const label of ['调整语气', '优化语速', '调整停顿', '修正发音', '重新生成整段语音']) {
     assert.match(reviewSource, new RegExp(label), `audio review exposes ${label}`)
   }
-  assert.ok((reviewSource.match(/<button type="button" disabled=\{!canRevise \|\| working\}/g) || []).length >= 5, 'audio quick actions freeze with the revision request snapshot')
+  assert.ok((reviewSource.match(/<button type="button" disabled=\{!canRevise \|\| revisionInputsLocked\}/g) || []).length >= 5, 'audio quick actions freeze with the revision request snapshot')
   assert.match(reviewSource, /if \(regenerateFullAudio\) \{\s*setSelection\(null\)\s*setMediaRangePending\(false\)/, 'full audio regeneration clears the time selection')
+  assert.ok((reviewSource.match(/<textarea[\s\S]*?disabled=\{revisionInputsLocked\}/g) || []).length >= 2, 'instruction and direct-content editors lock to the pending request snapshot')
+  assert.match(reviewSource, /onImagePointerDown=\{revisionInputsLocked \? undefined : startRectangle\}/, 'image selection cannot diverge from an in-flight snapshot')
+  assert.match(reviewSource, /onTextSelectionChange=\{revisionInputsLocked \? undefined : handleTextSelectionChange\}/, 'text selection cannot diverge from an in-flight snapshot')
+  assert.match(
+    reviewSource,
+    /const handleMediaSelectionChange = \(nextSelection: TimeSelection \| null\) => \{[\s\S]*?if \(revisionInputsLocked\) \{[\s\S]*?operationControllerRef\.current\?\.abort\(\)[\s\S]*?setWorking\(false\)[\s\S]*?closeImpact\(\)[\s\S]*?onMediaSelectionChange=\{handleMediaSelectionChange\}/,
+    'playback invalidation cancels a locked request snapshot before clearing its visible range',
+  )
+  assert.doesNotMatch(mediaRangeControlsSource, /media-range-summary" aria-live=/, 'the moving playhead is outside every live region')
+  assert.match(mediaRangeControlsSource, /creator-visually-hidden" aria-live="polite"/, 'only explicit range actions are announced')
   assert.match(reviewSource, /aria-modal="true"/)
   assert.match(reviewSource, /cycleFocusIndex/)
   assert.match(reviewSource, /operationControllerRef\.current === controller/)
@@ -1202,14 +1257,22 @@ try {
   assert.match(audioPlayerSource, /\.volume/)
   assert.match(audioPlayerSource, /playbackRate/)
   assert.match(audioPlayerSource, /\bdownload\b/)
-  assert.match(audioPlayerSource, /retries < 2/, 'audio playback recovery is bounded')
   assert.match(audioPlayerSource, /key=\{`\$\{src\}:\$\{retries\}`\}/, 'audio recovery remounts the failed media element')
+  assert.match(audioPlayerSource, /const failure = audioPlaybackFailure\(retries\)[\s\S]*onError\?\.\(\)/, 'every retryable and terminal audio error notifies proofing immediately')
+  assert.match(audioPlayerSource, /resetMediaTransportState\(\)/, 'retry resets every retained transport field')
+  assert.match(audioPlayerSource, /onReady\?\.\(\)/, 'range controls return only after loaded media reports ready')
+  assert.match(audioPlayerSource, /simple-audio-time/, 'audio time has a narrow-layout-specific class')
+  assert.match(audioPlayerSource, /simple-audio-volume/, 'audio volume has a narrow-layout-specific class')
   for (const rate of ['0.75×', '1×', '1.25×', '1.5×', '2×']) {
     assert.match(audioPlayerSource, new RegExp(rate.replace('×', '\\×')), `audio exposes the ${rate} rate`)
   }
   for (const label of ['进度', '音量', '播放速度', '下载音频']) {
     assert.match(audioPlayerSource, new RegExp(`aria-label="${label}"`), `audio exposes the ${label} control`)
   }
+  const compactMediaStyles = creatorStylesSource.match(/@media \(max-width: 700px\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
+  assert.match(compactMediaStyles, /\.simple-audio-time\s*\{[\s\S]*?display:\s*inline/, '390px audio keeps elapsed and total time visible')
+  assert.match(compactMediaStyles, /\.simple-audio-volume\s*\{[\s\S]*?display:\s*block/, '390px audio keeps the labelled volume slider visible')
+  assert.doesNotMatch(compactMediaStyles, /\.simple-video-time,\s*\.simple-video-volume/, 'responsive video hiding no longer removes required audio controls')
 
   console.log('creator studio logic and client contract checks passed')
 } finally {
