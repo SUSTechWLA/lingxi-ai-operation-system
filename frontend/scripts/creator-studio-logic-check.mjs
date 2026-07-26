@@ -1045,7 +1045,7 @@ try {
   assert.ok((proofingSource.match(/disabled=\{mediaRangeDisabled\}/g) || []).length >= 2, 'video and audio range controls freeze while revision impact is loading')
   assert.match(reviewSource, /const revisionInputsLocked = creatorRevisionInputsLocked\(working, pending !== null\)/, 'one lock covers loading and pending confirmation snapshots')
   assert.match(reviewSource, /mediaRangeDisabled=\{!canRevise \|\| revisionInputsLocked\}/, 'historical and locked review surfaces cannot change a media range')
-  assert.match(reviewSource, /disabled=\{!canRevise \|\| working \|\| mediaRangePending\}/, 'a one-boundary range disables revision submission')
+  assert.match(reviewSource, /disabled=\{!canRevise \|\| revisionInputsLocked \|\| mediaRangePending\}/, 'a one-boundary range disables revision submission')
   for (const label of ['调整语气', '优化语速', '调整停顿', '修正发音', '重新生成整段语音']) {
     assert.match(reviewSource, new RegExp(label), `audio review exposes ${label}`)
   }
@@ -1054,6 +1054,20 @@ try {
   assert.ok((reviewSource.match(/<textarea[\s\S]*?disabled=\{revisionInputsLocked\}/g) || []).length >= 2, 'instruction and direct-content editors lock to the pending request snapshot')
   assert.match(reviewSource, /onImagePointerDown=\{revisionInputsLocked \? undefined : startRectangle\}/, 'image selection cannot diverge from an in-flight snapshot')
   assert.match(reviewSource, /onTextSelectionChange=\{revisionInputsLocked \? undefined : handleTextSelectionChange\}/, 'text selection cannot diverge from an in-flight snapshot')
+  assert.match(reviewSource, /<ImageReviewDialog[\s\S]*?revisionInputsLocked=\{revisionInputsLocked\}/, 'the full-screen image review receives the shared loading and confirmation lock')
+  assert.match(reviewSource, /disabled=\{!canRevise \|\| revisionInputsLocked\} onClick=\{\(\) => setMode\('instruction'\)\}/, 'instruction mode cannot replace a pending snapshot')
+  assert.match(reviewSource, /disabled=\{!canRevise \|\| revisionInputsLocked\} onClick=\{\(\) => setMode\('direct'\)\}/, 'direct mode cannot replace a pending snapshot')
+  assert.match(reviewSource, /<textarea value=\{directContent\}[\s\S]*?disabled=\{!canRevise \|\| revisionInputsLocked\}[\s\S]*?previewRevision\(\)/, 'direct preview cannot replace a pending snapshot')
+  assert.match(reviewSource, /artifact-preview-button" disabled=\{!canRevise \|\| revisionInputsLocked \|\| mediaRangePending\}/, 'instruction preview stays locked while confirmation owns the snapshot')
+  assert.match(reviewSource, /disabled=\{!canRevise \|\| revisionInputsLocked\} onClick=\{event => \{ impactTriggerRef\.current = event\.currentTarget; previewRestore\(version\.version\) \}\}>恢复这一版<\/button>/, 'restore cannot open a second snapshot while revision inputs are locked')
+  assert.match(reviewSource, /!canRevise \|\| revisionInputsLocked \|\| !file\.type\.startsWith\('image\/'\)/, 'direct replacement calls cannot bypass the shared snapshot lock')
+  const replacementSelectionSnapshot = reviewSource.indexOf("const replacementSelection = selection?.kind === 'rect' ? selection : null")
+  assert.ok(
+    replacementSelectionSnapshot >= 0 &&
+    replacementSelectionSnapshot < reviewSource.indexOf('await uploadLocalArtifactFile', replacementSelectionSnapshot) &&
+    reviewSource.indexOf('selection: replacementSelection', replacementSelectionSnapshot) > replacementSelectionSnapshot,
+    'image replacement captures its immutable rectangle before upload and impact preview begin',
+  )
   assert.match(
     reviewSource,
     /const handleMediaSelectionChange = \(nextSelection: TimeSelection \| null\) => \{[\s\S]*?if \(revisionInputsLocked\) \{[\s\S]*?operationControllerRef\.current\?\.abort\(\)[\s\S]*?setWorking\(false\)[\s\S]*?closeImpact\(\)[\s\S]*?onMediaSelectionChange=\{handleMediaSelectionChange\}/,
@@ -1150,6 +1164,18 @@ try {
     assert.match(imageReviewDialogSource, sourcePattern, `image review dialog contract requires ${sourcePattern}`)
   }
   assert.match(imageReviewDialogSource, /accept="image\/\*"/, 'replacement picker accepts image files only')
+  assert.match(imageReviewDialogSource, /revisionInputsLocked: boolean/, 'image review accepts the shared request snapshot lock')
+  assert.match(imageReviewDialogSource, /const busy = revisionInputsLocked \|\| replacementWorking/, 'image review combines parent snapshot and local replacement locks')
+  assert.match(imageReviewDialogSource, /const startPointer = [\s\S]*?\{\s*if \(busy\) return/, 'locked image review ignores new pointer selections')
+  assert.match(imageReviewDialogSource, /const movePointer = [\s\S]*?\{\s*if \(busy\) return/, 'locked image review cannot move an existing rectangle')
+  assert.match(imageReviewDialogSource, /const chooseQuickAction = [\s\S]*?\{\s*if \(busy\) return/, 'locked image review ignores quick-action requests')
+  assert.match(imageReviewDialogSource, /const chooseReplacement = [\s\S]*?if \(busy \|\| !file\) return/, 'locked image review ignores replacement picker completion')
+  assert.match(imageReviewDialogSource, /aria-pressed=\{selectionMode\}[\s\S]*?disabled=\{busy\}/, 'locked image review disables rectangle selection mode')
+  assert.match(imageReviewDialogSource, /selection && <button type="button" disabled=\{busy\}[\s\S]*?>清除选区<\/button>/, 'locked image review cannot clear the captured rectangle')
+  assert.match(imageReviewDialogSource, /<textarea\s+value=\{instruction\}\s+disabled=\{busy\}/, 'locked image review disables its request instruction')
+  assert.match(imageReviewDialogSource, /type="file" accept="image\/\*" tabIndex=\{-1\} disabled=\{busy\}/, 'locked image review disables the replacement picker itself')
+  assert.ok((imageReviewDialogSource.match(/disabled=\{busy\}/g) || []).length >= 6, 'image quick actions, selection controls, replacement, and keep all share the busy lock')
+  assert.match(imageReviewDialogSource, /disabled=\{busy \|\| !instruction\.trim\(\)\}/, 'image revision preview shares the busy lock')
   assert.doesNotMatch(
     imageReviewDialogSource,
     /if\s*\(!busy\)\s*onClose\(\)/,

@@ -222,9 +222,10 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
   }
 
   const prepareImageReplacement = async (file: File) => {
-    if (!artifactId || !baseVersion || !canRevise || !file.type.startsWith('image/')) {
+    if (!artifactId || !baseVersion || !canRevise || revisionInputsLocked || !file.type.startsWith('image/')) {
       throw new Error('invalid image replacement')
     }
+    const replacementSelection = selection?.kind === 'rect' ? selection : null
     operationControllerRef.current?.abort()
     const controller = new AbortController()
     operationControllerRef.current = controller
@@ -268,7 +269,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
         },
         reviewId: step.reviewId,
         runId: step.runId,
-        selection: selection?.kind === 'rect' ? selection : null,
+        selection: replacementSelection,
         confirmedAffectedShotIds: [],
       }
       const impact = await previewStepRevision(projectId, step.id, { artifactId, baseVersion }, controller.signal)
@@ -469,8 +470,8 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
 
           <div className="artifact-actions">
             <button type="button" className="creator-primary-button" disabled={!canConfirm || working} onClick={handleConfirm}>确认并继续</button>
-            <button type="button" className="creator-secondary-button" disabled={!canRevise || working} onClick={() => setMode('instruction')}>告诉 AI 怎么改</button>
-            {canDirectEdit && <button type="button" className="creator-secondary-button" disabled={!canRevise || working} onClick={() => setMode('direct')}>直接编辑</button>}
+            <button type="button" className="creator-secondary-button" disabled={!canRevise || revisionInputsLocked} onClick={() => setMode('instruction')}>告诉 AI 怎么改</button>
+            {canDirectEdit && <button type="button" className="creator-secondary-button" disabled={!canRevise || revisionInputsLocked} onClick={() => setMode('direct')}>直接编辑</button>}
           </div>
 
           {mode === 'instruction' && (
@@ -481,10 +482,10 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
           {mode === 'direct' && canDirectEdit && (
             <label className="artifact-editor-label">直接编辑内容
               <textarea value={directContent} disabled={revisionInputsLocked} onChange={event => setDirectContent(event.target.value)} />
-              <button type="button" className="creator-secondary-button" disabled={!canRevise || working} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>
+              <button type="button" className="creator-secondary-button" disabled={!canRevise || revisionInputsLocked} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>
             </label>
           )}
-          {mode === 'instruction' && <button type="button" className="creator-secondary-button artifact-preview-button" disabled={!canRevise || working || mediaRangePending} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>}
+          {mode === 'instruction' && <button type="button" className="creator-secondary-button artifact-preview-button" disabled={!canRevise || revisionInputsLocked || mediaRangePending} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>}
 
           {versionList.length > 1 && <details className="artifact-history">
             <summary>查看版本</summary>
@@ -492,7 +493,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
               {versionList.map(version => (
                 <li key={`${version.artifactId}-${version.version}`}>
                   <span>版本 {version.version}{version.isCurrent ? '（当前）' : ''}</span>
-                  {!version.isCurrent && <button type="button" className="creator-text-button" disabled={!canRevise || working} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRestore(version.version) }}>恢复这一版</button>}
+                  {!version.isCurrent && <button type="button" className="creator-text-button" disabled={!canRevise || revisionInputsLocked} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRestore(version.version) }}>恢复这一版</button>}
                 </li>
               ))}
             </ul>
@@ -511,7 +512,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
         alt={content?.artifact.name || artifact?.reviewLabel || '当前图片内容'}
         selection={selection?.kind === 'rect' ? selection : null}
         instruction={instruction}
-        working={working}
+        revisionInputsLocked={revisionInputsLocked}
         onSelectionChange={setSelection}
         onInstructionChange={setInstruction}
         onPrepareRevision={prepareImageRevision}

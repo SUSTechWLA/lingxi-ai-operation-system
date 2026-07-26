@@ -22,7 +22,7 @@ interface ImageReviewDialogProps {
   alt: string
   selection: RectSelection | null
   instruction: string
-  working: boolean
+  revisionInputsLocked: boolean
   onSelectionChange: (selection: RectSelection | null) => void
   onInstructionChange: (instruction: string) => void
   onPrepareRevision: (instruction: string) => void
@@ -50,7 +50,7 @@ export default function ImageReviewDialog({
   alt,
   selection,
   instruction,
-  working,
+  revisionInputsLocked,
   onSelectionChange,
   onInstructionChange,
   onPrepareRevision,
@@ -73,7 +73,7 @@ export default function ImageReviewDialog({
   const triggerRef = useRef<HTMLElement | null>(null)
   const selectionStartRef = useRef<{ x: number; y: number } | null>(null)
   const panStartRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
-  const busy = working || replacementWorking
+  const busy = revisionInputsLocked || replacementWorking
 
   useEffect(() => {
     if (!open) return () => undefined
@@ -86,6 +86,12 @@ export default function ImageReviewDialog({
       window.requestAnimationFrame(() => trigger?.focus())
     }
   }, [open])
+
+  useEffect(() => {
+    if (!busy) return
+    selectionStartRef.current = null
+    panStartRef.current = null
+  }, [busy])
 
   if (!open) return null
 
@@ -123,6 +129,7 @@ export default function ImageReviewDialog({
   }
 
   const startPointer = (event: PointerEvent<HTMLDivElement>) => {
+    if (busy) return
     if (selectionMode) {
       const point = normalizedPoint(event)
       if (!point) return
@@ -141,6 +148,7 @@ export default function ImageReviewDialog({
   }
 
   const movePointer = (event: PointerEvent<HTMLDivElement>) => {
+    if (busy) return
     if (selectionMode && selectionStartRef.current) {
       const point = normalizedPoint(event)
       if (!point) return
@@ -170,6 +178,7 @@ export default function ImageReviewDialog({
   }
 
   const chooseQuickAction = (action: (typeof quickActions)[number]) => {
+    if (busy) return
     if ('clearSelection' in action && action.clearSelection) onSelectionChange(null)
     onInstructionChange(action.instruction)
     onPrepareRevision(action.instruction)
@@ -178,7 +187,7 @@ export default function ImageReviewDialog({
   const chooseReplacement = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = ''
-    if (!file) return
+    if (busy || !file) return
     if (!file.type.startsWith('image/')) {
       setReplacementError('请选择图片文件后重试。')
       return
@@ -237,12 +246,13 @@ export default function ImageReviewDialog({
           <button
             type="button"
             aria-pressed={selectionMode}
+            disabled={busy}
             className={selectionMode ? 'is-active' : ''}
             onClick={() => setSelectionMode(value => !value)}
           >
             {selectionMode ? '退出框选' : '框选局部'}
           </button>
-          {selection && <button type="button" onClick={() => onSelectionChange(null)}>清除选区</button>}
+          {selection && <button type="button" disabled={busy} onClick={() => onSelectionChange(null)}>清除选区</button>}
         </div>
 
         <div
@@ -296,6 +306,7 @@ export default function ImageReviewDialog({
           <label>告诉 AI 怎么改
             <textarea
               value={instruction}
+              disabled={busy}
               onChange={event => onInstructionChange(event.target.value)}
               placeholder="例如：让主体更突出，背景光线更柔和"
             />
@@ -309,7 +320,7 @@ export default function ImageReviewDialog({
             >
               预览修改影响
             </button>
-            <input ref={fileInputRef} className="creator-visually-hidden" type="file" accept="image/*" tabIndex={-1} onChange={chooseReplacement} />
+            <input ref={fileInputRef} className="creator-visually-hidden" type="file" accept="image/*" tabIndex={-1} disabled={busy} onChange={chooseReplacement} />
             <button type="button" className="creator-secondary-button" disabled={busy} onClick={() => fileInputRef.current?.click()}>
               替换图片
             </button>
