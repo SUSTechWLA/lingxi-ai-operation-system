@@ -81,6 +81,7 @@ export default function PreviewDeliveryPanel({ projectId, step, content, artifac
     mediaUrl,
     mediaState,
   })
+  const checklistConfirmed = isDelivery ? finalVideoReady : step.state === 'confirmed'
   const confirmedFinal = presentation === 'video'
     ? step.state === 'confirmed' && finalVideoReady
     : step.state === 'confirmed'
@@ -199,8 +200,8 @@ export default function PreviewDeliveryPanel({ projectId, step, content, artifac
 
       <section className="preview-delivery-checklist" aria-label="成片检查">
         <h3>成片检查</h3>
-        <p><span aria-hidden="true">{finalVideoReady ? '✓' : '○'}</span> 字幕是否易读、时间是否准确</p>
-        <p><span aria-hidden="true">{finalVideoReady ? '✓' : '○'}</span> 旁白、音乐和画面衔接是否自然</p>
+        <p><span aria-hidden="true">{checklistConfirmed ? '✓' : '○'}</span> 字幕是否易读、时间是否准确</p>
+        <p><span aria-hidden="true">{checklistConfirmed ? '✓' : '○'}</span> 旁白、音乐和画面衔接是否自然</p>
       </section>
 
       {isDelivery && (finalVideoReady ? <section className="preview-delivery-package">

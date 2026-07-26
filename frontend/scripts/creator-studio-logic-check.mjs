@@ -1764,8 +1764,13 @@ try {
   )
   assert.match(
     previewSource,
-    /\{finalVideoReady \? '✓' : '○'\}/,
-    'the delivery checklist cannot show final green checks before final QA and playable media are both ready',
+    /const checklistConfirmed = isDelivery \? finalVideoReady : step\.state === 'confirmed'/,
+    'preview steps keep their confirmed checklist state while delivery remains final-QA and playable-media gated',
+  )
+  assert.equal(
+    (previewSource.match(/\{checklistConfirmed \? '✓' : '○'\}/g) || []).length,
+    2,
+    'both checklist rows use the preview-or-delivery-specific confirmation state',
   )
   assert.match(
     previewSource,
