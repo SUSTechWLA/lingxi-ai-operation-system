@@ -279,11 +279,11 @@ try {
   )
   assert.deepEqual(
     textSelection.rebaseTextSelection(
-      '{"detailedScript":"开头\\n正\\\"文结尾","script":"开头\\n正\\\"文结尾"}',
+      '{"detailedScript":"开头\\n正\\"文结尾","script":"开头\\n正\\"文结尾"}',
       '开头\n正"文结尾',
       { kind: 'text', start: 2, end: 6, text: '\n正"文' },
     ),
-    { kind: 'text', start: 21, end: 27, text: '\\n正\\\"文' },
+    { kind: 'text', start: 21, end: 27, text: '\\n正\\"文' },
     'escaped projected text maps to the deterministic detailedScript token in the immutable backend source',
   )
   assert.equal(

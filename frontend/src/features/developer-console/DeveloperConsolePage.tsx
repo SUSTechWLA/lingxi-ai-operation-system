@@ -384,15 +384,15 @@ function DiagnosticsContent({
   return (
     <div className="space-y-5 px-5 py-6">
       {selectedRunFailed ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3" role="alert">
-          <p className="m-0 font-bold text-red-800">所选运行已失败</p>
-          <p className="mb-0 mt-1 text-sm text-red-700">已保留可用摘要与证据，供进一步定位失败原因。</p>
+        <div className="rounded-lg border border-danger-line bg-danger-soft px-4 py-3" role="alert">
+          <p className="m-0 font-bold text-danger-ink">所选运行已失败</p>
+          <p className="mb-0 mt-1 text-sm text-danger-ink">已保留可用摘要与证据，供进一步定位失败原因。</p>
         </div>
       ) : null}
       {partialSections.length > 0 ? (
-        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3" role="status">
-          <p className="m-0 font-bold text-amber-900">部分诊断数据可用</p>
-          <p className="mb-0 mt-1 text-sm text-amber-800">
+        <div className="rounded-lg border border-warning-line bg-warning-soft px-4 py-3" role="status">
+          <p className="m-0 font-bold text-warning-ink">部分诊断数据可用</p>
+          <p className="mb-0 mt-1 text-sm text-warning-ink">
             暂时无法读取：{partialSections.map((section) => failedSectionLabel[section]).join('、')}。已加载的运行摘要保持可见。
           </p>
         </div>

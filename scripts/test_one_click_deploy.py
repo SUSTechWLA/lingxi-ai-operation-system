@@ -11,6 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "one-click-deploy.sh"
+DESKTOP_BUILD_SCRIPT = ROOT / "scripts" / "build-local-desktop.sh"
 COMPOSE = ROOT / "cloud-backend" / "docker-compose.yml"
 DOCKERIGNORE = ROOT / "cloud-backend" / ".dockerignore"
 DOCKERFILE = ROOT / "cloud-backend" / "Dockerfile"
@@ -99,6 +100,13 @@ class OneClickDeployContractTest(unittest.TestCase):
         self.assertIn("!build/tangying-ai-os", source)
         image = DOCKERFILE.read_text(encoding="utf-8")
         self.assertIn("COPY video-pipelines ./video-pipelines", image)
+
+    def test_desktop_build_uses_a_repo_writable_go_cache_by_default(self) -> None:
+        source = DESKTOP_BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('GOCACHE="${GOCACHE:-$ROOT_DIR/.run/go-build-cache}"', source)
+        self.assertIn('export GOCACHE', source)
+        self.assertIn('ELECTRON_BUILDER_CACHE="${ELECTRON_BUILDER_CACHE:-$ROOT_DIR/.run/electron-builder-cache}"', source)
+        self.assertIn('export ELECTRON_BUILDER_CACHE', source)
 
 
 if __name__ == "__main__":

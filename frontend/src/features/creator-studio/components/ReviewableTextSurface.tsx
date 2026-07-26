@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- selectionFromDomRange is a DOM-bound testable helper colocated with its only component consumer. */
 import type { RefObject } from 'react'
 import { buildTextSelectionFromLengths, type TextSelectionDraft } from '../textSelection'
 
