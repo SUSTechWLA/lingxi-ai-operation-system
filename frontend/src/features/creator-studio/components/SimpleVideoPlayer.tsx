@@ -1,7 +1,11 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react'
+import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import {
+  canApplyCreatorMediaProbe,
   creatorMediaStateAfterBrowserEvent,
   creatorMediaStateAfterHttpProbe,
+  creatorMediaStateAfterMediaError,
+  isCreatorLocalMediaUrl,
   type CreatorMediaState,
 } from '../logic'
 import { secondsToIntegerMilliseconds } from '../mediaRange'
@@ -33,6 +37,14 @@ export default function SimpleVideoPlayer({
   const videoRef = useRef<HTMLVideoElement>(null)
   const onErrorRef = useRef(onError)
   const onMediaStateChangeRef = useRef(onMediaStateChange)
+  const errorProbeControllerRef = useRef<AbortController | null>(null)
+  const mediaSourceRef = useRef(src)
+  const probeTokenRef = useRef(0)
+  const localMediaSource = isCreatorLocalMediaUrl(src, getLocalAgentBaseUrl())
+  if (mediaSourceRef.current !== src) {
+    mediaSourceRef.current = src
+    probeTokenRef.current += 1
+  }
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -43,9 +55,9 @@ export default function SimpleVideoPlayer({
     src: string
     state: CreatorMediaState
     httpProbeSucceeded: boolean
-  }>({ src, state: 'loading', httpProbeSucceeded: false })
+  }>({ src, state: 'loading', httpProbeSucceeded: !localMediaSource })
   const mediaState = mediaStatus.src === src ? mediaStatus.state : 'loading'
-  const httpProbeSucceeded = mediaStatus.src === src && mediaStatus.httpProbeSucceeded
+  const httpProbeSucceeded = mediaStatus.src === src ? mediaStatus.httpProbeSucceeded : !localMediaSource
 
   useEffect(() => {
     onErrorRef.current = onError
@@ -56,19 +68,27 @@ export default function SimpleVideoPlayer({
     setIsPlaying(false)
     setCurrentTime(0)
     setDuration(0)
-    setMediaStatus({ src, state: 'loading', httpProbeSucceeded: false })
+    errorProbeControllerRef.current?.abort()
+    setMediaStatus({ src, state: 'loading', httpProbeSucceeded: !localMediaSource })
+    if (!localMediaSource) return () => errorProbeControllerRef.current?.abort()
+
     const controller = new AbortController()
+    const probeToken = probeTokenRef.current + 1
+    probeTokenRef.current = probeToken
     void fetch(src, { method: 'HEAD', signal: controller.signal }).then(response => {
-      if (controller.signal.aborted) return
+      if (!canApplyCreatorMediaProbe(probeToken, probeTokenRef.current, src, mediaSourceRef.current, controller.signal.aborted)) return
       const nextState = creatorMediaStateAfterHttpProbe(response.status)
       setMediaStatus({ src, state: nextState, httpProbeSucceeded: nextState === 'loading' })
     }).catch(() => {
-      if (!controller.signal.aborted) {
+      if (canApplyCreatorMediaProbe(probeToken, probeTokenRef.current, src, mediaSourceRef.current, controller.signal.aborted)) {
         setMediaStatus({ src, state: creatorMediaStateAfterHttpProbe(undefined), httpProbeSucceeded: false })
       }
     })
-    return () => controller.abort()
-  }, [src])
+    return () => {
+      controller.abort()
+      errorProbeControllerRef.current?.abort()
+    }
+  }, [localMediaSource, src])
 
   useEffect(() => {
     onMediaStateChangeRef.current?.(mediaState)
@@ -152,9 +172,39 @@ export default function SimpleVideoPlayer({
     }
   }
 
-  const handleError = () => {
+  const handleError = (event: SyntheticEvent<HTMLVideoElement>) => {
     setIsPlaying(false)
-    setMediaStatus({ src, state: creatorMediaStateAfterBrowserEvent('error', true), httpProbeSucceeded: true })
+    const mediaErrorCode = event.currentTarget.error?.code
+    if (!localMediaSource) {
+      setMediaStatus({
+        src,
+        state: creatorMediaStateAfterMediaError(mediaErrorCode, undefined, false),
+        httpProbeSucceeded: true,
+      })
+      return
+    }
+
+    errorProbeControllerRef.current?.abort()
+    const controller = new AbortController()
+    errorProbeControllerRef.current = controller
+    const probeToken = probeTokenRef.current + 1
+    probeTokenRef.current = probeToken
+    setMediaStatus({ src, state: 'loading', httpProbeSucceeded: false })
+    void fetch(src, { method: 'HEAD', signal: controller.signal }).then(response => {
+      if (!canApplyCreatorMediaProbe(probeToken, probeTokenRef.current, src, mediaSourceRef.current, controller.signal.aborted)) return
+      setMediaStatus({
+        src,
+        state: creatorMediaStateAfterMediaError(mediaErrorCode, response.status, true),
+        httpProbeSucceeded: response.ok,
+      })
+    }).catch(() => {
+      if (!canApplyCreatorMediaProbe(probeToken, probeTokenRef.current, src, mediaSourceRef.current, controller.signal.aborted)) return
+      setMediaStatus({
+        src,
+        state: creatorMediaStateAfterMediaError(mediaErrorCode, undefined, true),
+        httpProbeSucceeded: false,
+      })
+    })
   }
 
   if (!httpProbeSucceeded && mediaState === 'loading') {
@@ -202,7 +252,7 @@ export default function SimpleVideoPlayer({
           onClick={togglePlayback}
           onLoadedMetadata={(event) => {
             setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)
-            setMediaStatus({ src, state: creatorMediaStateAfterBrowserEvent('loadedmetadata', true), httpProbeSucceeded: true })
+            setMediaStatus({ src, state: creatorMediaStateAfterBrowserEvent('loadedmetadata'), httpProbeSucceeded: true })
           }}
           onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
           onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}

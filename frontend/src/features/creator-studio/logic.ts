@@ -173,10 +173,44 @@ export function creatorMediaStateAfterHttpProbe(status: number | undefined): Cre
 
 export function creatorMediaStateAfterBrowserEvent(
 	event: 'loadedmetadata' | 'error',
-	httpProbeSucceeded: boolean,
 ): CreatorMediaState {
 	if (event === 'loadedmetadata') return 'playable'
-	return httpProbeSucceeded ? 'unsupported' : 'service_unavailable'
+	return 'unsupported'
+}
+
+export function creatorMediaStateAfterMediaError(
+	mediaErrorCode: number | undefined,
+	deliveryStatus: number | undefined,
+	localSource: boolean,
+): CreatorMediaState {
+	if (!localSource) return 'unsupported'
+	if (deliveryStatus === 404) return 'missing'
+	if (deliveryStatus === undefined || deliveryStatus < 200 || deliveryStatus >= 300) return 'service_unavailable'
+	return mediaErrorCode === 3 || mediaErrorCode === 4 ? 'unsupported' : 'service_unavailable'
+}
+
+export function isCreatorLocalMediaUrl(src: string, localAgentBaseUrl: string): boolean {
+	try {
+		const localAgent = new URL(localAgentBaseUrl)
+		const source = new URL(src, localAgent)
+		return (source.protocol === 'http:' || source.protocol === 'https:') &&
+			source.origin === localAgent.origin &&
+			source.username === '' &&
+			source.password === '' &&
+			source.pathname === '/api/local/media'
+	} catch {
+		return false
+	}
+}
+
+export function canApplyCreatorMediaProbe(
+	probeToken: number,
+	latestProbeToken: number,
+	probeSrc: string,
+	currentSrc: string,
+	aborted: boolean,
+): boolean {
+	return !aborted && probeToken === latestProbeToken && probeSrc === currentSrc
 }
 
 export function creatorStartIdempotencyKey(projectId: string): string {

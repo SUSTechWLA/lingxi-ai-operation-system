@@ -620,13 +620,15 @@ func (s *Server) handleLocalProjectMedia(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid project media reference")
 		return
 	}
-	file, err := os.Open(media.path)
+	root, err := os.OpenRoot(media.rootPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			writeError(w, http.StatusNotFound, "project media not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "project media unavailable")
+		writeError(w, http.StatusNotFound, "project media not found")
+		return
+	}
+	defer root.Close()
+	file, err := root.Open(media.relativePath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "project media not found")
 		return
 	}
 	defer file.Close()
@@ -649,22 +651,32 @@ func (s *Server) handleLocalProjectMedia(w http.ResponseWriter, r *http.Request)
 }
 
 type resolvedLocalProjectMedia struct {
-	path     string
-	name     string
-	mimeType string
+	rootPath     string
+	relativePath string
+	name         string
+	mimeType     string
 }
 
 func (s *Server) resolveLocalProjectMedia(projectID, storageRef, absolutePath string) (resolvedLocalProjectMedia, error) {
 	if !isSafePathSegment(projectID) || (storageRef == "") == (absolutePath == "") {
 		return resolvedLocalProjectMedia{}, errors.New("exactly one media reference is required")
 	}
-	projectRoot := filepath.Clean(filepath.Join(s.paths.ProjectDir, projectID))
+	projectBase := filepath.Clean(s.paths.ProjectDir)
+	projectRoot := filepath.Join(projectBase, projectID)
 	if absolutePath != "" {
 		requestedPath := filepath.Clean(absolutePath)
 		if !filepath.IsAbs(requestedPath) || !pathWithinRoot(projectRoot, requestedPath) {
 			return resolvedLocalProjectMedia{}, errors.New("media path is outside project")
 		}
-		return resolvedLocalProjectMedia{path: requestedPath, name: filepath.Base(requestedPath)}, nil
+		relativePath, err := filepath.Rel(projectBase, requestedPath)
+		if err != nil {
+			return resolvedLocalProjectMedia{}, errors.New("invalid project media path")
+		}
+		return resolvedLocalProjectMedia{
+			rootPath:     projectBase,
+			relativePath: relativePath,
+			name:         filepath.Base(requestedPath),
+		}, nil
 	}
 
 	ref, err := url.Parse(storageRef)
@@ -687,18 +699,29 @@ func (s *Server) resolveLocalProjectMedia(projectID, storageRef, absolutePath st
 		if len(segments) < 3 {
 			return resolvedLocalProjectMedia{}, errors.New("artifact id is required")
 		}
-		contentPath, metadataPath := s.localArtifactPaths(projectID, segments[2])
+		artifactRoot := filepath.Clean(s.paths.ArtifactDir)
+		contentPath := filepath.Join(projectID, segments[2], "content")
+		metadataPath := filepath.Join(projectID, segments[2], "metadata.json")
 		return resolvedLocalProjectMedia{
-			path:     contentPath,
-			name:     segments[len(segments)-1],
-			mimeType: localArtifactMimeType(metadataPath),
+			rootPath:     artifactRoot,
+			relativePath: contentPath,
+			name:         segments[len(segments)-1],
+			mimeType:     localArtifactMimeType(artifactRoot, metadataPath),
 		}, nil
 	}
 	requestedPath := filepath.Join(append([]string{projectRoot}, segments[1:]...)...)
 	if !pathWithinRoot(projectRoot, requestedPath) {
 		return resolvedLocalProjectMedia{}, errors.New("media path is outside project")
 	}
-	return resolvedLocalProjectMedia{path: requestedPath, name: filepath.Base(requestedPath)}, nil
+	relativePath, err := filepath.Rel(projectBase, requestedPath)
+	if err != nil {
+		return resolvedLocalProjectMedia{}, errors.New("invalid project media path")
+	}
+	return resolvedLocalProjectMedia{
+		rootPath:     projectBase,
+		relativePath: relativePath,
+		name:         filepath.Base(requestedPath),
+	}, nil
 }
 
 func pathWithinRoot(root, path string) bool {
@@ -706,9 +729,14 @@ func pathWithinRoot(root, path string) bool {
 	return err == nil && relativePath != ".." && !strings.HasPrefix(relativePath, ".."+string(filepath.Separator))
 }
 
-func localArtifactMimeType(metadataPath string) string {
+func localArtifactMimeType(rootPath, metadataPath string) string {
 	metadata := map[string]interface{}{}
-	data, err := os.ReadFile(metadataPath)
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return ""
+	}
+	defer root.Close()
+	data, err := root.ReadFile(metadataPath)
 	if err != nil || json.Unmarshal(data, &metadata) != nil {
 		return ""
 	}

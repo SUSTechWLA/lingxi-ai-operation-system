@@ -160,6 +160,73 @@ func TestLocalProjectMediaResolvesCanonicalArtifactStorageRef(t *testing.T) {
 	}
 }
 
+func TestLocalProjectMediaRejectsSymlinkEscapesAndAmbiguousReferences(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	outsidePath := filepath.Join(root, "outside-secret.mp4")
+	if err := os.WriteFile(outsidePath, []byte("outside-secret"), 0o644); err != nil {
+		t.Fatalf("write outside media: %v", err)
+	}
+
+	renderPath := filepath.Join(root, "projects", "vp-1", "renders", "final.mp4")
+	if err := os.MkdirAll(filepath.Dir(renderPath), 0o755); err != nil {
+		t.Fatalf("create render dir: %v", err)
+	}
+	if err := os.Symlink(outsidePath, renderPath); err != nil {
+		t.Fatalf("create render symlink: %v", err)
+	}
+	renderRef := "local://projects/vp-1/renders/final.mp4"
+	req := httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(renderRef), nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	assertRejectedLocalMediaDoesNotLeak(t, rec, outsidePath)
+
+	artifactDir := filepath.Join(root, "artifacts", "vp-1", "video-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	if err := os.Symlink(outsidePath, filepath.Join(artifactDir, "content")); err != nil {
+		t.Fatalf("create artifact content symlink: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "metadata.json"), []byte(`{"mimeType":"video/mp4"}`), 0o644); err != nil {
+		t.Fatalf("write artifact metadata: %v", err)
+	}
+	artifactRef := "local://projects/vp-1/artifacts/video-1/hash/final.mp4"
+	req = httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(artifactRef), nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	assertRejectedLocalMediaDoesNotLeak(t, rec, outsidePath)
+
+	encodedTraversalRef := "local://projects/vp-1/renders/%2e%2e/outside-secret.mp4"
+	req = httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(encodedTraversalRef), nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("encoded traversal status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(
+		http.MethodGet,
+		"/api/local/media?projectId=vp-1&path="+url.QueryEscape(renderPath)+"&storageRef="+url.QueryEscape(renderRef),
+		nil,
+	)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("simultaneous reference status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func assertRejectedLocalMediaDoesNotLeak(t *testing.T, rec *httptest.ResponseRecorder, outsidePath string) {
+	t.Helper()
+	if rec.Code == http.StatusOK {
+		t.Fatalf("symlink escape unexpectedly served outside media: %q", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), outsidePath) || strings.Contains(rec.Body.String(), "outside-secret") {
+		t.Fatalf("rejected media response leaked outside target: %s", rec.Body.String())
+	}
+}
+
 func TestLocalArtifactStoreSupportsBinaryPayloads(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DataDir: root})
