@@ -203,7 +203,10 @@ func TestCreatorViewMapsMixedArtifactStatesWithFixedPriority(t *testing.T) {
 			{ID: "direction-review", StageName: "proposal", Status: "pending"},
 			{ID: "script-generating", StageName: "script", Status: "generating"},
 			{ID: "preview-failed", StageName: "preview", Status: "failed"},
-			{ID: "package-approved", StageName: "package", Status: "valid", HumanApproved: true},
+			{
+				ID: "delivery-approved", ProjectID: "vp-1", StageName: "delivery", UnitID: "final_video",
+				Kind: artifact.KindVideo, Name: "final.mp4", Status: "valid", HumanApproved: true, IsCurrent: true,
+			},
 		}},
 	).GetCreationView(context.Background(), "user-1", "vp-1")
 	if err != nil {

@@ -388,6 +388,13 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 		if !ok {
 			continue
 		}
+		// Delivery authority belongs exclusively to the selected final video.
+		// Publish copy, export bundles, and other delivery-stage records remain
+		// available in audit history but must never become the current playable
+		// artifact when the final video is absent.
+		if stepID == model.CreatorStepDelivery && (finalDelivery == nil || current.ID != finalDelivery.ID) {
+			continue
+		}
 		index := stepIndexes[stepID]
 		if stepID == model.CreatorStepShots {
 			// Shot readiness is derived solely from the persisted Shot summary and
@@ -475,6 +482,15 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 	processTimeline, stepArtifacts, err := s.creatorAuditProjection(ctx, project, artifacts, steps)
 	if err != nil {
 		return nil, err
+	}
+	if finalDelivery == nil {
+		index := stepIndexes[model.CreatorStepDelivery]
+		steps[index].CurrentArtifactID = ""
+		steps[index].CurrentVersion = 0
+		steps[index].IsStale = false
+		if project.Status == model.StatusCompleted || project.Status == model.StatusArchived {
+			steps[index].State = model.CreatorStepNeedsAttention
+		}
 	}
 	if finalDelivery != nil {
 		items := stepArtifacts[model.CreatorStepDelivery]
@@ -873,6 +889,7 @@ func (s *CreatorViewService) currentArtifactForStep(ctx context.Context, project
 		if finalDelivery := authoritativeFinalDeliveryArtifact(items); finalDelivery != nil {
 			return finalDelivery, nil
 		}
+		return nil, ErrCreatorArtifactNotFound
 	}
 	selection := model.CreatorStep{ID: stepID, State: model.CreatorStepNotStarted}
 	byID := make(map[string]*artifact.Artifact, len(items))

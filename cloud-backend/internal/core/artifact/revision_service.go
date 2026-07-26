@@ -407,16 +407,23 @@ func buildRevisionSystemPrompt(stageName string, stageInstruction string) string
 }
 
 func selectedReplacementLooksLikeFullDocument(source string, selection revisionTextSelection, replacement string) bool {
+	units := utf16.Encode([]rune(source))
+	if selection.Start == 0 && selection.End == len(units) {
+		return false
+	}
 	if replacement == source {
 		return true
 	}
-	units := utf16.Encode([]rune(source))
-	if selection.Start <= 0 || selection.End >= len(units) {
-		return false
-	}
 	prefix := string(utf16.Decode(units[:selection.Start]))
 	suffix := string(utf16.Decode(units[selection.End:]))
-	return prefix != "" && suffix != "" && strings.HasPrefix(replacement, prefix) && strings.HasSuffix(replacement, suffix)
+	switch {
+	case selection.Start == 0:
+		return suffix != "" && strings.HasSuffix(replacement, suffix)
+	case selection.End == len(units):
+		return prefix != "" && strings.HasPrefix(replacement, prefix)
+	default:
+		return prefix != "" && suffix != "" && strings.HasPrefix(replacement, prefix) && strings.HasSuffix(replacement, suffix)
+	}
 }
 
 type revisionTextSelection struct {

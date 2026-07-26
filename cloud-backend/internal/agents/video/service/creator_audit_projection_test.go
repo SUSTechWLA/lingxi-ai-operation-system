@@ -224,6 +224,68 @@ func TestCreatorViewProjectsAuthoritativeFinalDeliveryVideoAcrossMultipleCurrent
 	}
 }
 
+func TestCreatorViewMissingFinalVideoNeverSubstitutesPublishOrExportArtifact(t *testing.T) {
+	created := time.Date(2026, time.July, 26, 9, 0, 0, 0, time.UTC)
+	publishCopy := &artifact.Artifact{
+		ID: "publish-copy", ProjectID: "vp-complete", StageName: "publish", UnitID: "publish-copy",
+		Kind: artifact.KindMarkdown, Name: "publish.md", Version: 9, IsCurrent: true,
+		Status: "valid", HumanApproved: true, CreatedAt: created, Metadata: map[string]interface{}{"artifactType": "publish_copy"},
+	}
+	exportBundle := &artifact.Artifact{
+		ID: "export-bundle", ProjectID: "vp-complete", StageName: "export", UnitID: "package",
+		Kind: artifact.KindBundle, Name: "export.zip", Version: 11, IsCurrent: true,
+		Status: "valid", HumanApproved: true, CreatedAt: created.Add(time.Minute),
+	}
+	reader := auditArtifactReader{current: []*artifact.Artifact{publishCopy, exportBundle}, history: map[string][]*artifact.Artifact{
+		"publish/publish-copy": {publishCopy}, "export/package": {exportBundle},
+	}}
+	project := &videoModel.VideoProject{ID: "vp-complete", UserID: "user-1", Status: videoModel.StatusCompleted, CurrentRunID: "run-delivery"}
+	projects := &auditProjectReader{project: project}
+	reviews := &fakeCreatorReviewMutations{}
+	nodes := fakeCreatorNodeAuditReader{nodes: []*coreModel.Node{
+		{
+			ID: "delivery-exec", TaskID: "task-delivery", Type: coreModel.NodeTypeTool, Status: coreModel.NodeSuccess,
+			Input: map[string]interface{}{"stage": "delivery"},
+		},
+		{
+			ID: "delivery-review", TaskID: "task-delivery", Type: coreModel.NodeTypeReviewGate, Status: coreModel.NodeSuccess,
+			Input: map[string]interface{}{"stage": "delivery", "sourceNode": "delivery-exec"},
+		},
+	}}
+	svc := NewCreatorViewService(
+		projects,
+		fakeCreatorShotReader{}, reader,
+	).WithStepMutations(nil, reviews).WithProcessAudit(
+		fakeCreatorRunAuditLookup(&CreatorRunAudit{ID: "run-delivery", TaskID: "task-delivery", UserID: "user-1"}), nodes,
+	)
+	view, err := svc.GetCreationView(context.Background(), "user-1", "vp-complete")
+	if err != nil {
+		t.Fatalf("GetCreationView() error = %v", err)
+	}
+	if view.FinalDeliveryArtifactID != "" || view.Steps[5].CurrentArtifactID != "" || view.Steps[5].CurrentVersion != 0 {
+		t.Fatalf("missing final video exposed generic delivery authority: id=%q step=%+v", view.FinalDeliveryArtifactID, view.Steps[5])
+	}
+	if view.Steps[5].State != videoModel.CreatorStepNeedsAttention {
+		t.Fatalf("missing final video state = %q, want recovery state", view.Steps[5].State)
+	}
+	if _, err := svc.currentArtifactForStep(context.Background(), "vp-complete", videoModel.CreatorStepDelivery); !errors.Is(err, ErrCreatorArtifactNotFound) {
+		t.Fatalf("delivery authority without final video error = %v, want not found", err)
+	}
+	impact, err := svc.PreviewStepRegeneration(context.Background(), "user-1", "vp-complete", videoModel.CreatorStepDelivery)
+	if err != nil || impact.RequiresConfirmation || len(impact.AffectedStepIDs) != 0 || len(impact.AffectedShotIDs) != 0 {
+		t.Fatalf("delivery recovery impact = %+v, error = %v; upstream must be preserved", impact, err)
+	}
+	result, err := svc.RegenerateStep(context.Background(), "user-1", "vp-complete", videoModel.CreatorStepDelivery, videoModel.StepRegenerationRequest{
+		Instruction: "仅重新生成当前成片交付文件，保留所有上游内容",
+	}, "delivery-recovery-1")
+	if err != nil {
+		t.Fatalf("delivery regeneration without fake base error = %v", err)
+	}
+	if result.RunID != "run-delivery" || result.ReviewID != "delivery-review" || reviews.regenerateCalls != 1 || projects.startedRunID != "run-delivery" {
+		t.Fatalf("delivery recovery did not preserve durable lineage: result=%+v reviews=%+v project=%+v", result, reviews, project)
+	}
+}
+
 func TestCreatorAuditGroupsCurrentAndHistoricalArtifactsByStep(t *testing.T) {
 	created := time.Date(2026, time.July, 22, 9, 0, 0, 0, time.UTC)
 	current := &artifact.Artifact{

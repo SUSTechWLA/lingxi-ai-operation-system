@@ -57,7 +57,10 @@ export default function PreviewDeliveryPanel({ projectId, step, content, artifac
 		? { ...currentContent, mediaUrl }
 		: currentContent
   const mediaState = mediaStatus.url === mediaUrl ? mediaStatus.state : 'loading'
-  const deliveryMediaState: CreatorMediaState = isDelivery && artifactLoadState === 'ready' && (!mediaUrl || presentation !== 'video') ? 'missing' : mediaState
+  const deliveryMediaState: CreatorMediaState = isDelivery && (
+    artifactLoadState === 'empty' ||
+    (artifactLoadState === 'ready' && (!mediaUrl || presentation !== 'video'))
+  ) ? 'missing' : mediaState
   const repairScope = completedRepairScope(
     { project: { status: completedProject ? 'COMPLETED' : 'RUNNING' }, activeStep: step.id },
     { delivery: deliveryMediaState },

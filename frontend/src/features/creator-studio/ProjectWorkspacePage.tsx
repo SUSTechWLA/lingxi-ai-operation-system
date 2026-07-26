@@ -140,8 +140,8 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
     setShotFiltersReady(true)
   }, [projectId, view?.project.id, view?.project.status])
   const visibleArtifacts = useMemo(() => {
-    if (stepId === 'delivery' && view?.finalDeliveryArtifactId) {
-      return authoritativeDeliveryReviewArtifacts(view.stepArtifacts, view.finalDeliveryArtifactId)
+    if (stepId === 'delivery') {
+      return authoritativeDeliveryReviewArtifacts(view?.stepArtifacts, view?.finalDeliveryArtifactId)
     }
     return projectCreatorReviewArtifacts(view?.stepArtifacts?.[stepId] ?? [])
   }, [stepId, view?.finalDeliveryArtifactId, view?.stepArtifacts])

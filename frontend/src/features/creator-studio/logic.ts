@@ -101,13 +101,20 @@ export function completedRepairScope(
 ): CompletedTaskRepairScope | undefined {
   const completed = view.project.status === 'COMPLETED' || view.project.status === 'ARCHIVED'
   if (!completed || (availability.delivery !== 'missing' && availability.delivery !== 'unsupported')) return undefined
-  if (context && (
-    context.artifactLoadState !== 'ready' ||
-    context.viewingHistorical ||
-    !context.currentArtifactId ||
-    context.selectedArtifactId !== context.currentArtifactId ||
-    context.currentArtifactVersion !== context.selectedArtifactVersion
-  )) return undefined
+  if (context) {
+    const missingAuthoritativeArtifact = context.artifactLoadState === 'empty' &&
+      !context.viewingHistorical &&
+      !context.currentArtifactId &&
+      !context.selectedArtifactId &&
+      context.currentArtifactVersion === undefined &&
+      context.selectedArtifactVersion === undefined
+    const loadedAuthoritativeArtifact = context.artifactLoadState === 'ready' &&
+      !context.viewingHistorical &&
+      Boolean(context.currentArtifactId) &&
+      context.selectedArtifactId === context.currentArtifactId &&
+      context.currentArtifactVersion === context.selectedArtifactVersion
+    if (!missingAuthoritativeArtifact && !loadedAuthoritativeArtifact) return undefined
+  }
   return { stepId: 'delivery', preserveUpstream: true }
 }
 
@@ -238,8 +245,10 @@ export function resolveCreatorArtifactMediaUrl(
 	if (direct) {
 		const normalized = normalizeCreatorDirectMediaUrl(direct, baseUrl)
 		const rootRelativeLocal = isRootRelativeCreatorLocalMediaUrl(direct)
+		if (isEncodedRootRelativeCreatorLocalMediaUrl(direct)) return undefined
 		if (rootRelativeLocal && !baseUrl) return undefined
-		if (!rootRelativeLocal && !isCreatorLocalMediaUrl(normalized, baseUrl)) return normalized
+		if (!rootRelativeLocal && !isCreatorLocalAgentOriginUrl(normalized, baseUrl)) return normalized
+		if (!isCreatorLocalMediaUrl(normalized, baseUrl)) return undefined
 		return creatorLocalMediaBelongsToProject(normalized, projectId) ? normalized : undefined
 	}
 	const metadata = content.artifact.metadata
@@ -260,6 +269,22 @@ function isRootRelativeCreatorLocalMediaUrl(src: string): boolean {
 		return new URL(src, 'http://creator.local').pathname === '/api/local/media'
 	} catch {
 		return false
+	}
+}
+
+function isEncodedRootRelativeCreatorLocalMediaUrl(src: string): boolean {
+	if (!src.startsWith('/') || isRootRelativeCreatorLocalMediaUrl(src)) return false
+	try {
+		let pathname = new URL(src, 'http://creator.local').pathname
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			const decoded = decodeURIComponent(pathname)
+			if (decoded === '/api/local/media') return true
+			if (decoded === pathname) return false
+			pathname = decoded
+		}
+		return false
+	} catch {
+		return true
 	}
 }
 
@@ -318,6 +343,19 @@ export function isCreatorLocalMediaUrl(src: string, localAgentBaseUrl: string): 
 			source.username === '' &&
 			source.password === '' &&
 			source.pathname === '/api/local/media'
+	} catch {
+		return false
+	}
+}
+
+function isCreatorLocalAgentOriginUrl(src: string, localAgentBaseUrl: string): boolean {
+	try {
+		const localAgent = new URL(localAgentBaseUrl)
+		const source = new URL(src)
+		return (source.protocol === 'http:' || source.protocol === 'https:') &&
+			source.origin === localAgent.origin &&
+			source.username === '' &&
+			source.password === ''
 	} catch {
 		return false
 	}

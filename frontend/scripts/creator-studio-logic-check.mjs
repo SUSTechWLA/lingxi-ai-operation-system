@@ -408,6 +408,11 @@ try {
     ],
   }, 'final-video')
   assert.deepEqual(authoritativeDelivery.map(artifact => artifact.artifactId), ['final-video'], 'delivery review uses only the server-authoritative final video identity')
+  assert.deepEqual(
+    reviewArtifacts.authoritativeDeliveryReviewArtifacts({ delivery: [{ artifactId: 'publish-copy', stepId: 'delivery', kind: 'MARKDOWN', name: 'publish.md', version: 9, attempt: 9, isCurrent: true, isStale: false, createdAt: '2026-07-26T00:01:00Z' }] }, undefined),
+    [],
+    'delivery review fails closed instead of selecting a generic artifact when final video identity is absent',
+  )
   assert.equal(
     reviewArtifacts.selectCreatorReviewArtifact(
       reviewArtifacts.projectCreatorReviewArtifacts([
@@ -667,6 +672,18 @@ try {
     undefined,
     'root-relative local media is not usable until the owned local-agent origin is known',
   )
+  for (const encodedLocalPath of [
+    'http://127.0.0.1:18080/api%2Flocal%2Fmedia?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4',
+    'http://127.0.0.1:18080/api%252Flocal%252Fmedia?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4',
+    '/api%2Flocal%2Fmedia?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4',
+    '/api%252Flocal%252Fmedia?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4',
+  ]) {
+    assert.equal(
+      logic.resolveCreatorArtifactMediaUrl('vp-1', { ...localRenderContent, mediaUrl: encodedLocalPath }, 'http://127.0.0.1:18080'),
+      undefined,
+      'encoded local-agent endpoint paths fail closed instead of becoming external media',
+    )
+  }
   const normalizedRelativeLocalMedia = logic.resolveCreatorArtifactMediaUrl(
     'vp-1',
     { ...localRenderContent, mediaUrl: '/api/local/media?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4' },
@@ -848,6 +865,14 @@ try {
     }),
     { stepId: 'delivery', preserveUpstream: true },
     'only a loaded current delivery artifact can be recovered',
+  )
+  assert.deepEqual(
+    logic.completedRepairScope(completedView, { delivery: 'missing' }, {
+      artifactLoadState: 'empty',
+      viewingHistorical: false,
+    }),
+    { stepId: 'delivery', preserveUpstream: true },
+    'a completed task with no final video can regenerate delivery without a fake base artifact',
   )
   assert.equal(
     logic.shouldProbeCreatorDeliveryMedia({

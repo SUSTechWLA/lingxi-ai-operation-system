@@ -215,6 +215,59 @@ func TestRevisionServiceSelectedInstructionRejectsObviousFullDocumentResponse(t 
 	}
 }
 
+func TestRevisionServiceSelectedInstructionRejectsFullDocumentAtSelectionBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		selection map[string]interface{}
+		generated string
+	}{
+		{name: "proper prefix", selection: map[string]interface{}{"kind": "text", "start": 0, "end": 2, "text": "开头"}, generated: "新稿正文结尾"},
+		{name: "middle", selection: map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}, generated: "开头新稿结尾"},
+		{name: "proper suffix", selection: map[string]interface{}{"kind": "text", "start": 4, "end": 6, "text": "结尾"}, generated: "开头正文新稿"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.InlineJSON = "开头正文结尾"
+			repo := newRevisionServiceFake(t, base)
+			revisions := NewRevisionService(repo)
+			revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) { return test.generated, nil })
+			result, err := revisions.Revise(context.Background(), ReviseRequest{
+				ArtifactID: base.ID, Message: "rewrite", Provenance: map[string]interface{}{"selection": test.selection},
+			})
+			if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+				t.Fatalf("boundary full-document response must fail: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+			}
+		})
+	}
+}
+
+func TestRevisionServiceSelectedInstructionAllowsFragmentsAndTrueWholeDocumentSelection(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		selection map[string]interface{}
+		generated string
+		want      string
+	}{
+		{name: "prefix fragment", selection: map[string]interface{}{"kind": "text", "start": 0, "end": 2, "text": "开头"}, generated: "新稿", want: "新稿正文结尾"},
+		{name: "suffix fragment", selection: map[string]interface{}{"kind": "text", "start": 4, "end": 6, "text": "结尾"}, generated: "新稿", want: "开头正文新稿"},
+		{name: "whole document selection", selection: map[string]interface{}{"kind": "text", "start": 0, "end": 6, "text": "开头正文结尾"}, generated: "全新完整文档", want: "全新完整文档"},
+		{name: "whole document selection unchanged", selection: map[string]interface{}{"kind": "text", "start": 0, "end": 6, "text": "开头正文结尾"}, generated: "开头正文结尾", want: "开头正文结尾"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.InlineJSON = "开头正文结尾"
+			repo := newRevisionServiceFake(t, base)
+			revisions := NewRevisionService(repo)
+			revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) { return test.generated, nil })
+			if _, err := revisions.Revise(context.Background(), ReviseRequest{
+				ArtifactID: base.ID, Message: "rewrite", Provenance: map[string]interface{}{"selection": test.selection},
+			}); err != nil || string(repo.lastCreate.Data) != test.want {
+				t.Fatalf("legitimate scoped response error=%v data=%q want=%q", err, repo.lastCreate.Data, test.want)
+			}
+		})
+	}
+}
+
 func TestRevisionServiceSelectedInstructionRejectsChangedSourceHashWithoutMutation(t *testing.T) {
 	base := revisionTestArtifact()
 	base.InlineJSON = "开头已变更结尾"
