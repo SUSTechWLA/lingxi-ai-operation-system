@@ -76,3 +76,22 @@ The new checks also require the checklist to gate green marks with `finalVideoRe
 - `npm run test:creator` — exit 0: `creator studio logic and client contract checks passed`.
 - `npm run build` — exit 0: strict TypeScript checks and Vite production build passed.
 - `git diff --check` — exit 0.
+
+## Review fix round 3
+
+- The shared checklist now uses `step.state === 'confirmed'` for the `preview` step, preserving its established green review checks.
+- The `delivery` checklist still requires `finalVideoReady`, so it remains gated by final QA, a final URL, and loaded browser media metadata.
+
+### Fix-round RED evidence
+
+`npm run test:creator` exited 1 before the implementation change with:
+
+`AssertionError [ERR_ASSERTION]: preview steps keep their confirmed checklist state while delivery remains final-QA and playable-media gated`
+
+The regression coverage requires the explicit preview-or-delivery confirmation branch and verifies that both visible checklist rows use it.
+
+### Fix-round GREEN evidence
+
+- `npm run test:creator` — exit 0: `creator studio logic and client contract checks passed`.
+- `npm run build` — exit 0: strict TypeScript checks and Vite production build passed.
+- `git diff --check` — exit 0.
