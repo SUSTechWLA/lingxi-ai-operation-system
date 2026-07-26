@@ -4,7 +4,7 @@ import type { ArtifactSelection } from '../types'
 import type { TextSelectionDraft } from '../textSelection'
 import { artifactContentNeedsLocalHydration, classifyArtifactPresentation, safeCreatorReviewText } from '../artifactPresentation'
 import { projectCreatorReviewContent } from '../creatorReviewProjection'
-import { resolveCreatorArtifactMediaUrl } from '../logic'
+import { resolveCreatorArtifactMediaUrl, type CreatorMediaState } from '../logic'
 import { mediaReviewAfterPlaybackFailure } from '../mediaRange'
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import JsonArtifactViewer from './JsonArtifactViewer'
@@ -120,6 +120,15 @@ export default function ArtifactProofingCanvas({
     onMediaRangePendingChange?.(next.pending)
   }
   const markPlaybackReady = () => setPlaybackAvailable(true)
+  const handleVideoMediaStateChange = (state: CreatorMediaState) => {
+    if (state === 'playable') {
+      markPlaybackReady()
+    } else if (state === 'loading') {
+      setPlaybackAvailable(false)
+    } else if (state === 'missing' || state === 'unsupported' || state === 'service_unavailable') {
+      invalidateMediaReview()
+    }
+  }
   if (presentation === 'json') {
     return <JsonArtifactViewer
       content={displayedContent}
@@ -172,13 +181,10 @@ export default function ArtifactProofingCanvas({
           src={resolvedMediaUrl}
           title={semanticMediaLabel}
           downloadName={semanticMediaLabel}
-          onError={() => {
-            invalidateMediaReview()
-            setMediaFailed(true)
-          }}
+          onMediaStateChange={handleVideoMediaStateChange}
           onPlaybackStateChange={setPlaybackState}
         />
-        {onMediaSelectionChange && <MediaRangeControls
+        {playbackAvailable && onMediaSelectionChange && <MediaRangeControls
           currentTimeMs={playbackState.currentTimeMs}
           selection={selection?.kind === 'time' ? selection : null}
           resetKey={`${hydrationKey}:${mediaRangeResetKey ?? 0}`}

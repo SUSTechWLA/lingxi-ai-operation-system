@@ -96,6 +96,70 @@ func TestLocalProjectMediaServesOnlyFilesInsideProject(t *testing.T) {
 	}
 }
 
+func TestLocalProjectMediaResolvesCanonicalArtifactStorageRef(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	content := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'm', 'p', '4', '2'}
+	storageRef := "local://projects/vp-1/artifacts/video-1/hash/final.mp4"
+	body := bytes.NewBufferString(`{
+		"id":"video-1",
+		"projectId":"vp-1",
+		"storageRef":"` + storageRef + `",
+		"mimeType":"video/mp4",
+		"contentBase64":"` + base64.StdEncoding.EncodeToString(content) + `"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/local/artifacts", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("store status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	mediaURL := "/api/local/media?projectId=vp-1&storageRef=" + url.QueryEscape(storageRef)
+	req = httptest.NewRequest(http.MethodHead, mediaURL, nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("HEAD media status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "video/mp4" {
+		t.Fatalf("HEAD content type = %q, want video/mp4", got)
+	}
+	if got := rec.Header().Get("Accept-Ranges"); got != "bytes" {
+		t.Fatalf("HEAD accept ranges = %q, want bytes", got)
+	}
+	if got := rec.Header().Get("Content-Length"); got != "12" {
+		t.Fatalf("HEAD content length = %q, want 12", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, mediaURL, nil)
+	req.Header.Set("Range", "bytes=0-3")
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("range status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Equal(rec.Body.Bytes(), content[:4]) {
+		t.Fatalf("range content = %v, want %v", rec.Body.Bytes(), content[:4])
+	}
+
+	mismatchedURL := "/api/local/media?projectId=vp-2&storageRef=" + url.QueryEscape(storageRef)
+	req = httptest.NewRequest(http.MethodHead, mismatchedURL, nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("mismatched project status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	unknownRef := "local://projects/vp-1/artifacts/missing/hash/final.mp4"
+	req = httptest.NewRequest(http.MethodHead, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(unknownRef), nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown artifact status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestLocalArtifactStoreSupportsBinaryPayloads(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DataDir: root})

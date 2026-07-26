@@ -653,6 +653,13 @@ try {
     }, 'http://127.0.0.1:18080'),
     'http://127.0.0.1:18080/api/local/media?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Freports%2Fqa.json',
   )
+  assert.equal(logic.creatorMediaStateAfterHttpProbe(200), 'loading', 'an HTTP success still needs browser metadata before playback is confirmed')
+  assert.equal(logic.creatorMediaStateAfterHttpProbe(404), 'missing', 'a definite missing media response has its own recovery state')
+  assert.equal(logic.creatorMediaStateAfterHttpProbe(503), 'service_unavailable', 'an unhealthy local media response is a service failure')
+  assert.equal(logic.creatorMediaStateAfterHttpProbe(undefined), 'service_unavailable', 'a connection failure is a service failure')
+  assert.equal(logic.creatorMediaStateAfterBrowserEvent('loadedmetadata', true), 'playable', 'loaded metadata confirms browser playback')
+  assert.equal(logic.creatorMediaStateAfterBrowserEvent('error', true), 'unsupported', 'decode failure after HTTP success is a codec problem')
+  assert.equal(logic.creatorMediaStateAfterBrowserEvent('error', false), 'service_unavailable', 'a browser error cannot be called a codec problem without delivery success')
   assert.equal(logic.isCreatorStepReadable({ state: 'confirmed' }), true)
   assert.equal(logic.isCreatorStepReadable({ state: 'needs_attention' }), true)
   assert.equal(logic.isCreatorStepReadable({ state: 'not_started', hasHistory: true }), true)
@@ -1316,7 +1323,11 @@ try {
     /<SimpleAudioPlayer[\s\S]*?onError=\{invalidateMediaReview\}[\s\S]*?onReady=\{markPlaybackReady\}[\s\S]*?\{playbackAvailable && onMediaSelectionChange && <MediaRangeControls/,
     'every audio failure clears and hides range controls until the remounted media is ready',
   )
-  assert.match(proofingSource, /onError=\{\(\) => \{\s*invalidateMediaReview\(\)\s*setMediaFailed\(true\)\s*\}\}/, 'video failure clears completed and pending ranges before fallback')
+  assert.match(
+    proofingSource,
+    /state === 'missing' \|\| state === 'unsupported' \|\| state === 'service_unavailable'[\s\S]*?invalidateMediaReview\(\)/,
+    'every explicit video failure clears completed and pending ranges',
+  )
   assert.match(proofingSource, /mediaReviewAfterPlaybackFailure\(/, 'video and audio share executable range invalidation behavior')
   assert.ok((proofingSource.match(/disabled=\{mediaRangeDisabled\}/g) || []).length >= 2, 'video and audio range controls freeze while revision impact is loading')
   assert.match(reviewSource, /const revisionInputsLocked = creatorRevisionInputsLocked\(working, pending !== null\)/, 'one lock covers loading and pending confirmation snapshots')
@@ -1578,9 +1589,30 @@ try {
   assert.match(previewSource, /成片检查通过后，才会显示最终视频和交付文件/)
   assert.match(previewSource, /SimpleVideoPlayer/)
   assert.doesNotMatch(previewSource, /<video\b/, 'preview delegates video playback to the shared player')
+  assert.match(
+    previewSource,
+    /step\.state === 'confirmed' && mediaState === 'playable'/,
+    'a confirmed final badge waits for loaded browser metadata',
+  )
   assert.equal((playerSource.match(/<video\b/g) || []).length, 1, 'the shared player mounts exactly one media element')
   assert.match(playerSource, /interface MediaPlaybackState/)
   assert.match(playerSource, /onPlaybackStateChange\?:/)
+  assert.match(playerSource, /fetch\(src,\s*\{\s*method:\s*'HEAD'/, 'local video delivery is probed before browser decoding')
+  assert.match(playerSource, /creatorMediaStateAfterHttpProbe/, 'HTTP failures map independently from browser codec failures')
+  assert.match(playerSource, /creatorMediaStateAfterBrowserEvent\('loadedmetadata', true\)/, 'loaded metadata confirms playable media')
+  assert.match(playerSource, /creatorMediaStateAfterBrowserEvent\('error', true\)/, 'browser failure after HTTP success reports unsupported encoding')
+  for (const copy of [
+    '成片文件缺失，可从成片步骤重新生成',
+    '本地媒体服务未启动',
+    '当前编码不受客户端支持，需要转为 H.264/AAC MP4',
+  ]) {
+    assert.match(playerSource, new RegExp(copy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `video player exposes recovery copy: ${copy}`)
+  }
+  assert.match(
+    proofingSource,
+    /onMediaStateChange=\{handleVideoMediaStateChange\}/,
+    'proofing invalidates time selections while preserving the explicit video delivery failure',
+  )
   assert.match(playerSource, /secondsToIntegerMilliseconds\(currentTime\)/)
   assert.match(playerSource, /\.play\(\)/)
   assert.match(playerSource, /\.pause\(\)/)

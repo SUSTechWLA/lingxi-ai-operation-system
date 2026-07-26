@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import {
+  creatorMediaStateAfterBrowserEvent,
+  creatorMediaStateAfterHttpProbe,
+  type CreatorMediaState,
+} from '../logic'
 import { secondsToIntegerMilliseconds } from '../mediaRange'
 
 export interface MediaPlaybackState {
@@ -11,7 +16,8 @@ interface SimpleVideoPlayerProps {
   src: string
   title?: string
   downloadName?: string
-  onError?: () => void
+  onError?: (state: Exclude<CreatorMediaState, 'loading' | 'playable'>) => void
+  onMediaStateChange?: (state: CreatorMediaState) => void
   onPlaybackStateChange?: (state: MediaPlaybackState) => void
 }
 
@@ -20,24 +26,56 @@ export default function SimpleVideoPlayer({
   title = '成片预览',
   downloadName,
   onError,
+  onMediaStateChange,
   onPlaybackStateChange,
 }: SimpleVideoPlayerProps) {
   const playerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const onErrorRef = useRef(onError)
+  const onMediaStateChangeRef = useRef(onMediaStateChange)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
   const [playbackRate, setPlaybackRate] = useState(1)
-  const [failed, setFailed] = useState(false)
+  const [mediaStatus, setMediaStatus] = useState<{
+    src: string
+    state: CreatorMediaState
+    httpProbeSucceeded: boolean
+  }>({ src, state: 'loading', httpProbeSucceeded: false })
+  const mediaState = mediaStatus.src === src ? mediaStatus.state : 'loading'
+  const httpProbeSucceeded = mediaStatus.src === src && mediaStatus.httpProbeSucceeded
+
+  useEffect(() => {
+    onErrorRef.current = onError
+    onMediaStateChangeRef.current = onMediaStateChange
+  }, [onError, onMediaStateChange])
 
   useEffect(() => {
     setIsPlaying(false)
     setCurrentTime(0)
     setDuration(0)
-    setFailed(false)
+    setMediaStatus({ src, state: 'loading', httpProbeSucceeded: false })
+    const controller = new AbortController()
+    void fetch(src, { method: 'HEAD', signal: controller.signal }).then(response => {
+      if (controller.signal.aborted) return
+      const nextState = creatorMediaStateAfterHttpProbe(response.status)
+      setMediaStatus({ src, state: nextState, httpProbeSucceeded: nextState === 'loading' })
+    }).catch(() => {
+      if (!controller.signal.aborted) {
+        setMediaStatus({ src, state: creatorMediaStateAfterHttpProbe(undefined), httpProbeSucceeded: false })
+      }
+    })
+    return () => controller.abort()
   }, [src])
+
+  useEffect(() => {
+    onMediaStateChangeRef.current?.(mediaState)
+    if (mediaState === 'missing' || mediaState === 'unsupported' || mediaState === 'service_unavailable') {
+      onErrorRef.current?.(mediaState)
+    }
+  }, [mediaState, src])
 
   useEffect(() => {
     onPlaybackStateChange?.({
@@ -115,18 +153,32 @@ export default function SimpleVideoPlayer({
   }
 
   const handleError = () => {
-    setFailed(true)
     setIsPlaying(false)
-    onError?.()
+    setMediaStatus({ src, state: creatorMediaStateAfterBrowserEvent('error', true), httpProbeSucceeded: true })
   }
 
-  if (failed) {
+  if (!httpProbeSucceeded && mediaState === 'loading') {
+    return (
+      <div className="simple-video-player" role="group" aria-label={title}>
+        <div className="simple-video-error" role="status">
+          <strong>正在确认成片文件…</strong>
+        </div>
+      </div>
+    )
+  }
+
+  if (mediaState === 'missing' || mediaState === 'unsupported' || mediaState === 'service_unavailable') {
+    const message = mediaState === 'missing'
+      ? '成片文件缺失，可从成片步骤重新生成'
+      : mediaState === 'service_unavailable'
+        ? '本地媒体服务未启动'
+        : '当前编码不受客户端支持，需要转为 H.264/AAC MP4'
     return (
       <div className="simple-video-player is-error" role="group" aria-label={title}>
         <div className="simple-video-error" role="alert">
           <strong>当前视频无法播放</strong>
-          <span>可以下载文件后使用系统播放器查看。</span>
-          <a className="creator-secondary-button" href={src} download={downloadName || true} aria-label="下载视频">下载视频</a>
+          <span>{message}</span>
+          {mediaState === 'unsupported' && <a className="creator-secondary-button" href={src} download={downloadName || true} aria-label="下载视频">下载视频</a>}
         </div>
       </div>
     )
@@ -148,7 +200,10 @@ export default function SimpleVideoPlayer({
           preload="metadata"
           src={src}
           onClick={togglePlayback}
-          onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+          onLoadedMetadata={(event) => {
+            setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)
+            setMediaStatus({ src, state: creatorMediaStateAfterBrowserEvent('loadedmetadata', true), httpProbeSucceeded: true })
+          }}
           onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
           onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
           onPlay={() => setIsPlaying(true)}

@@ -3,7 +3,12 @@ import type { ArtifactContentResponse } from '../../../utils/types'
 import { rebuildFinalAssembly } from '../../../services/creatorApi'
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import type { CreatorStep } from '../types'
-import { deliveryArtifactPassesFinalReview, isCreatorConflict, resolveCreatorArtifactMediaUrl } from '../logic'
+import {
+  deliveryArtifactPassesFinalReview,
+  isCreatorConflict,
+  resolveCreatorArtifactMediaUrl,
+  type CreatorMediaState,
+} from '../logic'
 import { classifyArtifactPresentation } from '../artifactPresentation'
 import ArtifactProofingCanvas from './ArtifactProofingCanvas'
 import SimpleVideoPlayer from './SimpleVideoPlayer'
@@ -23,6 +28,9 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
 	const currentContent = content
   const [notice, setNotice] = useState('')
   const [working, setWorking] = useState(false)
+  const [mediaStatus, setMediaStatus] = useState<{ url?: string; state: CreatorMediaState }>({
+    state: 'loading',
+  })
   const controllerRef = useRef<AbortController | null>(null)
   const assemblyKeyRef = useRef<string | null>(null)
   const isDelivery = step.id === 'delivery'
@@ -37,6 +45,10 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
 	const proofingContent = currentContent && mediaUrl && !currentContent.mediaUrl
 		? { ...currentContent, mediaUrl }
 		: currentContent
+  const mediaState = mediaStatus.url === mediaUrl ? mediaStatus.state : 'loading'
+  const confirmedFinal = presentation === 'video'
+    ? step.state === 'confirmed' && mediaState === 'playable'
+    : step.state === 'confirmed'
 
   useEffect(() => () => controllerRef.current?.abort(), [])
 
@@ -85,7 +97,7 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
           <p className="creator-eyebrow">{isDelivery ? '交付准备' : '成片预览'}</p>
           <h2 id="preview-delivery-title">{isDelivery ? '检查完成后交付' : '观看当前成片'}</h2>
         </div>
-        <span className={`artifact-state is-${step.state}`}>{step.state === 'confirmed' ? '已确认' : '等待处理'}</span>
+        <span className={`artifact-state is-${confirmedFinal ? 'confirmed' : 'needs_review'}`}>{confirmedFinal ? '已确认' : '等待处理'}</span>
       </header>
 
 			{viewingHistorical && <div className="artifact-history-notice" role="status"><strong>正在查看历史产物</strong><span>当前交付版本没有被替换。</span></div>}
@@ -96,7 +108,7 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
         <button className="creator-primary-button" type="button" disabled={working} onClick={() => void rebuild()}>{working ? '正在核对镜头…' : '重新拼接成片'}</button>
       </div>}
 
-			{!assemblyDirty && previewReady && presentation === 'video' && mediaUrl && (viewingHistorical || !isDelivery || isFinalReviewPassed) && <SimpleVideoPlayer src={mediaUrl} title="当前成片" downloadName="当前成片" />}
+			{!assemblyDirty && previewReady && presentation === 'video' && mediaUrl && (viewingHistorical || !isDelivery || isFinalReviewPassed) && <SimpleVideoPlayer src={mediaUrl} title="当前成片" downloadName="当前成片" onMediaStateChange={state => setMediaStatus({ url: mediaUrl, state })} />}
 			{!assemblyDirty && previewReady && currentContent && presentation !== 'video' && <ArtifactProofingCanvas content={proofingContent} reviewLabel="当前成片" />}
 			{!assemblyDirty && (!previewReady || !currentContent || (presentation === 'video' && !mediaUrl)) && <p className="artifact-empty">系统正在准备当前产物；完成后会在这里显示可审阅内容。</p>}
 
@@ -106,7 +118,7 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
         <p><span aria-hidden="true">{step.state === 'confirmed' ? '✓' : '○'}</span> 旁白、音乐和画面衔接是否自然</p>
       </section>
 
-      {isDelivery && (isFinalReviewPassed && mediaUrl ? <section className="preview-delivery-package">
+      {isDelivery && (isFinalReviewPassed && mediaUrl && mediaState === 'playable' ? <section className="preview-delivery-package">
         <h3>交付文件</h3>
         <p>成片检查通过后，才会显示最终视频和交付文件。</p>
         <a className="creator-primary-button" href={mediaUrl} download>下载最终视频</a>

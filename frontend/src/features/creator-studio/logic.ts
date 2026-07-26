@@ -163,6 +163,22 @@ export function resolveCreatorArtifactMediaUrl(
 	return `${baseUrl}/api/local/media?projectId=${encodeURIComponent(projectId)}&storageRef=${encodeURIComponent(storageRef)}`
 }
 
+export type CreatorMediaState = 'loading' | 'playable' | 'missing' | 'unsupported' | 'service_unavailable'
+
+export function creatorMediaStateAfterHttpProbe(status: number | undefined): CreatorMediaState {
+	if (status === 404) return 'missing'
+	if (status !== undefined && status >= 200 && status < 300) return 'loading'
+	return 'service_unavailable'
+}
+
+export function creatorMediaStateAfterBrowserEvent(
+	event: 'loadedmetadata' | 'error',
+	httpProbeSucceeded: boolean,
+): CreatorMediaState {
+	if (event === 'loadedmetadata') return 'playable'
+	return httpProbeSucceeded ? 'unsupported' : 'service_unavailable'
+}
+
 export function creatorStartIdempotencyKey(projectId: string): string {
   if (!isSafeStorageSegment(projectId)) throw new TypeError('project id must be a safe path segment')
   return `creator-start:${projectId}`
