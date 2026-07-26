@@ -761,6 +761,105 @@ try {
     { stepId: 'delivery', preserveUpstream: true },
   )
   assert.equal(logic.completedRepairScope(completedView, { delivery: 'playable' }), undefined)
+  assert.equal(
+    logic.completedRepairScope(completedView, { delivery: 'missing' }, {
+      artifactLoadState: 'loading',
+      viewingHistorical: false,
+      currentArtifactId: 'delivery-current',
+      selectedArtifactId: 'delivery-current',
+    }),
+    undefined,
+    'a delivery artifact still loading is not conclusive missing media',
+  )
+  assert.equal(
+    logic.completedRepairScope(completedView, { delivery: 'missing' }, {
+      artifactLoadState: 'error',
+      viewingHistorical: false,
+      currentArtifactId: 'delivery-current',
+      selectedArtifactId: 'delivery-current',
+    }),
+    undefined,
+    'a delivery load failure must not be mistaken for a missing media file',
+  )
+  assert.equal(
+    logic.completedRepairScope(completedView, { delivery: 'missing' }, {
+      artifactLoadState: 'ready',
+      viewingHistorical: true,
+      currentArtifactId: 'delivery-current',
+      selectedArtifactId: 'delivery-old',
+    }),
+    undefined,
+    'a historical delivery selection never exposes recovery for the current task',
+  )
+  assert.equal(
+    logic.completedRepairScope(completedView, { delivery: 'missing' }, {
+      artifactLoadState: 'ready',
+      viewingHistorical: false,
+      currentArtifactId: 'delivery-current',
+      selectedArtifactId: 'delivery-other',
+    }),
+    undefined,
+    'recovery remains scoped to the selected current delivery artifact',
+  )
+  assert.equal(
+    logic.completedRepairScope(completedView, { delivery: 'missing' }, {
+      artifactLoadState: 'ready',
+      viewingHistorical: false,
+      currentArtifactId: 'delivery-current',
+      selectedArtifactId: 'delivery-current',
+      currentArtifactVersion: 4,
+      selectedArtifactVersion: 3,
+    }),
+    undefined,
+    'recovery never uses an older version that shares the current artifact identity',
+  )
+  assert.deepEqual(
+    logic.completedRepairScope(completedView, { delivery: 'missing' }, {
+      artifactLoadState: 'ready',
+      viewingHistorical: false,
+      currentArtifactId: 'delivery-current',
+      selectedArtifactId: 'delivery-current',
+      currentArtifactVersion: 4,
+      selectedArtifactVersion: 4,
+    }),
+    { stepId: 'delivery', preserveUpstream: true },
+    'only a loaded current delivery artifact can be recovered',
+  )
+  assert.equal(
+    logic.shouldProbeCreatorDeliveryMedia({
+      artifactLoadState: 'ready',
+      presentation: 'video',
+      mediaUrl: 'http://127.0.0.1:18080/api/local/media?projectId=p&storageRef=delivery',
+      finalReviewPassed: false,
+    }),
+    true,
+    'a delivery video is probed even before optional final QA metadata is present',
+  )
+  assert.equal(
+    logic.shouldProbeCreatorDeliveryMedia({
+      artifactLoadState: 'loading',
+      presentation: 'video',
+      mediaUrl: 'http://127.0.0.1:18080/api/local/media?projectId=p&storageRef=delivery',
+      finalReviewPassed: false,
+    }),
+    false,
+    'a delivery media probe waits for the selected artifact content',
+  )
+  assert.equal(
+    logic.canDeliverCreatorFinalVideo({ finalReviewPassed: false, mediaUrl: '/delivery.mp4', mediaState: 'playable' }),
+    false,
+    'a decodable video without final QA remains diagnostic-only and cannot unlock delivery',
+  )
+  assert.equal(
+    logic.canDeliverCreatorFinalVideo({ finalReviewPassed: true, mediaUrl: '/delivery.mp4', mediaState: 'playable' }),
+    true,
+    'only a final-reviewed, browser-playable video unlocks delivery',
+  )
+  assert.deepEqual(
+    logic.completedDeliveryRepairSuccess({ activeTasks: [{ id: 'delivery-rebuild' }] }),
+    { notice: '已开始重新生成成片，需求、创意、脚本和分镜会保留。', refreshAfterMutation: true },
+    'a queued repair immediately adopts its returned view before a best-effort refresh',
+  )
   assert.notEqual(
     logic.creatorMutationIdempotencyKey('project-1', 'script', instructionMutation),
     logic.creatorMutationIdempotencyKey('project-1', 'script', { ...instructionMutation, confirmedAffectedShotIds: ['shot-03'] }),
@@ -1638,7 +1737,8 @@ try {
     1,
     'missing or unsupported delivery exposes one recovery action',
   )
-  assert.match(previewSource, /baseArtifactId: step\.currentArtifactId/, 'delivery recovery uses the selected current delivery artifact as its base')
+  assert.match(previewSource, /baseArtifactId: currentContent\.artifact\.id/, 'delivery recovery uses the selected current delivery artifact as its base')
+  assert.match(previewSource, /baseVersion: currentContent\.artifact\.version/, 'delivery recovery uses the selected current delivery artifact version as its base')
   assert.match(previewSource, /confirmedAffectedStepIds: impact\.affectedStepIds/, 'delivery recovery confirms the server-projected impact')
 
   assert.match(previewSource, /deliveryArtifactPassesFinalReview/)
@@ -1653,9 +1753,10 @@ try {
   assert.doesNotMatch(previewSource, /<video\b/, 'preview delegates video playback to the shared player')
   assert.match(
     previewSource,
-    /step\.state === 'confirmed' && mediaState === 'playable'/,
-    'a confirmed final badge waits for loaded browser metadata',
+    /step\.state === 'confirmed' && finalVideoReady/,
+    'a confirmed final badge waits for final review and loaded browser metadata',
   )
+  assert.match(previewSource, /canDeliverCreatorFinalVideo/, 'diagnostic probing never bypasses final delivery gating')
   assert.equal((playerSource.match(/<video\b/g) || []).length, 1, 'the shared player mounts exactly one media element')
   assert.match(playerSource, /interface MediaPlaybackState/)
   assert.match(playerSource, /onPlaybackStateChange\?:/)

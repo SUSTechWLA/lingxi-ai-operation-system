@@ -72,6 +72,17 @@ export interface CompletedTaskRepairScope {
   preserveUpstream: true
 }
 
+export type CreatorArtifactLoadState = 'empty' | 'loading' | 'ready' | 'error'
+
+export interface CompletedRepairContext {
+  artifactLoadState: CreatorArtifactLoadState
+  viewingHistorical: boolean
+  currentArtifactId?: string
+  selectedArtifactId?: string
+  currentArtifactVersion?: number
+  selectedArtifactVersion?: number
+}
+
 export function completedTaskLandingStep(
   view: CompletedTaskView,
   availability: CompletedTaskMediaAvailability,
@@ -86,10 +97,49 @@ export function completedTaskLandingStep(
 export function completedRepairScope(
   view: CompletedTaskView,
   availability: CompletedTaskMediaAvailability,
+  context?: CompletedRepairContext,
 ): CompletedTaskRepairScope | undefined {
   const completed = view.project.status === 'COMPLETED' || view.project.status === 'ARCHIVED'
   if (!completed || (availability.delivery !== 'missing' && availability.delivery !== 'unsupported')) return undefined
+  if (context && (
+    context.artifactLoadState !== 'ready' ||
+    context.viewingHistorical ||
+    !context.currentArtifactId ||
+    context.selectedArtifactId !== context.currentArtifactId ||
+    context.currentArtifactVersion !== context.selectedArtifactVersion
+  )) return undefined
   return { stepId: 'delivery', preserveUpstream: true }
+}
+
+export function shouldProbeCreatorDeliveryMedia(input: {
+  artifactLoadState: CreatorArtifactLoadState
+  presentation?: string
+  mediaUrl?: string
+  finalReviewPassed: boolean
+}): boolean {
+  // Final review gates delivery, not diagnosis. The browser probe must still
+  // classify an available selected video when older artifacts omit QA metadata.
+  void input.finalReviewPassed
+  return input.artifactLoadState === 'ready' && input.presentation === 'video' && Boolean(input.mediaUrl)
+}
+
+export function canDeliverCreatorFinalVideo(input: {
+  finalReviewPassed: boolean
+  mediaUrl?: string
+  mediaState: CreatorMediaState
+}): boolean {
+  return input.finalReviewPassed && Boolean(input.mediaUrl) && input.mediaState === 'playable'
+}
+
+export function completedDeliveryRepairSuccess(
+  view: Pick<CreationView, 'activeTasks'>,
+): { notice: string; refreshAfterMutation: true } {
+  return {
+    notice: view.activeTasks.length > 0
+      ? '已开始重新生成成片，需求、创意、脚本和分镜会保留。'
+      : '成片正在更新，请稍后查看。',
+    refreshAfterMutation: true,
+  }
 }
 
 export function withCreatorProjectRecord(
@@ -730,7 +780,7 @@ export function creatorArtifactLoadState<T>(
   selection: WorkspaceArtifactSelection | null | undefined,
   result: KeyedWorkspaceArtifact<T> | null | undefined,
   loadError: string,
-): 'empty' | 'loading' | 'ready' | 'error' {
+): CreatorArtifactLoadState {
   if (!selection) return 'empty'
   if (isCurrentWorkspaceArtifact(result, selection)) return 'ready'
   return loadError ? 'error' : 'loading'

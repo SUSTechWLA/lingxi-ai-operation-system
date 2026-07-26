@@ -508,9 +508,15 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
         projectId={projectId}
         step={selectedStep}
         content={content}
+        artifactLoadState={artifactLoadState}
         assemblyDirty={view.assemblyDirty}
         completedProject={view.project.status === 'COMPLETED' || view.project.status === 'ARCHIVED'}
         viewingHistorical={viewingHistorical}
+        onViewChanged={nextView => {
+          viewRequestTokenRef.current += 1
+          activeTasksRef.current = nextView.activeTasks
+          setView(nextView)
+        }}
         onAssemblyUpdated={async () => { await refreshView() }}
       /> : artifactLoadState === 'error' ? <section className="artifact-review-panel artifact-load-error" role="alert">
         <p className="creator-eyebrow">当前内容</p>

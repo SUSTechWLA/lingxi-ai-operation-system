@@ -4,14 +4,19 @@ import { previewStepRegeneration, rebuildFinalAssembly, regenerateStep } from '.
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import type { CreatorStep } from '../types'
 import {
+  canDeliverCreatorFinalVideo,
+  completedDeliveryRepairSuccess,
   deliveryArtifactPassesFinalReview,
   completedRepairScope,
   creatorStepRegenerationIdempotencyKey,
   isCreatorConflict,
   resolveCreatorArtifactMediaUrl,
+  shouldProbeCreatorDeliveryMedia,
+  type CreatorArtifactLoadState,
   type CreatorMediaState,
 } from '../logic'
 import { classifyArtifactPresentation } from '../artifactPresentation'
+import type { CreationView } from '../types'
 import ArtifactProofingCanvas from './ArtifactProofingCanvas'
 import SimpleVideoPlayer from './SimpleVideoPlayer'
 
@@ -19,15 +24,17 @@ interface PreviewDeliveryPanelProps {
   projectId: string
   step: CreatorStep
   content: ArtifactContentResponse | null
+  artifactLoadState: CreatorArtifactLoadState
   assemblyDirty: boolean
   completedProject?: boolean
   viewingHistorical?: boolean
+  onViewChanged: (view: CreationView) => void
   onAssemblyUpdated: () => Promise<void>
 }
 
 // The workspace owns artifact selection. This panel renders exactly that
 // selection and never replaces it with the step's default artifact.
-export default function PreviewDeliveryPanel({ projectId, step, content, assemblyDirty, completedProject = false, viewingHistorical = false, onAssemblyUpdated }: PreviewDeliveryPanelProps) {
+export default function PreviewDeliveryPanel({ projectId, step, content, artifactLoadState, assemblyDirty, completedProject = false, viewingHistorical = false, onViewChanged, onAssemblyUpdated }: PreviewDeliveryPanelProps) {
 	const currentContent = content
   const [notice, setNotice] = useState('')
   const [working, setWorking] = useState(false)
@@ -46,17 +53,36 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
 		mimeType: currentContent?.artifact.mimeType,
 		name: currentContent?.artifact.name,
 	})
-	const proofingContent = currentContent && mediaUrl && !currentContent.mediaUrl
+  const proofingContent = currentContent && mediaUrl && !currentContent.mediaUrl
 		? { ...currentContent, mediaUrl }
 		: currentContent
   const mediaState = mediaStatus.url === mediaUrl ? mediaStatus.state : 'loading'
-  const deliveryMediaState: CreatorMediaState = isDelivery && (!mediaUrl || presentation !== 'video') ? 'missing' : mediaState
+  const deliveryMediaState: CreatorMediaState = isDelivery && artifactLoadState === 'ready' && (!mediaUrl || presentation !== 'video') ? 'missing' : mediaState
   const repairScope = completedRepairScope(
     { project: { status: completedProject ? 'COMPLETED' : 'RUNNING' }, activeStep: step.id },
     { delivery: deliveryMediaState },
+    {
+      artifactLoadState,
+      viewingHistorical,
+      currentArtifactId: step.currentArtifactId,
+      selectedArtifactId: currentContent?.artifact.id,
+      currentArtifactVersion: step.currentVersion,
+      selectedArtifactVersion: currentContent?.artifact.version,
+    },
   )
+  const shouldProbeMedia = shouldProbeCreatorDeliveryMedia({
+    artifactLoadState,
+    presentation,
+    mediaUrl,
+    finalReviewPassed: isFinalReviewPassed,
+  })
+  const finalVideoReady = isDelivery && canDeliverCreatorFinalVideo({
+    finalReviewPassed: isFinalReviewPassed,
+    mediaUrl,
+    mediaState,
+  })
   const confirmedFinal = presentation === 'video'
-    ? step.state === 'confirmed' && mediaState === 'playable'
+    ? step.state === 'confirmed' && finalVideoReady
     : step.state === 'confirmed'
 
   useEffect(() => () => controllerRef.current?.abort(), [])
@@ -117,16 +143,18 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
       const idempotencyKey = repairKeyRef.current ?? creatorStepRegenerationIdempotencyKey(projectId, repairScope.stepId, crypto.randomUUID())
       repairKeyRef.current = idempotencyKey
       const result = await regenerateStep(projectId, repairScope.stepId, {
-        ...(step.currentArtifactId && step.currentVersion ? { baseArtifactId: step.currentArtifactId, baseVersion: step.currentVersion } : {}),
+        ...(currentContent ? { baseArtifactId: currentContent.artifact.id, baseVersion: currentContent.artifact.version } : {}),
         instruction: '仅重新生成当前成片交付文件，保留已确认的需求、创意、脚本和分镜。',
         runId: step.runId,
         reviewId: step.reviewId,
         confirmedAffectedStepIds: impact.affectedStepIds,
       }, idempotencyKey, controller.signal)
       if (controller.signal.aborted) return
-      await onAssemblyUpdated()
+      const success = completedDeliveryRepairSuccess(result.view)
+      onViewChanged(result.view)
       repairKeyRef.current = null
-      setNotice(result.view.activeTasks.length > 0 ? '已开始重新生成成片，需求、创意、脚本和分镜会保留。' : '成片正在更新，请稍后查看。')
+      setNotice(success.notice)
+      if (success.refreshAfterMutation) void onAssemblyUpdated().catch(() => undefined)
     } catch (caught) {
       if (!controller.signal.aborted) {
         if (isCreatorConflict(caught) || (typeof caught === 'object' && caught !== null && 'response' in caught)) {
@@ -159,9 +187,10 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
         <button className="creator-primary-button" type="button" disabled={working} onClick={() => void rebuild()}>{working ? '正在核对镜头…' : '重新拼接成片'}</button>
       </div>}
 
-			{!assemblyDirty && previewReady && presentation === 'video' && mediaUrl && (viewingHistorical || !isDelivery || isFinalReviewPassed) && <SimpleVideoPlayer src={mediaUrl} title="当前成片" downloadName="当前成片" onMediaStateChange={state => setMediaStatus({ url: mediaUrl, state })} />}
+			{!assemblyDirty && previewReady && shouldProbeMedia && <SimpleVideoPlayer src={mediaUrl!} title="当前成片" downloadName="当前成片" onMediaStateChange={state => setMediaStatus({ url: mediaUrl!, state })} />}
 			{!assemblyDirty && previewReady && currentContent && presentation !== 'video' && <ArtifactProofingCanvas content={proofingContent} reviewLabel="当前成片" />}
-			{!assemblyDirty && (!previewReady || !currentContent || (presentation === 'video' && !mediaUrl)) && <p className="artifact-empty">系统正在准备当前产物；完成后会在这里显示可审阅内容。</p>}
+			{!assemblyDirty && artifactLoadState === 'error' && <p className="artifact-empty">暂时无法读取当前成片，请稍后重试。</p>}
+			{!assemblyDirty && artifactLoadState !== 'error' && (!previewReady || !currentContent || (presentation === 'video' && !mediaUrl)) && <p className="artifact-empty">系统正在准备当前产物；完成后会在这里显示可审阅内容。</p>}
       {repairScope && !assemblyDirty && <section className="preview-delivery-warning" role="status">
         <strong>{deliveryMediaState === 'unsupported' ? '当前成片编码暂不受客户端支持。' : '成片文件缺失。'}</strong>
         <p>重新生成只会更新当前成片，已确认的需求、创意、脚本和分镜会保留。</p>
@@ -174,7 +203,7 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
         <p><span aria-hidden="true">{step.state === 'confirmed' ? '✓' : '○'}</span> 旁白、音乐和画面衔接是否自然</p>
       </section>
 
-      {isDelivery && (isFinalReviewPassed && mediaUrl && mediaState === 'playable' ? <section className="preview-delivery-package">
+      {isDelivery && (finalVideoReady ? <section className="preview-delivery-package">
         <h3>交付文件</h3>
         <p>成片检查通过后，才会显示最终视频和交付文件。</p>
         <a className="creator-primary-button" href={mediaUrl} download>下载最终视频</a>
