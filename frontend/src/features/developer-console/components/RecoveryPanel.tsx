@@ -29,7 +29,9 @@ interface RecoveryPanelProps {
   onRefresh: () => Promise<void>
 }
 
-const artifactBodyKeys = new Set([
+const MEDIA_BODY_REMOVED = '[MEDIA BODY REMOVED]'
+
+const mediaBodyKeys = new Set([
   'base64',
   'blob',
   'body',
@@ -43,16 +45,68 @@ const artifactBodyKeys = new Set([
   'rawcontent',
 ])
 
-function artifactMetadataOnly(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(artifactMetadataOnly)
-  if (!value || typeof value !== 'object') return value
+const diagnosticHashKeys = new Set(['checksum', 'contenthash', 'hash', 'prompthash'])
 
-  const metadata: Record<string, unknown> = {}
-  for (const [key, nestedValue] of Object.entries(value)) {
-    if (artifactBodyKeys.has(key.toLowerCase())) continue
-    metadata[key] = artifactMetadataOnly(nestedValue)
+function isMediaDataUrl(value: string): boolean {
+  const normalized = value.trimStart()
+  return /^data:(?:image|audio|video)\//i.test(normalized) ||
+    /^data:application\/(?:octet-stream|pdf|zip|x-zip-compressed)(?:[;,])/i.test(normalized)
+}
+
+function isLongEncodedBinary(value: string, key?: string): boolean {
+  if (key && diagnosticHashKeys.has(key.toLowerCase())) return false
+  const compact = value.replace(/\s/g, '')
+  return compact.length >= 256 && compact.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(compact)
+}
+
+function isBinaryDiagnosticValue(value: object): boolean {
+  try {
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return true
+    if (typeof Blob !== 'undefined' && value instanceof Blob) return true
+  } catch {
+    return true
   }
-  return metadata
+  return false
+}
+
+export function stripDiagnosticMediaBodies(
+  value: unknown,
+  key?: string,
+  seen: WeakMap<object, unknown> = new WeakMap(),
+): unknown {
+  if (typeof value === 'string') {
+    return isMediaDataUrl(value) || isLongEncodedBinary(value, key) ? MEDIA_BODY_REMOVED : value
+  }
+  if (!value || typeof value !== 'object') return value
+  if (isBinaryDiagnosticValue(value)) return MEDIA_BODY_REMOVED
+  if (value instanceof Date) return value.toISOString()
+
+  const existing = seen.get(value)
+  if (existing !== undefined) return existing
+
+  let descriptors: PropertyDescriptorMap
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value)
+  } catch {
+    return MEDIA_BODY_REMOVED
+  }
+
+  const sanitized: unknown[] | Record<string, unknown> = Array.isArray(value) ? [] : {}
+  seen.set(value, sanitized)
+  for (const [propertyKey, descriptor] of Object.entries(descriptors)) {
+    if (!descriptor.enumerable || mediaBodyKeys.has(propertyKey.toLowerCase())) continue
+    if (!('value' in descriptor)) {
+      if (!Array.isArray(sanitized)) sanitized[propertyKey] = '[Accessor]'
+      continue
+    }
+    const nestedValue = stripDiagnosticMediaBodies(descriptor.value, propertyKey, seen)
+    if (Array.isArray(sanitized)) {
+      if (/^\d+$/.test(propertyKey)) sanitized[Number(propertyKey)] = nestedValue
+      continue
+    }
+    sanitized[propertyKey] = nestedValue
+  }
+  return sanitized
 }
 
 export const selectLatestFailedNode = selectLatestFailedAgentNode
@@ -73,10 +127,11 @@ export function buildDiagnosticPackage({
     task: diagnostics.task,
     nodes: diagnostics.nodes ?? [],
     reviews: diagnostics.reviews ?? [],
-    artifacts: (diagnostics.artifacts ?? []).map(artifactMetadataOnly),
+    artifacts: diagnostics.artifacts ?? [],
     contexts: diagnostics.context ?? [],
   }
-  return redactDiagnosticValue(diagnosticPackage) as DiagnosticPackage
+  const packageWithoutMediaBodies = stripDiagnosticMediaBodies(diagnosticPackage)
+  return redactDiagnosticValue(packageWithoutMediaBodies) as DiagnosticPackage
 }
 
 export function serializeDiagnosticPackage(diagnosticPackage: DiagnosticPackage): string {

@@ -342,19 +342,56 @@ try {
       projectId: 'project-1',
       runId: 'run-1',
       errors: [],
-      run: { id: 'run-1', taskId: 'task-1', status: 'FAILED', secret: 'run-secret' },
-      task: { id: 'task-1', Authorization: 'Bearer task-secret' },
-      nodes: failedNodeTie,
-      reviews: [{ id: 'review-1', credential: 'review-secret' }],
+      run: {
+        id: 'run-1',
+        taskId: 'task-1',
+        status: 'FAILED',
+        secret: 'run-secret',
+        body: 'RUN_MEDIA_BODY',
+        previewUrl: 'data:video/mp4;base64,RUN_MEDIA_DATA_URL',
+        binaryPayload: new Uint8Array([82, 85, 78, 95, 77, 69, 68, 73, 65]),
+        metadata: { contentHash: 'run-content-hash' },
+      },
+      task: {
+        id: 'task-1',
+        Authorization: 'Bearer task-secret',
+        payload: { content: 'TASK_MEDIA_CONTENT' },
+        cache: { inlineJson: 'TASK_INLINE_JSON' },
+      },
+      nodes: [
+        ...failedNodeTie,
+        {
+          id: 'node-media',
+          name: 'Node media',
+          status: 'SUCCESS',
+          response: { data: 'NODE_MEDIA_DATA' },
+          trace: { raw: 'NODE_RAW_PAYLOAD' },
+        },
+      ],
+      reviews: [{
+        id: 'review-1',
+        credential: 'review-secret',
+        evidence: { base64: 'REVIEW_MEDIA_BASE64' },
+        attachment: { blob: 'REVIEW_MEDIA_BLOB' },
+      }],
       artifacts: [{
         id: 'artifact-1',
         name: 'preview.mp4',
         storageRef: 'local://projects/project-1/preview.mp4',
+        contentHash: 'artifact-content-hash',
         body: 'raw-body',
         content: 'raw-content',
         data: 'base64-media-data',
+        nested: {
+          mediaBody: 'ARTIFACT_MEDIA_BODY',
+          fileBody: 'ARTIFACT_FILE_BODY',
+        },
       }],
-      context: [{ id: 'context-1', password: 'context-secret' }],
+      context: [{
+        id: 'context-1',
+        password: 'context-secret',
+        payload: { bytes: 'CONTEXT_MEDIA_BYTES' },
+      }],
     },
   })
   assert.deepEqual(Object.keys(diagnosticPackage), [
@@ -364,11 +401,28 @@ try {
   assert.equal(diagnosticPackage.task.Authorization, '[REDACTED]')
   assert.equal(diagnosticPackage.reviews[0].credential, '[REDACTED]')
   assert.equal(diagnosticPackage.contexts[0].password, '[REDACTED]')
+  assert.equal('body' in diagnosticPackage.run, false)
+  assert.equal(diagnosticPackage.run.previewUrl, '[MEDIA BODY REMOVED]')
+  assert.equal(diagnosticPackage.run.binaryPayload, '[MEDIA BODY REMOVED]')
+  assert.equal('content' in diagnosticPackage.task.payload, false)
+  assert.equal('inlineJson' in diagnosticPackage.task.cache, false)
+  assert.equal('data' in diagnosticPackage.nodes.at(-1).response, false)
+  assert.equal('raw' in diagnosticPackage.nodes.at(-1).trace, false)
+  assert.equal('base64' in diagnosticPackage.reviews[0].evidence, false)
+  assert.equal('blob' in diagnosticPackage.reviews[0].attachment, false)
   assert.equal('body' in diagnosticPackage.artifacts[0], false)
   assert.equal('content' in diagnosticPackage.artifacts[0], false)
   assert.equal('data' in diagnosticPackage.artifacts[0], false)
+  assert.equal('mediaBody' in diagnosticPackage.artifacts[0].nested, false)
+  assert.equal('fileBody' in diagnosticPackage.artifacts[0].nested, false)
+  assert.equal('bytes' in diagnosticPackage.contexts[0].payload, false)
+  assert.equal(diagnosticPackage.run.metadata.contentHash, 'run-content-hash')
+  assert.equal(diagnosticPackage.artifacts[0].contentHash, 'artifact-content-hash')
   const serializedPackage = serializeDiagnosticPackage(diagnosticPackage)
-  assert.doesNotMatch(serializedPackage, /run-secret|task-secret|review-secret|context-secret|raw-body|raw-content|base64-media-data/)
+  assert.doesNotMatch(
+    serializedPackage,
+    /run-secret|task-secret|review-secret|context-secret|RUN_MEDIA|TASK_MEDIA|TASK_INLINE|NODE_MEDIA|NODE_RAW|REVIEW_MEDIA|raw-body|raw-content|base64-media-data|ARTIFACT_MEDIA|ARTIFACT_FILE|CONTEXT_MEDIA/,
+  )
 
   assert.deepEqual(
     redactDiagnosticValue({
