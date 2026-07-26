@@ -219,9 +219,18 @@ export interface Artifact {
   promptHash?: string
   provider?: string
   model?: string
+  status?: string
+  humanApproved?: boolean
+  dependsOn?: string[]
+  producedByNode?: string
+  producedByRole?: string
+  producedByTool?: string
+  roleAgentId?: string
+  taskId?: string
   isCurrent: boolean
   metadata?: Record<string, unknown>
   createdAt: string
+  updatedAt?: string
 }
 
 export interface ArtifactListResponse {

@@ -14,6 +14,8 @@ import type { VideoProject } from '../../utils/types'
 import DiagnosticsSummary, { DiagnosticsProjectSelector } from './components/DiagnosticsSummary'
 import DiagnosticsTimeline from './components/DiagnosticsTimeline'
 import ToolCallInspector from './components/ToolCallInspector'
+import ArtifactRegistry from './components/ArtifactRegistry'
+import GateInspector from './components/GateInspector'
 import {
   isTerminalAgentRunStatus,
   loadProjectDiagnostics,
@@ -305,6 +307,10 @@ function DiagnosticsContent({
       ? <DiagnosticsTimeline nodes={diagnostics.nodes ?? []} />
       : currentView === 'tools'
         ? <ToolCallInspector nodes={diagnostics.nodes ?? []} />
+      : currentView === 'artifacts'
+        ? <ArtifactRegistry artifacts={diagnostics.artifacts ?? []} scopeKey={`${diagnostics.projectId}:${diagnostics.runId}`} />
+      : currentView === 'gates'
+        ? <GateInspector reviews={diagnostics.reviews ?? []} nodes={diagnostics.nodes ?? []} />
       : (
           <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <DiagnosticsMetric label="运行状态" value={diagnostics.run.status} />

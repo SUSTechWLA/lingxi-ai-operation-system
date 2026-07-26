@@ -13,6 +13,8 @@ const creatorRoutesOutfile = join(tempDir, 'creatorRoutes.mjs')
 const focusCycleOutfile = join(tempDir, 'focusCycle.mjs')
 const developerDiagnosticsOutfile = join(tempDir, 'developerDiagnostics.mjs')
 const toolCallInspectorOutfile = join(tempDir, 'toolCallInspector.mjs')
+const artifactRegistryOutfile = join(tempDir, 'artifactRegistry.cjs')
+const gateInspectorOutfile = join(tempDir, 'gateInspector.mjs')
 
 try {
   await build({
@@ -66,6 +68,23 @@ try {
   await build({
     entryPoints: [new URL('../src/features/developer-console/components/ToolCallInspector.tsx', import.meta.url).pathname],
     outfile: toolCallInspectorOutfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/features/developer-console/components/ArtifactRegistry.tsx', import.meta.url).pathname],
+    outfile: artifactRegistryOutfile,
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    define: { 'import.meta.env': '{}' },
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/features/developer-console/components/GateInspector.tsx', import.meta.url).pathname],
+    outfile: gateInspectorOutfile,
     bundle: true,
     format: 'esm',
     platform: 'node',
@@ -144,6 +163,11 @@ try {
     filterToolCalls,
     toolCallCopyText,
   } = await import(pathToFileURL(toolCallInspectorOutfile))
+  const {
+    buildArtifactLineage,
+    filterArtifactRegistryRows,
+  } = await import(pathToFileURL(artifactRegistryOutfile))
+  const { buildGateInspectionItems } = await import(pathToFileURL(gateInspectorOutfile))
   const diagnosticsApiSource = await readFile(new URL('../src/services/api.ts', import.meta.url), 'utf8')
   const directorPageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
   const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
@@ -153,6 +177,8 @@ try {
   const diagnosticsSummarySource = await readFile(new URL('../src/features/developer-console/components/DiagnosticsSummary.tsx', import.meta.url), 'utf8')
   const diagnosticsTimelineSource = await readFile(new URL('../src/features/developer-console/components/DiagnosticsTimeline.tsx', import.meta.url), 'utf8')
   const toolCallInspectorSource = await readFile(new URL('../src/features/developer-console/components/ToolCallInspector.tsx', import.meta.url), 'utf8')
+  const artifactRegistrySource = await readFile(new URL('../src/features/developer-console/components/ArtifactRegistry.tsx', import.meta.url), 'utf8')
+  const gateInspectorSource = await readFile(new URL('../src/features/developer-console/components/GateInspector.tsx', import.meta.url), 'utf8')
   const globalStylesSource = await readFile(new URL('../src/index.css', import.meta.url), 'utf8')
   assert.match(creatorShellSource, /开始创作/)
   assert.match(creatorShellSource, /我的视频/)
@@ -246,10 +272,20 @@ try {
   assert.match(toolCallInspectorSource, /serializeRedactedDiagnosticValue/)
   assert.match(toolCallInspectorSource, /aria-pressed=/)
   assert.doesNotMatch(toolCallInspectorSource, /<details[^>]*\sopen(?:=|\s|>)/)
+  assert.match(developerConsoleSource, /currentView === 'artifacts'/)
+  assert.match(developerConsoleSource, /currentView === 'gates'/)
+  assert.match(artifactRegistrySource, /fetchArtifactContent\([^,]+,\s*controller\.signal\)/)
+  assert.match(artifactRegistrySource, /fetchArtifactHistory\([^,]+,\s*controller\.signal\)/)
+  assert.match(artifactRegistrySource, /controller\.abort\(\)/)
+  assert.match(artifactRegistrySource, /serializeRedactedDiagnosticValue/)
+  assert.doesNotMatch(artifactRegistrySource, /<details[^>]*\sopen(?:=|\s|>)/)
+  assert.doesNotMatch(gateInspectorSource, /approveAgentReview|rejectAgentReview|approve|reject/)
   assert.match(globalStylesSource, /\.diagnostics-metric-grid/)
   assert.match(globalStylesSource, /\.diagnostics-timeline/)
   assert.match(globalStylesSource, /\.diagnostics-json-panel/)
   assert.match(globalStylesSource, /\.diagnostics-tool-inspector/)
+  assert.match(globalStylesSource, /\.diagnostics-artifact-registry/)
+  assert.match(globalStylesSource, /\.diagnostics-gate-inspector/)
   assert.match(globalStylesSource, /@media\s*\(max-width:\s*390px\)/)
   assert.equal(replaceHashRoute('#/create'), '#/create')
   assert.equal(cycleFocusIndex(0, 2, false), 1)
@@ -594,6 +630,78 @@ try {
   assert.match(copiedToolCall, /\[REDACTED\]/)
   assert.match(copiedToolCall, /<local-path>\/private\.mov/)
   assert.doesNotMatch(copiedToolCall, /copy-secret|copy-response-secret|copy-error-secret|\/Users\/alice/)
+
+  const artifactFixtures = [
+    {
+      id: 'artifact-current', projectId: 'project-1', workflowRunId: 'run-1', stageName: 'script',
+      unitId: 'unit-1', kind: 'MARKDOWN', name: 'creator script', version: 2, parentId: 'artifact-old',
+      storageType: 'inline', storageRef: 'safe/script.md', sizeBytes: 42, contentHash: 'sha256:current',
+      isCurrent: true, status: 'valid', producedByRole: 'writer', producedByTool: 'draft_script',
+      metadata: { creatorFacing: true }, createdAt: '2026-01-02T00:00:00.000Z',
+    },
+    {
+      id: 'artifact-old', projectId: 'project-1', workflowRunId: 'run-1', stageName: 'script',
+      kind: 'MARKDOWN', name: 'creator script', version: 1, storageType: 'inline', sizeBytes: 20,
+      contentHash: 'sha256:old', isCurrent: false, status: 'stale', producedByNode: 'node-old',
+      metadata: { creatorFacing: true }, createdAt: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'artifact-log', projectId: 'project-1', workflowRunId: 'run-1', stageName: 'render',
+      kind: 'LOG', name: 'render trace', version: 1, storageType: 'local',
+      storageRef: '/Users/alice/private/render.log', sizeBytes: 99, contentHash: 'sha256:log',
+      isCurrent: true, status: 'failed', producedByNode: 'node-render',
+      metadata: { creatorFacing: false }, createdAt: '2026-01-03T00:00:00.000Z',
+    },
+  ]
+  assert.deepEqual(filterArtifactRegistryRows(artifactFixtures, {
+    currency: 'current', kind: 'all', stage: 'all', status: 'all', facing: 'all', query: '',
+  }).map((artifact) => artifact.id), ['artifact-log', 'artifact-current'])
+  assert.deepEqual(filterArtifactRegistryRows(artifactFixtures, {
+    currency: 'history', kind: 'all', stage: 'all', status: 'all', facing: 'all', query: '',
+  }).map((artifact) => artifact.id), ['artifact-old'])
+  assert.equal(filterArtifactRegistryRows(artifactFixtures, {
+    currency: 'all', kind: 'LOG', stage: 'render', status: 'failed', facing: 'technical', query: 'artifact-log',
+  }).length, 1)
+  assert.equal(filterArtifactRegistryRows(artifactFixtures, {
+    currency: 'all', kind: 'MARKDOWN', stage: 'script', status: 'valid', facing: 'creator', query: 'CREATOR SCRIPT',
+  }).length, 1)
+  assert.deepEqual(buildArtifactLineage(artifactFixtures[0], [artifactFixtures[0], artifactFixtures[1]]), [
+    { id: 'artifact-current', parentId: 'artifact-old', version: 2, isCurrent: true, relationship: 'current' },
+    { id: 'artifact-old', parentId: undefined, version: 1, isCurrent: false, relationship: 'parent' },
+  ])
+
+  assert.deepEqual(buildGateInspectionItems([
+    {
+      id: 'review-human', nodeId: 'node-human', status: 'APPROVED', stage: 'script',
+      humanReview: { required: true, title: 'Script review' }, blocksDownstream: true,
+      artifactId: 'artifact-current', reviewOutput: {
+        reviewer: 'Editor A', comment: 'Looks good', reviewedAt: '2026-01-04T00:00:00.000Z',
+      },
+    },
+    {
+      id: 'review-quality', nodeId: 'node-quality', status: 'REJECTED', reviewPhase: 'quality_gate',
+      sourceNodeId: 'node-producer', artifactId: 'artifact-log', blocksDownstream: true,
+    },
+  ], [
+    { id: 'node-human', name: 'Script review', type: 'REVIEW_GATE', status: 'SUCCESS', retryCount: 0, maxRetry: 0, transport: 'control' },
+    { id: 'node-quality', name: 'Script quality', type: 'QUALITY_GATE', status: 'FAILED', retryCount: 0, maxRetry: 0, transport: 'control' },
+    { id: 'node-control', name: 'Dependency control', type: 'control', status: 'PENDING', retryCount: 0, maxRetry: 0, transport: 'control' },
+    { id: 'node-tool', name: 'Render', type: 'tool', status: 'SUCCESS', retryCount: 0, maxRetry: 0, transport: 'tool' },
+  ]), [
+    {
+      id: 'review-human', kind: 'human', title: 'Script review', status: 'APPROVED', stage: 'script',
+      blockingDownstream: true, sourceArtifactId: 'artifact-current', sourceNodeId: 'node-human',
+      reviewer: 'Editor A', comment: 'Looks good', time: '2026-01-04T00:00:00.000Z',
+    },
+    {
+      id: 'review-quality', kind: 'quality', title: 'review-quality', status: 'REJECTED',
+      blockingDownstream: true, sourceArtifactId: 'artifact-log', sourceNodeId: 'node-producer',
+    },
+    {
+      id: 'node-control', kind: 'control', title: 'Dependency control', status: 'PENDING',
+      blockingDownstream: false, sourceNodeId: 'node-control',
+    },
+  ])
 
   const projectFixtures = [
     { id: 'newest-without-run', updatedAt: '2026-01-04T00:00:00.000Z' },

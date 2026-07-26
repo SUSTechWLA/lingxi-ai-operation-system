@@ -180,16 +180,18 @@ export const fetchProjectArtifacts = async (
 }
 
 export const fetchArtifactContent = async (
-  artifactId: string
+  artifactId: string,
+  signal?: AbortSignal,
 ): Promise<ArtifactContentResponse> => {
-  const response = await api.get<ApiResponse<ArtifactContentResponse>>(`/artifacts/${artifactId}/content`)
+  const response = await api.get<ApiResponse<ArtifactContentResponse>>(`/artifacts/${artifactId}/content`, { signal })
   return response.data.data
 }
 
 export const fetchArtifactHistory = async (
-  artifactId: string
+  artifactId: string,
+  signal?: AbortSignal,
 ): Promise<ArtifactHistoryResponse> => {
-  const response = await api.get<ApiResponse<ArtifactHistoryResponse>>(`/artifacts/${artifactId}/history`)
+  const response = await api.get<ApiResponse<ArtifactHistoryResponse>>(`/artifacts/${artifactId}/history`, { signal })
   return response.data.data
 }
 
