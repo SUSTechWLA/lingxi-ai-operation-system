@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DeveloperDiagnosticsView } from '../../creatorRoutes'
 import {
-  fetchProjectArtifacts,
+  fetchProjectArtifactRegistry,
   fetchVideoProjects,
   getAgentRun,
   getAgentRunReviews,
@@ -17,6 +17,7 @@ import ToolCallInspector from './components/ToolCallInspector'
 import ArtifactRegistry from './components/ArtifactRegistry'
 import GateInspector from './components/GateInspector'
 import {
+  diagnosticsSnapshotForScope,
   isTerminalAgentRunStatus,
   loadProjectDiagnostics,
   mergeProjectDiagnostics,
@@ -54,7 +55,7 @@ const diagnosticsApi: ProjectDiagnosticsApi = {
   getRun: getAgentRun,
   getTrace: getAgentRunTrace,
   getReviews: getAgentRunReviews,
-  getArtifacts: fetchProjectArtifacts,
+  getArtifacts: fetchProjectArtifactRegistry,
   getTask: getTaskDetails,
   getContext: getTaskContext,
 }
@@ -91,9 +92,16 @@ export default function DeveloperConsolePage({
     () => projects.find((project) => project.id === selectedProjectId),
     [projects, selectedProjectId],
   )
+  const scopedDiagnostics = diagnosticsSnapshotForScope(
+    diagnostics,
+    selectedProject?.id,
+    selectedProject?.currentRunId,
+  )
   const handleProjectSelect = (projectId: string) => {
     const project = projects.find((candidate) => candidate.id === projectId)
     requestScopeRef.current = project?.currentRunId ? `${project.id}:${project.currentRunId}` : ''
+    setDiagnostics(null)
+    setDiagnosticsLoadState(project?.currentRunId ? 'loading' : 'idle')
     setSelectedProjectId(projectId)
   }
 
@@ -148,7 +156,7 @@ export default function DeveloperConsolePage({
     return () => controller.abort()
   }, [selectedProject?.currentRunId, selectedProject?.id])
 
-  const selectedRunStatus = diagnostics?.run?.status
+  const selectedRunStatus = scopedDiagnostics?.run?.status
   useEffect(() => {
     const projectId = selectedProject?.id
     const runId = selectedProject?.currentRunId
@@ -196,8 +204,8 @@ export default function DeveloperConsolePage({
   const noProjects = projectLoadState === 'ready' && projects.length === 0
   const noRun = projectLoadState === 'ready' && Boolean(selectedProject) && !selectedProject?.currentRunId
   const backendUnavailable = projectLoadState === 'backend-unavailable' || diagnosticsLoadState === 'backend-unavailable'
-  const selectedRunFailed = diagnostics?.run?.status === 'FAILED'
-  const partialSections = diagnostics?.errors ?? []
+  const selectedRunFailed = scopedDiagnostics?.run?.status === 'FAILED'
+  const partialSections = scopedDiagnostics?.errors ?? []
 
   return (
     <div className="developer-diagnostics-page min-h-screen bg-background text-ink">
@@ -258,7 +266,7 @@ export default function DeveloperConsolePage({
             noRun={noRun}
             currentView={currentView}
             selectedProject={selectedProject}
-            diagnostics={diagnostics}
+            diagnostics={scopedDiagnostics}
             selectedRunFailed={selectedRunFailed}
             partialSections={partialSections}
           />

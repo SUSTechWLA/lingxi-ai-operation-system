@@ -354,6 +354,10 @@ export interface AgentReviewItem {
   reviewContent?: string
   reviewArtifacts?: Array<Record<string, unknown>>
   reviewOutput?: Record<string, unknown>
+  reviewerId?: string
+  reviewComment?: string
+  createdAt?: string
+  reviewedAt?: string
 }
 
 export interface AgentReviewListResponse {

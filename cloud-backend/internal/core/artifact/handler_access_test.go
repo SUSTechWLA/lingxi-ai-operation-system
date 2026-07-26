@@ -317,7 +317,12 @@ func (f fakeArtifactProjectAccess) CanAccessProject(_ context.Context, userID, p
 	return f.owners[projectID] == userID
 }
 
-type fakeHandlerArtifactStore struct{ artifact *Artifact }
+type fakeHandlerArtifactStore struct {
+	artifact        *Artifact
+	allArtifacts    []*Artifact
+	currentCalls    int
+	allVersionCalls int
+}
 
 func (f *fakeHandlerArtifactStore) GetByID(_ context.Context, id string) (*Artifact, error) {
 	if f.artifact == nil || f.artifact.ID != id {
@@ -332,11 +337,59 @@ func (f *fakeHandlerArtifactStore) GetHistory(context.Context, string, string, s
 	return []*Artifact{f.artifact}, nil
 }
 func (f *fakeHandlerArtifactStore) ListByProject(context.Context, string) ([]*Artifact, error) {
+	f.currentCalls++
 	return []*Artifact{f.artifact}, nil
+}
+func (f *fakeHandlerArtifactStore) ListAllVersionsByProject(context.Context, string) ([]*Artifact, error) {
+	f.allVersionCalls++
+	return f.allArtifacts, nil
 }
 func (f *fakeHandlerArtifactStore) CreateArtifact(context.Context, *CreateArtifactRequest) (*Artifact, error) {
 	return f.artifact, nil
 }
 func (f *fakeHandlerArtifactStore) MarkDownstreamStale(context.Context, string, string, string) ([]string, error) {
 	return nil, nil
+}
+
+func TestListProjectArtifactsIncludeHistoryReturnsAllVersionsWithoutChangingDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	current := &Artifact{ID: "artifact-current", ProjectID: "project-1", IsCurrent: true}
+	historical := &Artifact{ID: "artifact-history", ProjectID: "project-1", IsCurrent: false}
+	store := &fakeHandlerArtifactStore{artifact: current, allArtifacts: []*Artifact{current, historical}}
+	handler := newHandlerForStore(store, nil, nil).WithProjectAccess(fakeArtifactProjectAccess{
+		owners: map[string]string{"project-1": "user-1"},
+	})
+	router := gin.New()
+	handler.RegisterRoutes(router, func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "user-1"))
+		c.Next()
+	})
+
+	request := func(path string) []*Artifact {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, body = %s", path, rec.Code, rec.Body.String())
+		}
+		var response struct {
+			Data struct {
+				Artifacts []*Artifact `json:"artifacts"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return response.Data.Artifacts
+	}
+
+	if got := request("/api/video-projects/project-1/artifacts"); len(got) != 1 || got[0].ID != current.ID {
+		t.Fatalf("default listing = %#v, want current only", got)
+	}
+	if got := request("/api/video-projects/project-1/artifacts?includeHistory=true"); len(got) != 2 || got[1].ID != historical.ID {
+		t.Fatalf("diagnostics listing = %#v, want all versions", got)
+	}
+	if store.currentCalls != 1 || store.allVersionCalls != 1 {
+		t.Fatalf("listing calls current=%d all=%d, want one each", store.currentCalls, store.allVersionCalls)
+	}
 }

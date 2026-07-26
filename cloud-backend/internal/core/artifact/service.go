@@ -130,9 +130,26 @@ func (s *Service) GetHistory(ctx context.Context, projectID, stageName, unitID s
 	return s.repo.FindHistory(ctx, projectID, stageName, unitID)
 }
 
+type artifactProjectLister interface {
+	ListByProject(context.Context, string) ([]*Artifact, error)
+	ListAllVersionsByProject(context.Context, string) ([]*Artifact, error)
+}
+
+func listArtifactsByProject(ctx context.Context, store artifactProjectLister, projectID string, includeHistory bool) ([]*Artifact, error) {
+	if includeHistory {
+		return store.ListAllVersionsByProject(ctx, projectID)
+	}
+	return store.ListByProject(ctx, projectID)
+}
+
 // ListByProject returns all current artifacts for a project.
 func (s *Service) ListByProject(ctx context.Context, projectID string) ([]*Artifact, error) {
-	return s.repo.ListByProject(ctx, projectID)
+	return listArtifactsByProject(ctx, s.repo, projectID, false)
+}
+
+// ListAllVersionsByProject returns current and historical artifact metadata for diagnostics.
+func (s *Service) ListAllVersionsByProject(ctx context.Context, projectID string) ([]*Artifact, error) {
+	return listArtifactsByProject(ctx, s.repo, projectID, true)
 }
 
 // ListUsableByProject returns only current, valid artifacts for a project.

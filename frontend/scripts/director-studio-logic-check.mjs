@@ -154,6 +154,7 @@ try {
     diagnosticDurationMs,
     isTerminalAgentRunStatus,
     loadProjectDiagnostics,
+    diagnosticsSnapshotForScope,
     redactDiagnosticValue,
     selectDiagnosticsProject,
     serializeRedactedDiagnosticValue,
@@ -236,12 +237,14 @@ try {
     'getAgentRun',
     'getAgentRunTrace',
     'getAgentRunReviews',
-    'fetchProjectArtifacts',
+    'fetchProjectArtifactRegistry',
     'getTaskDetails',
     'getTaskContext',
   ]) {
     assert.match(developerConsoleSource, new RegExp(`\\b${apiName}\\b`))
   }
+  assert.match(diagnosticsApiSource, /export (?:const|async function) fetchProjectArtifactRegistry/)
+  assert.match(diagnosticsApiSource, /params: \{ includeHistory: true \}/)
   assert.match(diagnosticsApiSource, /export (?:const|async function) getTaskDetails/)
   assert.match(diagnosticsApiSource, /`\/task\/\$\{encodeURIComponent\(taskId\)\}`/)
   assert.match(diagnosticsApiSource, /export (?:const|async function) getTaskContext/)
@@ -634,16 +637,16 @@ try {
   const artifactFixtures = [
     {
       id: 'artifact-current', projectId: 'project-1', workflowRunId: 'run-1', stageName: 'script',
-      unitId: 'unit-1', kind: 'MARKDOWN', name: 'creator script', version: 2, parentId: 'artifact-old',
+      unitId: 'unit-1', kind: 'VIDEO_SCRIPT', name: 'creator script', mimeType: 'text/markdown', version: 2, parentId: 'artifact-old',
       storageType: 'inline', storageRef: 'safe/script.md', sizeBytes: 42, contentHash: 'sha256:current',
       isCurrent: true, status: 'valid', producedByRole: 'writer', producedByTool: 'draft_script',
-      metadata: { creatorFacing: true }, createdAt: '2026-01-02T00:00:00.000Z',
+      createdAt: '2026-01-02T00:00:00.000Z',
     },
     {
       id: 'artifact-old', projectId: 'project-1', workflowRunId: 'run-1', stageName: 'script',
-      kind: 'MARKDOWN', name: 'creator script', version: 1, storageType: 'inline', sizeBytes: 20,
+      kind: 'VIDEO_SCRIPT', name: 'creator script', mimeType: 'text/markdown', version: 1, storageType: 'inline', sizeBytes: 20,
       contentHash: 'sha256:old', isCurrent: false, status: 'stale', producedByNode: 'node-old',
-      metadata: { creatorFacing: true }, createdAt: '2026-01-01T00:00:00.000Z',
+      createdAt: '2026-01-01T00:00:00.000Z',
     },
     {
       id: 'artifact-log', projectId: 'project-1', workflowRunId: 'run-1', stageName: 'render',
@@ -663,7 +666,7 @@ try {
     currency: 'all', kind: 'LOG', stage: 'render', status: 'failed', facing: 'technical', query: 'artifact-log',
   }).length, 1)
   assert.equal(filterArtifactRegistryRows(artifactFixtures, {
-    currency: 'all', kind: 'MARKDOWN', stage: 'script', status: 'valid', facing: 'creator', query: 'CREATOR SCRIPT',
+    currency: 'all', kind: 'VIDEO_SCRIPT', stage: 'script', status: 'valid', facing: 'creator', query: 'CREATOR SCRIPT',
   }).length, 1)
   assert.deepEqual(buildArtifactLineage(artifactFixtures[0], [artifactFixtures[0], artifactFixtures[1]]), [
     { id: 'artifact-current', parentId: 'artifact-old', version: 2, isCurrent: true, relationship: 'current' },
@@ -674,9 +677,8 @@ try {
     {
       id: 'review-human', nodeId: 'node-human', status: 'APPROVED', stage: 'script',
       humanReview: { required: true, title: 'Script review' }, blocksDownstream: true,
-      artifactId: 'artifact-current', reviewOutput: {
-        reviewer: 'Editor A', comment: 'Looks good', reviewedAt: '2026-01-04T00:00:00.000Z',
-      },
+      artifactId: 'artifact-current', reviewerId: 'Editor A', reviewComment: 'Looks good',
+      reviewedAt: '2026-01-04T00:00:00.000Z',
     },
     {
       id: 'review-quality', nodeId: 'node-quality', status: 'REJECTED', reviewPhase: 'quality_gate',
@@ -722,6 +724,9 @@ try {
   assert.equal(isTerminalAgentRunStatus('CANCELLED'), true)
   assert.equal(isTerminalAgentRunStatus('RUNNING'), false)
   assert.equal(isTerminalAgentRunStatus('CREATED'), false)
+  const priorScopeSnapshot = { projectId: 'project-old', runId: 'run-old', errors: [] }
+  assert.equal(diagnosticsSnapshotForScope(priorScopeSnapshot, 'project-new', 'run-new'), null)
+  assert.equal(diagnosticsSnapshotForScope(priorScopeSnapshot, 'project-old', 'run-old'), priorScopeSnapshot)
 
   const scopedCalls = []
   const scopedController = new AbortController()

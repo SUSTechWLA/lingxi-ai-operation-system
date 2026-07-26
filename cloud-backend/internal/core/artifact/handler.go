@@ -36,6 +36,7 @@ type handlerArtifactStore interface {
 	revisionArtifactStore
 	GetHistory(context.Context, string, string, string) ([]*Artifact, error)
 	ListByProject(context.Context, string) ([]*Artifact, error)
+	ListAllVersionsByProject(context.Context, string) ([]*Artifact, error)
 }
 
 // ProjectAccessChecker resolves project ownership without coupling the core
@@ -111,7 +112,7 @@ func (h *Handler) ListProjectArtifacts(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		return
 	}
-	artifacts, err := h.service.ListByProject(c.Request.Context(), projectID)
+	artifacts, err := listArtifactsByProject(c.Request.Context(), h.service, projectID, c.Query("includeHistory") == "true")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		return
@@ -269,6 +270,9 @@ func (h *Handler) authorizeProject(c *gin.Context, projectID string) bool {
 }
 
 func (h *Handler) materializeProject(ctx context.Context, projectID string) error {
+	if h.runRepo == nil || h.nodeRepo == nil {
+		return nil
+	}
 	seenTaskIDs := map[string]bool{}
 	runs, err := h.runRepo.FindByProject(ctx, projectID)
 	if err != nil {

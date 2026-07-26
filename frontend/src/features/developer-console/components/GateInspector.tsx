@@ -79,9 +79,9 @@ export function buildGateInspectionItems(
     const kind = review.reviewPhase === 'quality_gate' ? 'quality' : 'human'
     const sourceArtifactId = firstString([raw, output], ['sourceArtifactId', 'artifactId']) ?? safeString(review.artifactId)
     const sourceNodeId = safeString(review.sourceNodeId) ?? safeString(review.nodeId)
-    const reviewer = firstString([raw, output, humanReview], ['reviewer', 'reviewedBy', 'decisionBy'])
-    const comment = firstString([raw, output, humanReview], ['comment', 'decisionComment', 'reviewComment'])
-    const time = firstString([raw, output, humanReview], ['reviewedAt', 'decidedAt', 'updatedAt', 'createdAt'])
+    const reviewer = firstString([raw, output, humanReview], ['reviewerId', 'reviewer', 'reviewedBy', 'decisionBy'])
+    const comment = firstString([raw, output, humanReview], ['reviewComment', 'comment', 'decisionComment'])
+    const time = firstString([raw, output, humanReview], ['reviewedAt', 'createdAt', 'decidedAt', 'updatedAt'])
     const stage = safeString(review.stage)
     return {
       id: safeString(review.id) ?? 'unknown-review',

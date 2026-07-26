@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState, type SyntheticEvent, type ReactNode } from 'react'
 import { fetchArtifactContent, fetchArtifactHistory } from '../../../services/api'
 import type { Artifact, ArtifactContentResponse } from '../../../utils/types'
+import { classifyCreatorReviewArtifact } from '../../../utils/artifactClassification'
 import {
   redactDiagnosticValue,
   serializeRedactedDiagnosticValue,
@@ -64,11 +65,13 @@ function artifactIsStale(artifact: Artifact): boolean {
 }
 
 function isCreatorFacing(artifact: Artifact): boolean {
-  const metadata = metadataRecord(artifact)
-  if (typeof metadata.creatorFacing === 'boolean') return metadata.creatorFacing
-  if (typeof metadata.creator_facing === 'boolean') return metadata.creator_facing
-  const audience = stringMetadata(artifact, ['audience', 'visibility', 'surface'])?.toLocaleLowerCase()
-  return audience === 'creator' || audience === 'creator-facing' || audience === 'creator_facing'
+  return classifyCreatorReviewArtifact({
+    kind: artifact.kind,
+    mimeType: artifact.mimeType,
+    name: artifact.name,
+    artifactType: stringMetadata(artifact, ['artifactType', 'artifact_type']),
+    generationKind: stringMetadata(artifact, ['generationKind', 'generation_kind']),
+  }) !== undefined
 }
 
 function artifactProducer(artifact: Artifact): string {

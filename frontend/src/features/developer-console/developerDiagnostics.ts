@@ -50,6 +50,15 @@ export interface ProjectDiagnosticsLoadResult {
   errors: DiagnosticsDataSection[]
 }
 
+export function diagnosticsSnapshotForScope(
+  snapshot: ProjectDiagnosticsLoadResult | null,
+  projectId?: string,
+  runId?: string,
+): ProjectDiagnosticsLoadResult | null {
+  if (!snapshot || !projectId || !runId) return null
+  return snapshot.projectId === projectId && snapshot.runId === runId ? snapshot : null
+}
+
 export interface ProjectDiagnosticsApi {
   getRun: (runId: string, signal?: AbortSignal) => Promise<AgentRun>
   getTrace: (runId: string, signal?: AbortSignal) => Promise<unknown>

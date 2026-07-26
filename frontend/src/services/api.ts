@@ -179,6 +179,17 @@ export const fetchProjectArtifacts = async (
   return response.data.data
 }
 
+export const fetchProjectArtifactRegistry = async (
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ArtifactListResponse> => {
+  const response = await api.get<ApiResponse<ArtifactListResponse>>(`/video-projects/${projectId}/artifacts`, {
+    params: { includeHistory: true },
+    signal,
+  })
+  return response.data.data
+}
+
 export const fetchArtifactContent = async (
   artifactId: string,
   signal?: AbortSignal,
