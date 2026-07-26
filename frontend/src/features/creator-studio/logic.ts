@@ -20,6 +20,11 @@ export const CREATOR_CONFLICT_COPY = '内容已更新，请刷新后重试'
 export const SHOT_QUEUE_CONFLICT_COPY = '这个 Shot 已有更新，请基于最新版本重试'
 export const SHOT_QUEUE_ROW_HEIGHT = 64
 export const DEFAULT_SHOT_QUEUE_FILTER: Readonly<{ status: ShotQueueStatus }> = { status: 'needs_attention' }
+
+export function initialShotFilters(projectStatus: string): Readonly<{ status: ShotQueueStatus }> {
+  const normalizedStatus = projectStatus.trim().toLocaleUpperCase()
+  return { status: normalizedStatus === 'COMPLETED' || normalizedStatus === 'ARCHIVED' ? 'all' : 'needs_attention' }
+}
 export const CREATOR_WORKSPACE_STEP_IDS: readonly CreatorStepId[] = [
   'requirements', 'direction', 'script', 'shots', 'preview', 'delivery',
 ]

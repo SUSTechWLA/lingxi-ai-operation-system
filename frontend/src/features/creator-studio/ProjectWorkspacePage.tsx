@@ -12,6 +12,7 @@ import {
   isCurrentWorkspaceArtifact,
   isLatestWorkspaceRequest,
   DEFAULT_SHOT_QUEUE_FILTER,
+  initialShotFilters,
   adoptCreatorShotTask,
   selectedShotAfterAppend,
   selectedShotAfterReplacement,
@@ -38,6 +39,7 @@ import {
   selectCreatorReviewArtifact,
   type CreatorReviewArtifact,
 } from './creatorReviewArtifacts'
+import { projectHistoricalShots } from './completedShotProjection'
 
 interface ProjectWorkspacePageProps {
   projectId: string
@@ -64,8 +66,11 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const [shotSummary, setShotSummary] = useState<ShotSummary | null>(null)
   const [shotNextCursor, setShotNextCursor] = useState('')
   const [shotFilters, setShotFilters] = useState<ShotListFilters>(DEFAULT_SHOT_QUEUE_FILTER)
+  const [shotFiltersReady, setShotFiltersReady] = useState(false)
+  const [durableShotsKnownEmpty, setDurableShotsKnownEmpty] = useState(false)
   const [shotQueueLoading, setShotQueueLoading] = useState(false)
   const [selectedQueueShotId, setSelectedQueueShotId] = useState<string | undefined>(selectedShotId)
+  const [selectedHistoricalShotId, setSelectedHistoricalShotId] = useState<string | undefined>()
   const [shotWorkspace, setShotWorkspace] = useState<ShotWorkspace | null>(null)
   const [shotWorkspaceLoading, setShotWorkspaceLoading] = useState(false)
   const [shotNotice, setShotNotice] = useState('')
@@ -85,9 +90,21 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const shotQueueLoadingRef = useRef(false)
   const previousActiveTaskSignatureRef = useRef<string | null>(null)
   const previousVisibleArtifactsRef = useRef<Partial<Record<CreatorStepId, readonly CreatorReviewArtifact[]>>>({})
+  const shotFiltersInitializedProjectRef = useRef<string | undefined>()
+  const shotFiltersUserChangedRef = useRef(false)
   const isShotsStep = stepId === 'shots'
   const isPreviewDeliveryStep = stepId === 'preview' || stepId === 'delivery'
-  const activeShotId = selectedShotId && (shotItems.length === 0 || shotItems.some(item => item.id === selectedShotId)) ? selectedShotId : selectedQueueShotId
+  const historicalShots = useMemo(
+    () => projectHistoricalShots(projectCreatorReviewArtifacts(view?.stepArtifacts?.shots ?? [])),
+    [view?.stepArtifacts],
+  )
+  const historicalShotMode = durableShotsKnownEmpty && historicalShots.length > 0
+  const activeHistoricalShot = historicalShotMode
+    ? historicalShots.find(shot => shot.id === selectedHistoricalShotId) ?? historicalShots[0]
+    : undefined
+  const activeShotId = historicalShotMode
+    ? undefined
+    : selectedShotId && (shotItems.length === 0 || shotItems.some(item => item.id === selectedShotId)) ? selectedShotId : selectedQueueShotId
   const activeTaskSignature = useMemo(() => (view?.activeTasks ?? []).map(task => `${task.id}:${task.shotId ?? ''}:${task.status}`).sort().join('|'), [view?.activeTasks])
   const pollingSignature = activeTaskSignature || (view?.steps.some(step => step.state === 'generating') ? 'creator-step-generating' : '')
   const currentRunId = view?.project.currentRunId
@@ -105,6 +122,19 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
 
   useEffect(() => { shotItemsRef.current = shotItems }, [shotItems])
   useEffect(() => { selectedQueueShotIdRef.current = selectedQueueShotId }, [selectedQueueShotId])
+  useEffect(() => {
+    shotFiltersInitializedProjectRef.current = undefined
+    shotFiltersUserChangedRef.current = false
+    setShotFiltersReady(false)
+    setDurableShotsKnownEmpty(false)
+    setSelectedHistoricalShotId(undefined)
+  }, [projectId])
+  useEffect(() => {
+    if (view?.project.id !== projectId || shotFiltersInitializedProjectRef.current === projectId) return
+    shotFiltersInitializedProjectRef.current = projectId
+    if (!shotFiltersUserChangedRef.current) setShotFilters(initialShotFilters(view.project.status))
+    setShotFiltersReady(true)
+  }, [projectId, view?.project.id, view?.project.status])
   const visibleArtifacts = useMemo(
     () => projectCreatorReviewArtifacts(view?.stepArtifacts?.[stepId] ?? []),
     [stepId, view?.stepArtifacts],
@@ -175,13 +205,14 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   }, [onSelectedShotTaskChanged, projectId, reloadShotWorkspace, selectedShotId])
 
   const loadShotPage = useCallback(async (reset: boolean, signal?: AbortSignal) => {
-    if (!isShotsStep || (!reset && (!shotNextCursorRef.current || shotQueueLoadingRef.current))) return
+    if (!isShotsStep || !shotFiltersReady || (!reset && (!shotNextCursorRef.current || shotQueueLoadingRef.current))) return
     const requestToken = ++shotListRequestTokenRef.current
     shotQueueLoadingRef.current = true
     setShotQueueLoading(true)
     try {
       const page = await listShots(projectId, { ...shotFilters, ...(reset ? {} : { cursor: shotNextCursorRef.current }), limit: 24 }, signal)
       if (signal?.aborted || !isLatestWorkspaceRequest(requestToken, shotListRequestTokenRef.current)) return
+      if (reset && (!shotFilters.status || shotFilters.status === 'all')) setDurableShotsKnownEmpty(page.total === 0)
       setFilteredShotTotal(page.total)
       shotNextCursorRef.current = page.nextCursor
       setShotNextCursor(page.nextCursor)
@@ -199,7 +230,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
         setShotQueueLoading(false)
       }
     }
-  }, [isShotsStep, projectId, selectedShotId, shotFilters])
+  }, [isShotsStep, projectId, selectedShotId, shotFilters, shotFiltersReady])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -263,7 +294,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   }, [currentRunId, refreshAgentBridge])
 
   useEffect(() => {
-    if (!isShotsStep) return
+    if (!isShotsStep || !shotFiltersReady) return
     const controller = new AbortController()
     shotNextCursorRef.current = ''
     void loadShotPage(true, controller.signal)
@@ -271,7 +302,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       if (!controller.signal.aborted) setShotSummary(summary)
     }).catch(() => undefined)
     return () => controller.abort()
-  }, [isShotsStep, loadShotPage, projectId])
+  }, [isShotsStep, loadShotPage, projectId, shotFiltersReady])
 
   useEffect(() => {
     selectedShotIdRef.current = activeShotId
@@ -401,12 +432,12 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
         />
       </div>
       <div className="creator-content-workspace">
-        <CreatorContentLibrary
+        {!historicalShotMode && <CreatorContentLibrary
           projectId={projectId}
           artifacts={visibleArtifacts}
           selectedArtifactId={selectedArtifact?.artifactId}
           onSelect={artifact => setSelectedArtifactIds(current => ({ ...current, [stepId]: artifact.artifactId }))}
-        />
+        />}
         <div className="creator-proofing-canvas">
       {pendingAgentReview && currentRunId ? <AgentReviewGatePanel
         runId={currentRunId}
@@ -423,12 +454,26 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
           filters={shotFilters}
           loading={shotQueueLoading}
           hasMore={Boolean(shotNextCursor)}
-          onFiltersChange={setShotFilters}
+          historicalShots={historicalShotMode ? historicalShots : undefined}
+          selectedHistoricalShotId={activeHistoricalShot?.id}
+          onFiltersChange={filters => {
+            shotFiltersUserChangedRef.current = true
+            setShotFilters(filters)
+          }}
           onSelect={shotId => { setShotNotice(''); setSelectedQueueShotId(shotId) }}
+          onSelectHistorical={shotId => { setShotNotice(''); setSelectedHistoricalShotId(shotId) }}
           onLoadMore={() => { void loadShotPage(false) }}
         />
         <div className="shot-review-detail">
-        {shotWorkspaceLoading || shotWorkspace?.shot.id !== activeShotId ? <section className="shot-inspector artifact-review-panel" aria-live="polite">正在打开 Shot…</section> : <ShotInspector
+        {historicalShotMode ? <ShotInspector
+          projectId={projectId}
+          workspace={null}
+          historicalShot={activeHistoricalShot}
+          totalShots={historicalShots.length}
+          onShotChanged={() => undefined}
+          onReload={() => undefined}
+          onRegenerationStarted={() => undefined}
+        /> : shotWorkspaceLoading || shotWorkspace?.shot.id !== activeShotId ? <section className="shot-inspector artifact-review-panel" aria-live="polite">正在打开 Shot…</section> : <ShotInspector
           projectId={projectId}
           workspace={shotWorkspace}
           item={shotItems.find(item => item.id === activeShotId)}

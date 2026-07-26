@@ -71,6 +71,7 @@ const focusBundle = join(temp, 'focus-cycle.mjs')
 const presentationBundle = join(temp, 'artifact-presentation.mjs')
 const authBundle = join(temp, 'auth.mjs')
 const reviewArtifactsBundle = join(temp, 'creator-review-artifacts.mjs')
+const completedShotsBundle = join(temp, 'completed-shots.mjs')
 const projectionBundle = join(temp, 'creator-review-projection.mjs')
 const textSelectionBundle = join(temp, 'text-selection.mjs')
 const mediaRangeBundle = join(temp, 'media-range.mjs')
@@ -126,6 +127,16 @@ try {
     outfile: reviewArtifactsBundle,
   })
   const reviewArtifacts = await import(pathToFileURL(reviewArtifactsBundle))
+  const completedShotsUrl = new URL('../src/features/creator-studio/completedShotProjection.ts', import.meta.url)
+  assert.equal(completedShotsUrl && existsSync(completedShotsUrl), true, 'completed projects need a historical Shot projection')
+  await build({
+    entryPoints: [completedShotsUrl.pathname],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    outfile: completedShotsBundle,
+  })
+  const completedShots = await import(pathToFileURL(completedShotsBundle))
   const projectionUrl = new URL('../src/features/creator-studio/creatorReviewProjection.ts', import.meta.url)
   assert.equal(existsSync(projectionUrl), true, 'creator review content needs one safe projection module')
   await build({
@@ -786,6 +797,20 @@ try {
     total: 100, scrollTop: 0, viewportHeight: 480,
   })
   assert.equal(logic.DEFAULT_SHOT_QUEUE_FILTER.status, 'needs_attention', 'the review queue starts with actionable Shots')
+  assert.deepEqual(logic.initialShotFilters('completed'), { status: 'all' }, 'completed projects begin with every durable Shot visible')
+  assert.deepEqual(logic.initialShotFilters('active'), { status: 'needs_attention' }, 'active projects begin with actionable Shots')
+  assert.deepEqual(completedShots.projectHistoricalShots([
+    { artifactId: 'a', relatedShotId: 'shot-01', reviewCategory: 'text', reviewLabel: '视频提示词' },
+    { artifactId: 'b', relatedShotId: 'shot-01', reviewCategory: 'video', reviewLabel: '合成视频' },
+  ])[0].artifactIds, ['a', 'b'], 'historical artifacts are grouped under their numeric Shot')
+  assert.deepEqual(completedShots.projectHistoricalShots([
+    { artifactId: 'later', relatedShotId: 'shot_10', reviewCategory: 'audio', reviewLabel: '语音' },
+    { artifactId: 'first', relatedShotId: 'shot 2', reviewCategory: 'image', reviewLabel: '参考图' },
+    { artifactId: 'ignored', relatedShotId: 'draft-2', reviewCategory: 'text', reviewLabel: '文字内容' },
+  ]).map(shot => [shot.sequenceIndex, shot.layers]), [
+    [2, ['补充 / AIGC 层']],
+    [10, ['旁白']],
+  ], 'historical recovery sorts numeric Shot groups and exposes only creator-facing layer labels')
   assert.ok(hundredShotWindow.items.length <= 12, '480px / 64px rows with overscan must render at most 12 queue rows')
   assert.deepEqual(hundredShotWindow.items, Array.from({ length: hundredShotWindow.items.length }, (_, index) => index))
   assert.equal(logic.selectedShotAfterAppend('shot-024', [{ id: 'shot-001' }], [{ id: 'shot-025' }]), 'shot-024', 'page append never clears the active Shot')

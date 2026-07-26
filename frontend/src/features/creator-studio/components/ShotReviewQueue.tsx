@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
 import { getCreatorArtifactContent } from '../../../services/creatorApi'
 import type { ShotListFilters, ShotListItem, ShotQueueStatus } from '../types'
+import type { HistoricalShot } from '../completedShotProjection'
 import { SHOT_QUEUE_ROW_HEIGHT, shotQueueWindow } from '../logic'
 
 interface ShotReviewQueueProps {
@@ -10,8 +11,11 @@ interface ShotReviewQueueProps {
   filters: ShotListFilters
   loading?: boolean
   hasMore: boolean
+  historicalShots?: readonly HistoricalShot[]
+  selectedHistoricalShotId?: string
   onFiltersChange: (filters: ShotListFilters) => void
   onSelect: (shotId: string) => void
+  onSelectHistorical: (shotId: string) => void
   onLoadMore: () => void
 }
 
@@ -23,7 +27,7 @@ const FILTERS: readonly { value: ShotQueueStatus; label: string }[] = [
   { value: 'failed', label: '失败' },
 ]
 
-export default function ShotReviewQueue({ items, total, selectedShotId, filters, loading = false, hasMore, onFiltersChange, onSelect, onLoadMore }: ShotReviewQueueProps) {
+export default function ShotReviewQueue({ items, total, selectedShotId, filters, loading = false, hasMore, historicalShots, selectedHistoricalShotId, onFiltersChange, onSelect, onSelectHistorical, onLoadMore }: ShotReviewQueueProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(480)
@@ -67,6 +71,34 @@ export default function ShotReviewQueue({ items, total, selectedShotId, filters,
     if (scrollRef.current) scrollRef.current.scrollTop = 0
     setScrollTop(0)
     onFiltersChange(next)
+  }
+
+  if (historicalShots?.length) {
+    return (
+      <aside className="shot-review-queue" aria-label="历史 Shot 回看">
+        <div className="shot-review-queue-heading">
+          <div>
+            <p className="creator-eyebrow">历史任务回看</p>
+            <h2>Shot 回看</h2>
+          </div>
+          <span>{historicalShots.length} 个</span>
+        </div>
+        <div className="shot-review-history-list">
+          {historicalShots.map(shot => (
+            <button
+              key={shot.id}
+              type="button"
+              className={`shot-queue-row${selectedHistoricalShotId === shot.id ? ' is-selected' : ''}`}
+              aria-current={selectedHistoricalShotId === shot.id ? 'true' : undefined}
+              onClick={() => onSelectHistorical(shot.id)}
+            >
+              <span className="shot-queue-copy"><strong>Shot {shot.sequenceIndex}</strong><small>{shot.layers.join(' · ')}</small></span>
+              <span className="shot-queue-status">历史回看</span>
+            </button>
+          ))}
+        </div>
+      </aside>
+    )
   }
 
   return (

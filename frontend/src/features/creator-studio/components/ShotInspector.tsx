@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { acceptShotCandidate, getCreatorArtifactContent } from '../../../services/creatorApi'
 import type { ShotListItem, ShotRegenerationResult, ShotUnit, ShotWorkspace } from '../types'
+import type { HistoricalShot } from '../completedShotProjection'
 import { canSubmitShotDuration, isCreatorConflict, SHOT_QUEUE_CONFLICT_COPY } from '../logic'
 import ShotImprovePanel from './ShotImprovePanel'
 
 interface ShotInspectorProps {
   projectId: string
   workspace: ShotWorkspace | null
+  historicalShot?: HistoricalShot
   item?: ShotListItem
   previous?: ShotListItem
   next?: ShotListItem
@@ -16,7 +18,7 @@ interface ShotInspectorProps {
   onRegenerationStarted: (result: ShotRegenerationResult) => Promise<void> | void
 }
 
-export default function ShotInspector({ projectId, workspace, item, previous, next, totalShots, onShotChanged, onReload, onRegenerationStarted }: ShotInspectorProps) {
+export default function ShotInspector({ projectId, workspace, historicalShot, item, previous, next, totalShots, onShotChanged, onReload, onRegenerationStarted }: ShotInspectorProps) {
   const [candidateId, setCandidateId] = useState('')
   const [mediaUrl, setMediaUrl] = useState<string | null>(null)
   const [mediaState, setMediaState] = useState<'idle' | 'loading' | 'unavailable'>('idle')
@@ -78,6 +80,20 @@ export default function ShotInspector({ projectId, workspace, item, previous, ne
   }, [candidateRefs])
 
   useEffect(() => () => { controllerRef.current?.abort(); acceptControllerRef.current?.abort() }, [])
+
+  if (historicalShot) return (
+    <section className="shot-inspector artifact-review-panel" aria-labelledby="shot-inspector-title">
+      <div className="artifact-review-heading"><div><p className="creator-eyebrow">历史任务回看</p><h2 id="shot-inspector-title">Shot {historicalShot.sequenceIndex}</h2></div><span className="artifact-state">已完成</span></div>
+      <p className="artifact-empty">此项目保留了可回看的创作层，未找到可继续编辑的 Shot 记录。</p>
+      <div className="shot-inspector-meta">
+        <p><strong>IP A-roll</strong>{historicalShot.layers.includes('IP A-roll') ? '已保留' : '未保留'}</p>
+        <p><strong>文字层</strong>{historicalShot.layers.includes('文字层') ? '已保留' : '未保留'}</p>
+        <p><strong>补充 / AIGC 层</strong>{historicalShot.layers.includes('补充 / AIGC 层') ? '已保留' : '未保留'}</p>
+        <p><strong>旁白</strong>{historicalShot.layers.includes('旁白') ? '已保留' : '未保留'}</p>
+        <p><strong>输出成片</strong>{historicalShot.layers.includes('输出成片') ? '已保留' : '未保留'}</p>
+      </div>
+    </section>
+  )
 
   if (!workspace || !shot) return <section className="shot-inspector artifact-review-panel"><p className="artifact-empty">从左侧队列选择一个 Shot 开始审核。</p></section>
 
