@@ -63,7 +63,6 @@ function searchableCallMetadata(call: DiagnosticsNode): string {
     call.id,
     call.name,
     errorClassForCall(call),
-    call.error,
   ].map(safeSearchField).join('\n').toLocaleLowerCase()
 }
 

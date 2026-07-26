@@ -530,7 +530,7 @@ try {
       toolName: 'fetch_asset',
       serverName: 'asset-server',
       transport: 'mcp',
-      error: 'NetworkTimeout: access_token=super-hidden-error',
+      error: 'NetworkTimeout: rejected customer alice@example.com from prompt confidential-campaign; access_token=super-hidden-error',
       errorClass: 'NetworkTimeout',
     },
     {
@@ -577,7 +577,12 @@ try {
   for (const query of ['render_frame', 'asset-server', 'mcp-failed-node', 'NetworkTimeout']) {
     assert.equal(filterToolCalls(toolCallFixtures, 'all', query).length, 1)
   }
-  for (const hiddenQuery of ['hidden-request-value', 'super-hidden-error']) {
+  for (const hiddenQuery of [
+    'hidden-request-value',
+    'alice@example.com',
+    'confidential-campaign',
+    'super-hidden-error',
+  ]) {
     assert.deepEqual(filterToolCalls(toolCallFixtures, 'all', hiddenQuery), [])
   }
   const copiedToolCall = toolCallCopyText({
