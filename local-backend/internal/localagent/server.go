@@ -621,7 +621,7 @@ func (s *Server) handleLocalProjectMedia(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid project media reference")
 		return
 	}
-	root, err := openLocalMediaRoot(media.rootBase, s.localMediaIdentityHook, media.rootSegments...)
+	root, err := openLocalMediaRoot(s.paths.DataDir, s.localMediaIdentityHook, media.rootSegments...)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "project media not found")
 		return
@@ -659,7 +659,6 @@ func (s *Server) handleLocalProjectMedia(w http.ResponseWriter, r *http.Request)
 }
 
 type resolvedLocalProjectMedia struct {
-	rootBase     string
 	rootSegments []string
 	relativePath string
 	metadataPath string
@@ -682,8 +681,7 @@ func (s *Server) resolveLocalProjectMedia(projectID, storageRef, absolutePath st
 			return resolvedLocalProjectMedia{}, errors.New("invalid project media path")
 		}
 		return resolvedLocalProjectMedia{
-			rootBase:     projectBase,
-			rootSegments: []string{projectID},
+			rootSegments: []string{"projects", projectID},
 			relativePath: relativePath,
 			name:         filepath.Base(requestedPath),
 		}, nil
@@ -710,8 +708,7 @@ func (s *Server) resolveLocalProjectMedia(projectID, storageRef, absolutePath st
 			return resolvedLocalProjectMedia{}, errors.New("artifact id is required")
 		}
 		return resolvedLocalProjectMedia{
-			rootBase:     filepath.Clean(s.paths.ArtifactDir),
-			rootSegments: []string{projectID, segments[2]},
+			rootSegments: []string{"artifacts", projectID, segments[2]},
 			relativePath: "content",
 			metadataPath: "metadata.json",
 			name:         segments[len(segments)-1],
@@ -726,8 +723,7 @@ func (s *Server) resolveLocalProjectMedia(projectID, storageRef, absolutePath st
 		return resolvedLocalProjectMedia{}, errors.New("invalid project media path")
 	}
 	return resolvedLocalProjectMedia{
-		rootBase:     projectBase,
-		rootSegments: []string{projectID},
+		rootSegments: []string{"projects", projectID},
 		relativePath: relativePath,
 		name:         filepath.Base(requestedPath),
 	}, nil
@@ -738,8 +734,8 @@ func pathWithinRoot(root, path string) bool {
 	return err == nil && relativePath != ".." && !strings.HasPrefix(relativePath, ".."+string(filepath.Separator))
 }
 
-func openLocalMediaRoot(rootBase string, identityHook func(stage, name string), segments ...string) (*os.Root, error) {
-	current, err := os.OpenRoot(filepath.Clean(rootBase))
+func openLocalMediaRoot(dataDir string, identityHook func(stage, name string), segments ...string) (*os.Root, error) {
+	current, err := os.OpenRoot(filepath.Clean(dataDir))
 	if err != nil {
 		return nil, err
 	}

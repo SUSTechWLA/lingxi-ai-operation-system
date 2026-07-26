@@ -295,6 +295,101 @@ func TestLocalProjectMediaRejectsCrossProjectSymlinks(t *testing.T) {
 	assertRejectedLocalMediaDoesNotLeak(t, rec, vp2ArtifactDir, "vp-2-artifact-secret", "video/vp-2-secret")
 }
 
+func TestLocalProjectMediaRejectsSymlinkedCategoryDirectories(t *testing.T) {
+	t.Run("projects", func(t *testing.T) {
+		dataDir := t.TempDir()
+		outsideProjects := t.TempDir()
+		renderPath := filepath.Join(outsideProjects, "vp-1", "renders", "final.mp4")
+		if err := os.MkdirAll(filepath.Dir(renderPath), 0o755); err != nil {
+			t.Fatalf("create outside render dir: %v", err)
+		}
+		if err := os.WriteFile(renderPath, []byte("outside-project-category-secret"), 0o644); err != nil {
+			t.Fatalf("write outside render: %v", err)
+		}
+		if err := os.Symlink(outsideProjects, filepath.Join(dataDir, "projects")); err != nil {
+			t.Fatalf("create projects category symlink: %v", err)
+		}
+
+		server := NewServer(Config{DataDir: dataDir})
+		renderRef := "local://projects/vp-1/renders/final.mp4"
+		req := httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(renderRef), nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		assertRejectedLocalMediaDoesNotLeak(t, rec, outsideProjects, "outside-project-category-secret")
+	})
+
+	t.Run("artifacts", func(t *testing.T) {
+		dataDir := t.TempDir()
+		outsideArtifacts := t.TempDir()
+		artifactDir := filepath.Join(outsideArtifacts, "vp-1", "video-1")
+		if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+			t.Fatalf("create outside artifact dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(artifactDir, "content"), []byte("outside-artifact-category-secret"), 0o644); err != nil {
+			t.Fatalf("write outside artifact content: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(artifactDir, "metadata.json"), []byte(`{"mimeType":"video/outside-secret"}`), 0o644); err != nil {
+			t.Fatalf("write outside artifact metadata: %v", err)
+		}
+		if err := os.Symlink(outsideArtifacts, filepath.Join(dataDir, "artifacts")); err != nil {
+			t.Fatalf("create artifacts category symlink: %v", err)
+		}
+
+		server := NewServer(Config{DataDir: dataDir})
+		artifactRef := "local://projects/vp-1/artifacts/video-1/hash/final.mp4"
+		req := httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(artifactRef), nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		assertRejectedLocalMediaDoesNotLeak(t, rec, outsideArtifacts, "outside-artifact-category-secret", "video/outside-secret")
+	})
+}
+
+func TestLocalProjectMediaRejectsCategoryIdentitySwapWhileOpening(t *testing.T) {
+	dataDir := t.TempDir()
+	projectsDir := filepath.Join(dataDir, "projects")
+	if err := os.MkdirAll(filepath.Join(projectsDir, "vp-1", "renders"), 0o755); err != nil {
+		t.Fatalf("create original project render dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectsDir, "vp-1", "renders", "final.mp4"), []byte("original-project-content"), 0o644); err != nil {
+		t.Fatalf("write original project render: %v", err)
+	}
+
+	replacementProjects := filepath.Join(dataDir, "projects-replacement")
+	if err := os.MkdirAll(filepath.Join(replacementProjects, "vp-1", "renders"), 0o755); err != nil {
+		t.Fatalf("create replacement project render dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(replacementProjects, "vp-1", "renders", "final.mp4"), []byte("replacement-category-secret"), 0o644); err != nil {
+		t.Fatalf("write replacement project render: %v", err)
+	}
+
+	server := NewServer(Config{DataDir: dataDir})
+	var categorySwapErr error
+	categorySwapped := false
+	server.localMediaIdentityHook = func(stage, name string) {
+		if categorySwapped || stage != "before_open_root_component" || name != "projects" {
+			return
+		}
+		categorySwapped = true
+		if err := os.Rename(projectsDir, filepath.Join(dataDir, "projects-original")); err != nil {
+			categorySwapErr = err
+			return
+		}
+		categorySwapErr = os.Symlink("projects-replacement", projectsDir)
+	}
+
+	renderRef := "local://projects/vp-1/renders/final.mp4"
+	req := httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(renderRef), nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if categorySwapErr != nil {
+		t.Fatalf("swap projects category identity: %v", categorySwapErr)
+	}
+	if !categorySwapped {
+		t.Fatal("projects category identity hook was not called")
+	}
+	assertRejectedLocalMediaDoesNotLeak(t, rec, replacementProjects, "replacement-category-secret")
+}
+
 func TestLocalProjectMediaRejectsIdentitySwapsWhileOpening(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DataDir: root})
