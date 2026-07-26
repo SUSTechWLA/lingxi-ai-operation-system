@@ -684,6 +684,17 @@ try {
       'encoded local-agent endpoint paths fail closed instead of becoming external media',
     )
   }
+  for (const credentialedLocalPath of [
+    'http://user:pass@127.0.0.1:18080/api/local/media?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4',
+    'http://user:pass@127.0.0.1:18080/api%2Flocal%2Fmedia?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4',
+    'http://user:pass@127.0.0.1:18080/api%252Flocal%252Fmedia?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4',
+  ]) {
+    assert.equal(
+      logic.resolveCreatorArtifactMediaUrl('vp-1', { ...localRenderContent, mediaUrl: credentialedLocalPath }, 'http://127.0.0.1:18080'),
+      undefined,
+      'userinfo cannot disguise a local-agent-origin URL as external media',
+    )
+  }
   const normalizedRelativeLocalMedia = logic.resolveCreatorArtifactMediaUrl(
     'vp-1',
     { ...localRenderContent, mediaUrl: '/api/local/media?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4' },
@@ -908,6 +919,19 @@ try {
     logic.completedDeliveryRepairSuccess({ activeTasks: [{ id: 'delivery-rebuild' }] }),
     { notice: '已开始重新生成成片，需求、创意、脚本和分镜会保留。', refreshAfterMutation: true },
     'a queued repair immediately adopts its returned view before a best-effort refresh',
+  )
+  assert.notEqual(
+    logic.creatorPollingSignature({
+      activeTasks: [{ id: 'delivery-review', scope: 'delivery', status: 'RUNNING', label: '正在重新生成交付文件' }],
+      steps: [{ id: 'delivery', state: 'generating' }],
+    }),
+    '',
+    'a queued no-final-video recovery keeps frontend polling active',
+  )
+  assert.equal(
+    logic.creatorPollingSignature({ activeTasks: [], steps: [{ id: 'delivery', state: 'confirmed' }] }),
+    '',
+    'frontend polling stops after durable delivery completion',
   )
   assert.notEqual(
     logic.creatorMutationIdempotencyKey('project-1', 'script', instructionMutation),
@@ -1466,7 +1490,7 @@ try {
   assert.match(workspaceSource, /重新读取当前内容/)
   assert.match(workspaceSource, /view\.processTimeline/)
   assert.match(workspaceSource, /view\?\.stepArtifacts/)
-  assert.match(workspaceSource, /pollingSignature/)
+  assert.match(workspaceSource, /creatorPollingSignature\(view\)/, 'workspace polling uses the tested authoritative view predicate')
   assert.match(workspaceSource, /重试失败步骤/)
   assert.doesNotMatch(workspaceSource, /\[projectId, stepId, view\]/)
   assert.match(recoverySource, /生成仍在后台继续/)

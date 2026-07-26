@@ -491,6 +491,17 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 		if project.Status == model.StatusCompleted || project.Status == model.StatusArchived {
 			steps[index].State = model.CreatorStepNeedsAttention
 		}
+		if project.Status == model.StatusRunning && s.reviews != nil && steps[index].RunID != "" && steps[index].ReviewID != "" {
+			status, statusErr := s.reviews.RegenerationStatus(ctx, steps[index].RunID, steps[index].ReviewID)
+			status = strings.ToUpper(strings.TrimSpace(status))
+			if statusErr == nil && isActiveCreatorRegenerationStatus(status) {
+				steps[index].State = model.CreatorStepGenerating
+				activeTasks = append(activeTasks, model.CreatorTask{
+					ID: steps[index].ReviewID, Scope: string(model.CreatorStepDelivery), Status: status,
+					Label: "正在重新生成交付文件",
+				})
+			}
+		}
 	}
 	if finalDelivery != nil {
 		items := stepArtifacts[model.CreatorStepDelivery]
@@ -511,6 +522,7 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 			steps[i].AllowedActions = append(steps[i].AllowedActions, "regenerate")
 		}
 	}
+	activeTasks = deduplicateCreatorTasks(activeTasks)
 
 	return &model.CreationView{
 		Project: project, ActiveStep: activeCreatorStep(steps), FinalDeliveryArtifactID: artifactID(finalDelivery), Steps: steps,
@@ -1442,6 +1454,15 @@ func applyArtifact(step *model.CreatorStep, current *artifact.Artifact, state mo
 func isActiveArtifact(current *artifact.Artifact) bool {
 	switch normalizeCreatorStage(current.Status) {
 	case "generating", "running", "processing":
+		return true
+	default:
+		return false
+	}
+}
+
+func isActiveCreatorRegenerationStatus(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "CREATED", "READY", "RUNNING", "WAITING_LOCAL", "LOCAL_CLAIMED", "LOCAL_RUNNING", "LOCAL_COMPLETED", "RETRYING":
 		return true
 	default:
 		return false

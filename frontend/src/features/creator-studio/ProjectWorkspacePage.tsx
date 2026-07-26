@@ -5,6 +5,7 @@ import { getCreationView, getCreatorArtifactContent, getShotSummary, getShotWork
 import type { CreationView, CreatorArtifactVersion, CreatorStep, CreatorStepId, CreatorTask, ShotListFilters, ShotListItem, ShotRegenerationResult, ShotSummary, ShotUnit, ShotWorkspace } from './types'
 import {
   creatorPollDelay,
+  creatorPollingSignature,
   creatorArtifactLoadState,
   creatorStepLabel,
   creatorStepForAgentReview,
@@ -110,7 +111,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
     ? undefined
     : selectedShotId && (shotItems.length === 0 || shotItems.some(item => item.id === selectedShotId)) ? selectedShotId : selectedQueueShotId
   const activeTaskSignature = useMemo(() => (view?.activeTasks ?? []).map(task => `${task.id}:${task.shotId ?? ''}:${task.status}`).sort().join('|'), [view?.activeTasks])
-  const pollingSignature = activeTaskSignature || (view?.steps.some(step => step.state === 'generating') ? 'creator-step-generating' : '')
+  const pollingSignature = creatorPollingSignature(view)
   const currentRunId = view?.project.currentRunId
   const pendingAgentReview = nextPendingCreatorReview(agentReviews)
   const displaySteps = useMemo(() => {

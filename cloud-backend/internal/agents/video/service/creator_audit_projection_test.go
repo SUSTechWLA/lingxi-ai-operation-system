@@ -284,6 +284,33 @@ func TestCreatorViewMissingFinalVideoNeverSubstitutesPublishOrExportArtifact(t *
 	if result.RunID != "run-delivery" || result.ReviewID != "delivery-review" || reviews.regenerateCalls != 1 || projects.startedRunID != "run-delivery" {
 		t.Fatalf("delivery recovery did not preserve durable lineage: result=%+v reviews=%+v project=%+v", result, reviews, project)
 	}
+	deliveryStep := result.View.Steps[5]
+	if deliveryStep.State != videoModel.CreatorStepGenerating {
+		t.Fatalf("queued delivery recovery state = %q, want generating polling signal", deliveryStep.State)
+	}
+	var deliveryTask *videoModel.CreatorTask
+	for index := range result.View.ActiveTasks {
+		if result.View.ActiveTasks[index].Scope == string(videoModel.CreatorStepDelivery) {
+			deliveryTask = &result.View.ActiveTasks[index]
+			break
+		}
+	}
+	if deliveryTask == nil || deliveryTask.ID != "delivery-review" || deliveryTask.Status != "RUNNING" {
+		t.Fatalf("queued delivery recovery active tasks = %+v, want durable delivery polling task", result.View.ActiveTasks)
+	}
+	reviews.regenerationStatus = "COMPLETED"
+	completedView, err := svc.GetCreationView(context.Background(), "user-1", "vp-complete")
+	if err != nil {
+		t.Fatalf("completed delivery recovery view error = %v", err)
+	}
+	for _, task := range completedView.ActiveTasks {
+		if task.Scope == string(videoModel.CreatorStepDelivery) {
+			t.Fatalf("completed delivery recovery retained polling task: %+v", task)
+		}
+	}
+	if completedView.Steps[5].State == videoModel.CreatorStepGenerating {
+		t.Fatalf("completed delivery recovery retained generating state: %+v", completedView.Steps[5])
+	}
 }
 
 func TestCreatorAuditGroupsCurrentAndHistoricalArtifactsByStep(t *testing.T) {

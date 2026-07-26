@@ -26,7 +26,7 @@ End-to-end regeneration and interactive playback could not be executed in this r
 
 The frontend checks cover readable creator projections, deterministic selected-text mapping, scoped revision behavior, completed-task Shot projection, local media URL handling, completed delivery recovery, and separation of creator views from Developer Diagnostics.
 
-The final review fix waves additionally verify the production prompt contract, exact-byte source hashes for text selections, rejection of full-document responses for proper prefix/middle/suffix scoped edits, legitimate true-whole-document selection, server-authoritative final-video selection when publish/export artifacts coexist, no-final-video recovery without a fabricated base or upstream invalidation, and active-project ownership for direct local-media URLs including encoded-path bypass resistance.
+The final review fix waves additionally verify the production prompt contract, exact-byte source hashes for text selections, rejection of full-document responses for proper prefix/middle/suffix scoped edits, legitimate true-whole-document selection, server-authoritative final-video selection when publish/export artifacts coexist, no-final-video recovery without a fabricated base or upstream invalidation, durable delivery polling from queue through completion, and active-project ownership for direct local-media URLs including encoded-path and credentialed-origin bypass resistance.
 
 ## Real completed demo evidence
 
@@ -82,6 +82,8 @@ The previous delivered application was retained in `.workspace-archive/task6-pre
 - Closed scoped-edit boundary gaps: proper prefix and suffix selections now reject whole-document model replies, while fragment replies and true whole-document selections remain valid.
 - Made delivery identity fail closed end to end. If no authoritative final video exists, publish copy and export/package artifacts remain history only, the completed task exposes delivery recovery, and regeneration proceeds without a fake base or upstream impact.
 - Rejected same-origin local-agent URLs whose media endpoint path is encoded or double encoded, while retaining exact canonical owned media URLs and valid external URLs.
+- Projected a durable delivery-scoped active task and `generating` state immediately after no-final-video recovery is queued; the shared frontend polling predicate remains active until the persisted regeneration status completes.
+- Classified local-agent origin independently of URL userinfo, then rejected credentials during strict canonical endpoint validation so canonical, encoded, and double-encoded credentialed URLs cannot escape as external media.
 
 ## Acceptance matrix
 

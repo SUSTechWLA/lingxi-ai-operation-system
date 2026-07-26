@@ -353,9 +353,7 @@ function isCreatorLocalAgentOriginUrl(src: string, localAgentBaseUrl: string): b
 		const localAgent = new URL(localAgentBaseUrl)
 		const source = new URL(src)
 		return (source.protocol === 'http:' || source.protocol === 'https:') &&
-			source.origin === localAgent.origin &&
-			source.username === '' &&
-			source.password === ''
+			source.origin === localAgent.origin
 	} catch {
 		return false
 	}
@@ -809,6 +807,16 @@ export function creatorMutationIdempotencyKey(
 
 export function creatorPollDelay(attempt: number): number {
   return Math.min(5000, 500 * (2 ** Math.max(0, Math.floor(attempt))))
+}
+
+export function creatorPollingSignature(
+  view: Pick<CreationView, 'activeTasks' | 'steps'> | null | undefined,
+): string {
+  const activeTasks = (view?.activeTasks ?? [])
+    .map(task => `${task.id}:${task.shotId ?? ''}:${task.status}`)
+    .sort()
+    .join('|')
+  return activeTasks || (view?.steps.some(step => step.state === 'generating') ? 'creator-step-generating' : '')
 }
 
 export function isCreatorConflict(error: unknown): boolean {
