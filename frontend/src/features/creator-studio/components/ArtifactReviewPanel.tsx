@@ -432,6 +432,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
           {viewingHistorical && <div className="artifact-history-notice" role="status"><strong>正在查看历史产物</strong><span>当前版本不会被覆盖；需要时可从版本列表恢复。</span></div>}
           <ArtifactProofingCanvas
             content={content}
+            reviewLabel={artifact?.reviewLabel || creatorStepLabel(step.id)}
             selection={selection}
             imageRef={imageRef}
             onOpenImage={src => {
@@ -507,9 +508,9 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
         projectId={projectId}
         artifactId={artifactId}
         baseVersion={baseVersion}
-        title={artifact?.reviewLabel || content?.artifact.name || '当前图片'}
+        title={artifact?.reviewLabel || creatorStepLabel(step.id)}
         src={imageDialogSrc}
-        alt={content?.artifact.name || artifact?.reviewLabel || '当前图片内容'}
+        alt={`${artifact?.reviewLabel || creatorStepLabel(step.id)}预览`}
         selection={selection?.kind === 'rect' ? selection : null}
         instruction={instruction}
         revisionInputsLocked={revisionInputsLocked}

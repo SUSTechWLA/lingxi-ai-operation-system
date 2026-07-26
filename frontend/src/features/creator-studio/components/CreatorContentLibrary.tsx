@@ -156,7 +156,7 @@ function CreatorContentCard({
         {showVersion && <em>版本 {artifact.version}</em>}
       </button>
       {failed || mediaPreviewMissing ? (
-        <div className="creator-content-preview-error" role="status">
+        <div className="creator-content-preview-error" role="alert">
           <span>预览暂时无法读取</span>
           {retries < 2 && (
             <button type="button" onClick={() => setRetries(value => value + 1)}>重新加载预览</button>

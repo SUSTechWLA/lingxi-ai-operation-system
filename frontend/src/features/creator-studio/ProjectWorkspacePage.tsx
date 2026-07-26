@@ -239,8 +239,8 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
     try {
       await retryLatestFailedAgentNode(agentRun.taskId)
       await Promise.all([refreshAgentBridge(currentRunId), refreshView()])
-    } catch (retryError) {
-      setError(retryError instanceof Error ? retryError.message : '失败步骤暂时无法重试，请稍后再试。')
+    } catch {
+      setError('失败步骤暂时无法恢复，请稍后再试。')
     } finally {
       setRecoveringAgentRun(false)
     }
@@ -384,7 +384,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       </header>
       <CreationStrip steps={displaySteps} currentStepId={stepId} onSelect={navigateToStep} />
       <TaskRecoveryBanner tasks={view.activeTasks} />
-      <CreatorProcessTimeline events={view.processTimeline ?? []} selectedStepId={stepId} />
+      <CreatorProcessTimeline events={view.processTimeline ?? []} selectedStepId={stepId} onSelect={navigateToStep} />
       <div className="creator-step-commandbar">
         <div>
           <strong>{creatorStepLabel(stepId)}</strong>

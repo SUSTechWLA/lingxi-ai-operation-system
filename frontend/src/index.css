@@ -939,6 +939,26 @@ body {
 .creator-process-timeline > summary > span:last-child { color: rgb(var(--color-primary)); font-size: 0.7rem; font-weight: 800; }
 .creator-process-timeline > ol { max-height: 24rem; margin: 0; padding: 0.75rem 1rem 0.75rem 2.4rem; overflow: auto; list-style: none; }
 .creator-process-timeline li { position: relative; display: grid; grid-template-columns: 0.7rem minmax(0, 1fr); gap: 0.65rem; padding: 0.65rem 0; border-left: 2px solid rgb(var(--color-line)); }
+.creator-process-timeline li > button {
+  width: 100%;
+  min-width: 0;
+  padding: 0.45rem 0.65rem;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0.45rem;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.creator-process-timeline li > button:hover,
+.creator-process-timeline li > button:focus-visible,
+.creator-process-timeline li > button[aria-current='step'] {
+  background: rgb(var(--color-primary-soft));
+}
+.creator-process-timeline li > button p {
+  overflow-wrap: anywhere;
+}
 .creator-process-timeline li.is-selected-step { border-left-color: rgb(var(--color-primary)); }
 .creator-process-marker { width: 0.65rem; height: 0.65rem; margin-left: -0.42rem; background: rgb(var(--color-line)); border: 2px solid rgb(var(--color-background-card)); border-radius: 999px; box-shadow: 0 0 0 1px rgb(var(--color-line)); }
 .creator-process-timeline li.is-confirmed .creator-process-marker { background: rgb(var(--color-success)); }
@@ -1689,6 +1709,10 @@ body {
 }
 
 @media (max-width: 390px) {
+  .creator-workspace { width: 100%; min-width: 0; max-width: 100%; }
+  .creator-step-commandbar,
+  .creator-process-timeline,
+  .artifact-review-panel { min-width: 0; max-width: 100%; }
   .creator-content-workspace { grid-template-columns: minmax(0, 1fr); }
   .creator-content-library,
   .creator-proofing-canvas { width: 100%; min-width: 0; }

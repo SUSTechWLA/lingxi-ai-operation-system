@@ -93,7 +93,7 @@ export default function AgentReviewGatePanel({ runId, review, onApproved }: Agen
           disabled={working}
         />
       </label>}
-      {approvalBlocked && <p className="creator-form-error">质量未通过时不要直接放行，请先按建议重新生成。</p>}
+      {approvalBlocked && <p className="creator-form-error" role="alert">质量未通过时不要直接放行，请先按建议重新生成。</p>}
       <div className="artifact-actions">
         {canRegenerate && <button type="button" className="creator-secondary-button" disabled={working} onClick={() => void regenerate()}>
           {working ? '正在处理…' : '按要求重新生成'}

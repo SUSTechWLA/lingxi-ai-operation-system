@@ -20,11 +20,16 @@ export default function StepRegenerationDialog({
   const [notice, setNotice] = useState('')
   const dialogRef = useRef<HTMLElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const controllerRef = useRef<AbortController | null>(null)
   const idempotencyKeyRef = useRef('')
   const canRegenerate = step.hasHistory && step.allowedActions.includes('regenerate') && step.state !== 'generating'
 
   useEffect(() => () => controllerRef.current?.abort(), [])
+  const restoreFocus = () => {
+    const trigger = triggerRef.current
+    window.requestAnimationFrame(() => trigger?.focus())
+  }
 
   const begin = async () => {
     if (!canRegenerate || working) return
@@ -66,10 +71,11 @@ export default function StepRegenerationDialog({
       if (controller.signal.aborted) return
       onViewChanged(result.view)
       setOpen(false)
+      restoreFocus()
       setImpact(null)
       setInstruction('')
       idempotencyKeyRef.current = ''
-      setNotice(`已开始第 ${result.attempt} 轮生成，旧版本仍然保留。`)
+      setNotice('已开始重新生成，旧版本仍然保留。')
     } catch (caught) {
       if (controller.signal.aborted) return
       if (isCreatorConflict(caught)) {
@@ -89,6 +95,7 @@ export default function StepRegenerationDialog({
   const close = () => {
     if (working) return
     setOpen(false)
+    restoreFocus()
     setImpact(null)
     idempotencyKeyRef.current = ''
   }
@@ -110,14 +117,14 @@ export default function StepRegenerationDialog({
 
   return (
     <div className="step-regeneration-control">
-      {canRegenerate && <button type="button" className="creator-secondary-button" disabled={working} onClick={() => void begin()}>{working && !open ? '正在核对影响…' : '从此步骤重新生成'}</button>}
+      {canRegenerate && <button ref={triggerRef} type="button" className="creator-secondary-button" disabled={working} onClick={() => void begin()}>{working && !open ? '正在核对影响…' : '从此步骤重新生成'}</button>}
       {notice && <p role="status">{notice}</p>}
       {open && impact && (
         <div className="artifact-impact-backdrop" role="presentation" onPointerDown={event => { if (event.currentTarget === event.target) close() }}>
           <aside ref={dialogRef} className="artifact-impact-confirmation step-regeneration-dialog" role="dialog" aria-modal="true" aria-labelledby="step-regeneration-title" tabIndex={-1} onKeyDown={trapFocus}>
-            <p className="creator-eyebrow">保留历史的新一轮</p>
+            <p className="creator-eyebrow">保留历史</p>
             <h2 id="step-regeneration-title">重新生成{creatorStepLabel(step.id)}</h2>
-            <p>将创建第 {Math.max(2, step.attemptCount + 1)} 轮，不会覆盖当前结果。</p>
+            <p>将创建新的内容版本，不会覆盖当前结果。</p>
             {impact.affectedStepIds.length > 0 ? <div className="step-regeneration-impact"><strong>以下下游步骤会标记为待更新</strong><ul>{impact.affectedStepIds.map(id => <li key={id}>{creatorStepLabel(id)}</li>)}</ul></div> : <p>这是最终步骤，不会影响其他步骤。</p>}
             <label className="artifact-editor-label">本轮修改要求（可选）
               <textarea value={instruction} onChange={event => setInstruction(event.target.value)} placeholder="例如：保留结构，把开头改得更有吸引力" disabled={working} />

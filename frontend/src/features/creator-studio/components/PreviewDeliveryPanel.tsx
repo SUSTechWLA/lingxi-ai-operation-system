@@ -96,8 +96,8 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
         <button className="creator-primary-button" type="button" disabled={working} onClick={() => void rebuild()}>{working ? '正在核对镜头…' : '重新拼接成片'}</button>
       </div>}
 
-			{!assemblyDirty && previewReady && presentation === 'video' && mediaUrl && (viewingHistorical || !isDelivery || isFinalReviewPassed) && <SimpleVideoPlayer src={mediaUrl} title={currentContent?.artifact.name || '当前成片'} downloadName={currentContent?.artifact.name} />}
-			{!assemblyDirty && previewReady && currentContent && presentation !== 'video' && <ArtifactProofingCanvas content={proofingContent} />}
+			{!assemblyDirty && previewReady && presentation === 'video' && mediaUrl && (viewingHistorical || !isDelivery || isFinalReviewPassed) && <SimpleVideoPlayer src={mediaUrl} title="当前成片" downloadName="当前成片" />}
+			{!assemblyDirty && previewReady && currentContent && presentation !== 'video' && <ArtifactProofingCanvas content={proofingContent} reviewLabel="当前成片" />}
 			{!assemblyDirty && (!previewReady || !currentContent || (presentation === 'video' && !mediaUrl)) && <p className="artifact-empty">系统正在准备当前产物；完成后会在这里显示可审阅内容。</p>}
 
       <section className="preview-delivery-checklist" aria-label="成片检查">

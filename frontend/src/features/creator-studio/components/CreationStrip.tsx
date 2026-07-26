@@ -44,14 +44,14 @@ export default function CreationStrip({ steps, currentStepId, onSelect }: Creati
             type="button"
             className={`creation-strip-step is-${step.state}${step.isStale ? ' is-stale' : ''}${isCurrent ? ' is-current' : ''}`}
             aria-current={isCurrent ? 'step' : undefined}
-            aria-label={`第 ${index + 1} 步，${creatorStepLabel(stepId)}，${step.isStale ? '需要更新，' : ''}${status.text}${step.hasHistory ? `，${step.attemptCount} 轮，${step.artifactCount} 项产物` : ''}`}
+            aria-label={`第 ${index + 1} 步，${creatorStepLabel(stepId)}，${step.isStale ? '需要更新，' : ''}${status.text}${step.hasHistory ? '，已有内容' : ''}`}
             disabled={!canSelect}
             onClick={() => onSelect(stepId)}
           >
             <span className="creation-strip-number">{index + 1}</span>
             <span className="creation-strip-name">{creatorStepLabel(stepId)}</span>
             <span className="creation-strip-status" aria-hidden="true">{status.icon} {status.text}</span>
-            {step.hasHistory && <span className="creation-strip-meta">第 {Math.max(1, step.attemptCount)} 轮 · {step.artifactCount} 项产物{step.isStale ? ' · 待更新' : ''}</span>}
+            {step.hasHistory && <span className="creation-strip-meta">已有内容{step.isStale ? ' · 待更新' : ''}</span>}
           </button>
         )
       })}

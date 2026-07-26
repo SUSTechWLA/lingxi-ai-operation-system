@@ -117,14 +117,14 @@ export default function ShotInspector({ projectId, workspace, item, previous, ne
     <section className="shot-inspector artifact-review-panel" aria-labelledby="shot-inspector-title">
       <div className="artifact-review-heading"><div><p className="creator-eyebrow">当前镜头</p><h2 id="shot-inspector-title">Shot {item?.sequenceIndex || shot.sequenceIndex} · {shot.title || '未命名镜头'}</h2></div><span className="artifact-state">v{shot.version}</span></div>
       {!durationValid && <p className="creator-form-error" role="alert">这个 Shot 时长无效（必须小于 15 秒），不能接受或重新生成。</p>}
-      <div className="shot-candidate-tabs" role="tablist" aria-label="候选版本">{candidates.map(candidate => <button key={candidate.candidateId} type="button" role="tab" aria-selected={candidate.candidateId === selectedCandidate?.candidateId} onClick={() => setCandidateId(candidate.candidateId)}>候选 {candidate.attemptIndex || 1}</button>)}</div>
+      <div className="shot-candidate-tabs" role="tablist" aria-label="候选版本">{candidates.map((candidate, index) => <button key={candidate.candidateId} type="button" role="tab" aria-selected={candidate.candidateId === selectedCandidate?.candidateId} onClick={() => setCandidateId(candidate.candidateId)}>候选 {index + 1}</button>)}</div>
       <div className="shot-video-stage">
         {mediaState === 'loading' && <p className="artifact-empty">正在加载候选预览…</p>}
         {mediaUrl && <video className="artifact-video-preview" controls src={mediaUrl}>你的浏览器不支持视频预览。</video>}
         {mediaState === 'unavailable' && <p className="artifact-empty">预览不可用：当前候选没有可解析的视频产物。你仍可审核下方元数据。</p>}
       </div>
       <div className="shot-inspector-meta">
-        <p><strong>质量检查</strong>{selectedCandidate?.qaReport?.summary || qualityCopy(selectedCandidate?.qaReport?.status || shot.qaStatus)}</p>
+        <p><strong>质量检查</strong>{qualityCopy(selectedCandidate?.qaReport?.status || shot.qaStatus)}</p>
         <p><strong>旁白</strong>{shot.narration || '未填写旁白'}</p>
         <p><strong>时间范围</strong>{formatRange(shot)}</p>
         <p><strong>参考</strong>{candidateRefs.length ? `已关联 ${candidateRefs.length} 项视频产物` : '没有可用参考产物'}</p>

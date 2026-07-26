@@ -6,6 +6,64 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
+import ts from 'typescript'
+
+const creatorFacingAttributes = new Set(['alt', 'aria-label', 'aria-description', 'title', 'placeholder'])
+
+function creatorRenderedSurface(source, fileName) {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const rendered = []
+  const containsJsx = node => {
+    let found = false
+    const visit = child => {
+      if (ts.isJsxElement(child) || ts.isJsxSelfClosingElement(child) || ts.isJsxFragment(child)) {
+        found = true
+        return
+      }
+      if (!found) ts.forEachChild(child, visit)
+    }
+    ts.forEachChild(node, visit)
+    return found
+  }
+  const visit = node => {
+    if (ts.isJsxText(node) && node.text.trim()) rendered.push(node.text)
+    if (ts.isJsxAttribute(node) && creatorFacingAttributes.has(node.name.getText(sourceFile))) {
+      if (node.initializer) rendered.push(node.initializer.getText(sourceFile))
+    }
+    if (
+      ts.isJsxExpression(node) &&
+      node.expression &&
+      (ts.isJsxElement(node.parent) || ts.isJsxFragment(node.parent)) &&
+      !containsJsx(node.expression)
+    ) {
+      rendered.push(node.expression.getText(sourceFile))
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return rendered.join('\n')
+}
+
+function assertCreatorRenderedSurfaceIsSafe(componentSources) {
+  const forbidden = [
+    ['raw JSON', /\bJSON(?:\.stringify)?\b|parsed\.raw|rawJson/i],
+    ['hashes', /\b(?:contentHash|promptHash|sha256)\b|哈希/i],
+    ['storage references or local paths', /\b(?:storageRef|storageType)\b|(?:local|file):\/\/|\/(?:Users|home|private|tmp)\//i],
+    ['providers or models', /\b(?:modelProviders?|provider)\b|模型供应商/i],
+    ['tool or MCP calls', /\b(?:toolCall|toolName|mcpCall|mcpTool|MCP)\b/i],
+    ['node, run, or task IDs', /\b(?:nodeId|runId|taskId)\b/i],
+    ['retry attempt numbers', /\b(?:attempt|attemptCount|attemptIndex)\b|第\s*\{[^}]+\}\s*轮/i],
+    ['QA or continuity report bodies', /\b(?:qaReport|continuityReport)(?:\?\.)?\.(?:summary|body|content|report)\b/i],
+    ['technical logs or backend event copy', /\b(?:technicalLog|logBody|logContent)\b|\bevent\.(?:title|summary)\b/i],
+    ['raw artifact names', /\bartifact\.name\b/i],
+  ]
+  for (const [fileName, source] of componentSources) {
+    const rendered = creatorRenderedSurface(source, fileName)
+    for (const [label, pattern] of forbidden) {
+      assert.doesNotMatch(rendered, pattern, `${fileName} must not render creator-facing ${label}`)
+    }
+  }
+}
 
 const temp = await mkdtemp(join(tmpdir(), 'creator-studio-'))
 const bundle = join(temp, 'logic.mjs')
@@ -894,6 +952,17 @@ try {
   const mediaRangeControlsUrl = new URL('../src/features/creator-studio/components/MediaRangeControls.tsx', import.meta.url)
   assert.equal(existsSync(mediaRangeControlsUrl), true, 'video and audio review need shared playhead range controls')
   const mediaRangeControlsSource = readFileSync(mediaRangeControlsUrl, 'utf8')
+  assertCreatorRenderedSurfaceIsSafe(new Map([
+    ['ProjectWorkspacePage.tsx', workspaceSource],
+    ['CreatorProcessTimeline.tsx', timelineSource],
+    ['ArtifactReviewPanel.tsx', reviewSource],
+    ['CreatorContentLibrary.tsx', contentLibrarySource],
+    ['CreationStrip.tsx', stripSource],
+    ['StepRegenerationDialog.tsx', regenerationDialogSource],
+    ['ShotInspector.tsx', inspectorSource],
+    ['ArtifactProofingCanvas.tsx', proofingSource],
+    ['PreviewDeliveryPanel.tsx', previewSource],
+  ]))
   for (const functionName of [
     'getCreationView', 'getStepVersions', 'previewStepRevision', 'reviseStep', 'confirmStep',
     'restoreStepVersion', 'previewStepRegeneration', 'regenerateStep', 'registerProjectMaterial', 'listShots', 'getShotSummary',
@@ -990,7 +1059,7 @@ try {
   assert.match(stripSource, /aria-current=\{isCurrent \? 'step' : undefined\}/)
   assert.match(stripSource, /canSelect/)
   assert.match(stripSource, /step\.hasHistory/)
-  assert.match(stripSource, /step\.artifactCount/)
+  assert.match(stripSource, /已有内容/)
   assert.match(reviewSource, /确认并继续/)
   assert.match(reviewSource, /previewStepRevision/)
   assert.match(reviewSource, /confirmedAffectedShotIds/)
@@ -1123,7 +1192,15 @@ try {
   assert.match(reviewSource, /setInstruction\(nextInstruction\)/)
   assert.match(reviewSource, /setMode\('instruction'\)/)
   assert.match(reviewSource, /instructionRef\.current\?\.focus\(\)/)
-  assert.match(timelineSource, /完整创作过程/)
+  assert.match(timelineSource, /创作进度/)
+  assert.match(timelineSource, /onSelect: \(stepId: CreatorStepId\) => void/)
+  assert.match(timelineSource, /onClick=\{\(\) => onSelect\(event\.stepId\)\}/)
+  assert.match(timelineSource, /aria-current=\{event\.stepId === selectedStepId \? 'step' : undefined\}/)
+  assert.doesNotMatch(timelineSource, /event\.(?:title|summary|attempt)|formatEventTime|可审计记录/, 'timeline uses only safe step labels, friendly state, and creator action copy')
+  for (const stateLabel of ['生成中', '等待审阅', '已完成', '需要处理']) {
+    assert.match(timelineSource, new RegExp(stateLabel), `timeline includes the friendly ${stateLabel} state`)
+  }
+  assert.match(workspaceSource, /<CreatorProcessTimeline[\s\S]*onSelect=\{navigateToStep\}/, 'timeline selection reuses creator step navigation')
   assert.equal(existsSync(contentLibraryUrl), true, 'the four-tab creator content library must exist')
   for (const tabLabel of ['文字与提示词', '参考图', '视频片段', '语音']) {
     assert.match(contentLibrarySource, new RegExp(tabLabel), `content library includes the ${tabLabel} tab`)
@@ -1139,6 +1216,7 @@ try {
   assert.match(contentLibrarySource, /aria-controls=\{tabPanelId\(tab\.category\)\}/)
   assert.match(contentLibrarySource, /id=\{tabPanelId\(tab\.category\)\}/)
   assert.match(contentLibrarySource, /aria-labelledby=\{tabId\(tab\.category\)\}/)
+  assert.match(contentLibrarySource, /role="tab"[\s\S]*aria-selected=\{activeCategory === tab\.category\}/, 'content categories expose tab semantics and selected state')
   assert.match(contentLibrarySource, /关键内容仍在准备中，生成完成后会显示在这里。/)
   assert.match(contentLibrarySource, /<img[\s\S]*loading="lazy"/, 'every image card uses a lazy real thumbnail')
   assert.doesNotMatch(
@@ -1207,11 +1285,18 @@ try {
   assert.match(reviewSource, /uploadLocalArtifactFile[\s\S]*registerProjectMaterial[\s\S]*previewStepRevision/, 'replacement uploads, registers, then previews impact')
   assert.match(reviewSource, /mode: 'replace'/, 'replacement submission uses the typed revision branch')
   assert.match(reviewSource, /确认修改/, 'typed replacement remains behind the existing explicit impact confirmation')
+  assert.match(reviewSource, /alt=\{`\$\{artifact\?\.reviewLabel \|\| creatorStepLabel\(step\.id\)\}预览`\}/, 'full-screen image review uses a semantic creator-facing alt')
   assert.match(projectBriefSource, /创作目标/)
   assert.match(projectBriefSource, /目标时长/)
   assert.match(regenerationDialogSource, /previewStepRegeneration/)
   assert.match(regenerationDialogSource, /confirmedAffectedStepIds/)
   assert.match(regenerationDialogSource, /旧版本仍然保留/)
+  assert.match(regenerationDialogSource, /triggerRef[\s\S]*trigger\?\.focus\(\)/, 'step regeneration dialog restores focus to its launch control')
+  assert.match(contentLibrarySource, /creator-content-preview-error" role="alert"/, 'preview failures are announced as errors')
+  assert.match(agentReviewSource, /approvalBlocked && <p className="creator-form-error" role="alert">/, 'blocking creator review errors use an alert live region')
+  assert.match(creatorStylesSource, /\.creator-root :focus-visible\s*\{[^}]*outline:/, 'creator keyboard focus is visibly distinct')
+  assert.match(creatorStylesSource, /@media \(max-width: 390px\)[\s\S]*\.creator-workspace[^}]*min-width:\s*0/, '390 px creator workspace constrains intrinsic widths')
+  assert.match(creatorStylesSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.creator-root \*[\s\S]*animation-duration:/, 'creator surfaces respect reduced-motion preferences')
   assert.match(queueSource, /height: 480/)
   assert.match(queueSource, /SHOT_QUEUE_ROW_HEIGHT/)
   assert.match(queueSource, /Math\.min\(3, unresolved\.length\)/, 'visible thumbnails must use bounded concurrency')

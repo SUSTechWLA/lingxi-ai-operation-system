@@ -17,6 +17,7 @@ type TimeSelection = Extract<ArtifactSelection, { kind: 'time' }>
 
 interface ArtifactProofingCanvasProps {
   content: ArtifactContentResponse | null
+  reviewLabel?: string
   selection?: ArtifactSelection | null
   imageRef?: RefObject<HTMLImageElement>
   onOpenImage?: (src: string) => void
@@ -36,6 +37,7 @@ const EMPTY_PLAYBACK_STATE: MediaPlaybackState = { currentTimeMs: 0, durationMs:
 
 export default function ArtifactProofingCanvas({
   content,
+  reviewLabel,
   selection,
   imageRef,
   onOpenImage,
@@ -56,6 +58,10 @@ export default function ArtifactProofingCanvas({
   const [localText, setLocalText] = useState<{ key: string; text?: string; error?: string } | null>(null)
   const artifact = content?.artifact
   const presentation = classifyArtifactPresentation({ kind: artifact?.kind, mimeType: artifact?.mimeType, name: artifact?.name })
+  const semanticMediaLabel = reviewLabel || (presentation === 'image'
+    ? '当前图片'
+    : presentation === 'audio' ? '当前语音' : '当前视频')
+
   const resolvedMediaUrl = content && artifact
     ? resolveCreatorArtifactMediaUrl(artifact.projectId, content, getLocalAgentBaseUrl())
     : undefined
@@ -146,7 +152,7 @@ export default function ArtifactProofingCanvas({
           ref={imageRef}
           className="artifact-image-preview"
           src={resolvedMediaUrl}
-          alt={artifact.name || '当前图片内容'}
+          alt={`${semanticMediaLabel}预览`}
           onError={() => setMediaFailed(true)}
           onPointerDown={onImagePointerDown}
           onPointerUp={onImagePointerUp}
@@ -162,8 +168,8 @@ export default function ArtifactProofingCanvas({
       <div className="artifact-media-proofing">
         <SimpleVideoPlayer
           src={resolvedMediaUrl}
-          title={artifact.name || '视频产物'}
-          downloadName={artifact.name}
+          title={semanticMediaLabel}
+          downloadName={semanticMediaLabel}
           onError={() => {
             invalidateMediaReview()
             setMediaFailed(true)
@@ -186,8 +192,8 @@ export default function ArtifactProofingCanvas({
       <div className="artifact-media-proofing">
         <SimpleAudioPlayer
           src={resolvedMediaUrl}
-          title={artifact.name || '语音产物'}
-          downloadName={artifact.name}
+          title={semanticMediaLabel}
+          downloadName={semanticMediaLabel}
           onError={invalidateMediaReview}
           onReady={markPlaybackReady}
           onPlaybackStateChange={setPlaybackState}
