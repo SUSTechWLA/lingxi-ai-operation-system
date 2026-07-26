@@ -1757,7 +1757,32 @@ try {
     'a confirmed final badge waits for final review and loaded browser metadata',
   )
   assert.match(previewSource, /canDeliverCreatorFinalVideo/, 'diagnostic probing never bypasses final delivery gating')
+  assert.match(
+    previewSource,
+    /<SimpleVideoPlayer[\s\S]*allowDownload=\{finalVideoReady\}/,
+    'a diagnostic delivery video keeps playback but cannot expose a download before final QA passes',
+  )
+  assert.match(
+    previewSource,
+    /\{finalVideoReady \? '✓' : '○'\}/,
+    'the delivery checklist cannot show final green checks before final QA and playable media are both ready',
+  )
+  assert.match(
+    previewSource,
+    /const success = completedDeliveryRepairSuccess\(result\.view\)\s*onViewChanged\(result\.view\)[\s\S]*if \(success\.refreshAfterMutation\) void onAssemblyUpdated\(\)\.catch\(\(\) => undefined\)/,
+    'a successful regeneration adopts its returned view before launching the best-effort refresh',
+  )
   assert.equal((playerSource.match(/<video\b/g) || []).length, 1, 'the shared player mounts exactly one media element')
+  assert.match(
+    playerSource,
+    /allowDownload && mediaState === 'unsupported'[\s\S]*download=\{downloadName \|\| true\}/,
+    'unsupported diagnostic video cannot expose a download action unless final delivery explicitly enables it',
+  )
+  assert.match(
+    playerSource,
+    /\{allowDownload && <a className="simple-video-download"/,
+    'normal video controls cannot expose a download action unless final delivery explicitly enables it',
+  )
   assert.match(playerSource, /interface MediaPlaybackState/)
   assert.match(playerSource, /onPlaybackStateChange\?:/)
   assert.match(playerSource, /fetch\(src,\s*\{\s*method:\s*'HEAD'/, 'local video delivery is probed before browser decoding')

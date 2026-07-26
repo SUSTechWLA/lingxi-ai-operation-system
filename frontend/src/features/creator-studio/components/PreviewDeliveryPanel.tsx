@@ -187,7 +187,7 @@ export default function PreviewDeliveryPanel({ projectId, step, content, artifac
         <button className="creator-primary-button" type="button" disabled={working} onClick={() => void rebuild()}>{working ? '正在核对镜头…' : '重新拼接成片'}</button>
       </div>}
 
-			{!assemblyDirty && previewReady && shouldProbeMedia && <SimpleVideoPlayer src={mediaUrl!} title="当前成片" downloadName="当前成片" onMediaStateChange={state => setMediaStatus({ url: mediaUrl!, state })} />}
+			{!assemblyDirty && previewReady && shouldProbeMedia && <SimpleVideoPlayer src={mediaUrl!} title="当前成片" downloadName="当前成片" allowDownload={finalVideoReady} onMediaStateChange={state => setMediaStatus({ url: mediaUrl!, state })} />}
 			{!assemblyDirty && previewReady && currentContent && presentation !== 'video' && <ArtifactProofingCanvas content={proofingContent} reviewLabel="当前成片" />}
 			{!assemblyDirty && artifactLoadState === 'error' && <p className="artifact-empty">暂时无法读取当前成片，请稍后重试。</p>}
 			{!assemblyDirty && artifactLoadState !== 'error' && (!previewReady || !currentContent || (presentation === 'video' && !mediaUrl)) && <p className="artifact-empty">系统正在准备当前产物；完成后会在这里显示可审阅内容。</p>}
@@ -199,8 +199,8 @@ export default function PreviewDeliveryPanel({ projectId, step, content, artifac
 
       <section className="preview-delivery-checklist" aria-label="成片检查">
         <h3>成片检查</h3>
-        <p><span aria-hidden="true">{step.state === 'confirmed' ? '✓' : '○'}</span> 字幕是否易读、时间是否准确</p>
-        <p><span aria-hidden="true">{step.state === 'confirmed' ? '✓' : '○'}</span> 旁白、音乐和画面衔接是否自然</p>
+        <p><span aria-hidden="true">{finalVideoReady ? '✓' : '○'}</span> 字幕是否易读、时间是否准确</p>
+        <p><span aria-hidden="true">{finalVideoReady ? '✓' : '○'}</span> 旁白、音乐和画面衔接是否自然</p>
       </section>
 
       {isDelivery && (finalVideoReady ? <section className="preview-delivery-package">

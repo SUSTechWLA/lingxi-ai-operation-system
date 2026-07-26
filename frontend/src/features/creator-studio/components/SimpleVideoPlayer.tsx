@@ -22,6 +22,7 @@ interface SimpleVideoPlayerProps {
   src: string
   title?: string
   downloadName?: string
+  allowDownload?: boolean
   onError?: (state: Exclude<CreatorMediaState, 'loading' | 'playable'>) => void
   onMediaStateChange?: (state: CreatorMediaState) => void
   onPlaybackStateChange?: (state: MediaPlaybackState) => void
@@ -31,6 +32,7 @@ export default function SimpleVideoPlayer({
   src,
   title = '成片预览',
   downloadName,
+  allowDownload = true,
   onError,
   onMediaStateChange,
   onPlaybackStateChange,
@@ -240,7 +242,7 @@ export default function SimpleVideoPlayer({
         <div className="simple-video-error" role="alert">
           <strong>当前视频无法播放</strong>
           <span>{message}</span>
-          {mediaState === 'unsupported' && <a className="creator-secondary-button" href={src} download={downloadName || true} aria-label="下载视频">下载视频</a>}
+          {allowDownload && mediaState === 'unsupported' && <a className="creator-secondary-button" href={src} download={downloadName || true} aria-label="下载视频">下载视频</a>}
         </div>
       </div>
     )
@@ -323,7 +325,7 @@ export default function SimpleVideoPlayer({
         <button type="button" className="simple-video-icon-button" aria-label="全屏" onClick={enterFullscreen}>
           <span aria-hidden="true">⛶</span>
         </button>
-        <a className="simple-video-download" href={src} download={downloadName || true} aria-label="下载视频">下载</a>
+        {allowDownload && <a className="simple-video-download" href={src} download={downloadName || true} aria-label="下载视频">下载</a>}
       </div>
       <p className="simple-video-shortcuts">空格播放 · ←/→ 快退快进 5 秒 · M 静音 · F 全屏</p>
     </div>

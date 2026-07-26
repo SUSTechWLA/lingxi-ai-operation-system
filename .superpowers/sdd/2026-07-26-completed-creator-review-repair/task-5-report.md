@@ -56,3 +56,23 @@ The new executable checks covered a completed task with playable and missing del
 - `npm run build` — exit 0: TypeScript checks and Vite production build passed.
 - `git diff --check` — exit 0.
 - `npm run lint` remains exit 1 only for the same pre-existing three `no-useless-escape` errors in `frontend/scripts/creator-studio-logic-check.mjs` lines 282 and 286, plus the pre-existing Fast Refresh warning in `ReviewableTextSurface.tsx`; this round introduced no lint diagnostics.
+
+## Review fix round 2
+
+- Delivery media remains available for diagnostic probing and playback before final QA, but the player receives `allowDownload={finalVideoReady}` so neither normal controls nor the unsupported-codec state can offer a download until final review and browser metadata both pass.
+- The visible final-delivery checklist now uses the same `finalVideoReady` gate as the confirmed badge and delivery package, so a merely decodable diagnostic video cannot show green completion checks.
+- The source-contract test now proves the successful delivery-regeneration sequence adopts `result.view` with `onViewChanged(result.view)` before it launches the best-effort `void onAssemblyUpdated().catch(...)` refresh.
+
+### Fix-round RED evidence
+
+`npm run test:creator` exited 1 before the implementation change with:
+
+`AssertionError [ERR_ASSERTION]: a diagnostic delivery video keeps playback but cannot expose a download before final QA passes`
+
+The new checks also require the checklist to gate green marks with `finalVideoReady`, both player download locations to honor `allowDownload`, and the immediate view-adoption call to precede the asynchronous refresh.
+
+### Fix-round GREEN evidence
+
+- `npm run test:creator` — exit 0: `creator studio logic and client contract checks passed`.
+- `npm run build` — exit 0: strict TypeScript checks and Vite production build passed.
+- `git diff --check` — exit 0.
