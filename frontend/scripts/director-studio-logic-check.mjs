@@ -11,6 +11,7 @@ const apiResponseOutfile = join(tempDir, 'apiResponse.mjs')
 const layerSelectorsOutfile = join(tempDir, 'talkingHeadLayerSelectors.mjs')
 const creatorRoutesOutfile = join(tempDir, 'creatorRoutes.mjs')
 const focusCycleOutfile = join(tempDir, 'focusCycle.mjs')
+const developerDiagnosticsOutfile = join(tempDir, 'developerDiagnostics.mjs')
 
 try {
   await build({
@@ -48,6 +49,14 @@ try {
   await build({
     entryPoints: [new URL('../src/features/creator-studio/focusCycle.ts', import.meta.url).pathname],
     outfile: focusCycleOutfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/features/developer-console/developerDiagnostics.ts', import.meta.url).pathname],
+    outfile: developerDiagnosticsOutfile,
     bundle: true,
     format: 'esm',
     platform: 'node',
@@ -111,6 +120,12 @@ try {
   const { buildTalkingHeadLayerDisplays } = await import(pathToFileURL(layerSelectorsOutfile))
   const { parseAppRoute, replaceHashRoute } = await import(pathToFileURL(creatorRoutesOutfile))
   const { cycleFocusIndex } = await import(pathToFileURL(focusCycleOutfile))
+  const {
+    buildDiagnosticsNodes,
+    classifyDiagnosticTransport,
+    diagnosticDurationMs,
+    redactDiagnosticValue,
+  } = await import(pathToFileURL(developerDiagnosticsOutfile))
   const directorPageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
   const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
   const creatorShellSource = await readFile(new URL('../src/features/creator-studio/CreatorShell.tsx', import.meta.url), 'utf8')
@@ -171,6 +186,156 @@ try {
   assert.equal(cycleFocusIndex(0, 2, true), 1)
   assert.equal(cycleFocusIndex(1, 2, true), 0)
   assert.equal(cycleFocusIndex(0, 0, false), -1)
+
+  assert.deepEqual(
+    redactDiagnosticValue({
+      Authorization: 'Bearer token',
+      nested: {
+        COOKIE: 'session=abc',
+        apiKey: 'key',
+        api_key: 'key-2',
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        secret: 'secret',
+        password: 'password',
+        credential: 'credential',
+        signedUrl: 'https://example.test/private',
+        signature: 'signature',
+        list: [
+          { 'Set-Cookie': 'session=def' },
+          '/Users/alice/project/file.png',
+          String.raw`C:\Users\alice\project\file.png`,
+          'local://projects/vp-1/output.mp4',
+          'project-17',
+          'assets/output.mp4',
+        ],
+      },
+    }),
+    {
+      Authorization: '[REDACTED]',
+      nested: {
+        COOKIE: '[REDACTED]',
+        apiKey: '[REDACTED]',
+        api_key: '[REDACTED]',
+        accessToken: '[REDACTED]',
+        refreshToken: '[REDACTED]',
+        secret: '[REDACTED]',
+        password: '[REDACTED]',
+        credential: '[REDACTED]',
+        signedUrl: '[REDACTED]',
+        signature: '[REDACTED]',
+        list: [
+          { 'Set-Cookie': '[REDACTED]' },
+          '<local-path>/file.png',
+          String.raw`<local-path>\file.png`,
+          'local://projects/vp-1/output.mp4',
+          'project-17',
+          'assets/output.mp4',
+        ],
+      },
+    },
+  )
+  const cyclicDiagnostic = { password: 'hidden' }
+  cyclicDiagnostic.self = cyclicDiagnostic
+  assert.doesNotThrow(() => redactDiagnosticValue(cyclicDiagnostic))
+  assert.doesNotThrow(() => redactDiagnosticValue(new Proxy({}, {
+    ownKeys() {
+      throw new Error('malformed diagnostic value')
+    },
+  })))
+  const revokedDiagnostic = Proxy.revocable({}, {})
+  revokedDiagnostic.revoke()
+  assert.doesNotThrow(() => redactDiagnosticValue(revokedDiagnostic.proxy))
+  assert.doesNotThrow(() => classifyDiagnosticTransport(revokedDiagnostic.proxy))
+  assert.deepEqual(buildDiagnosticsNodes(revokedDiagnostic.proxy), [])
+
+  assert.equal(diagnosticDurationMs('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.250Z'), 1250)
+  assert.equal(diagnosticDurationMs('invalid', '2026-01-01T00:00:01.250Z'), undefined)
+  assert.equal(diagnosticDurationMs('2026-01-01T00:00:02.000Z', '2026-01-01T00:00:01.250Z'), undefined)
+  assert.equal(diagnosticDurationMs(Symbol('malformed'), '2026-01-01T00:00:01.250Z'), undefined)
+  assert.equal(classifyDiagnosticTransport({ transport: 'control' }), 'control')
+  assert.equal(classifyDiagnosticTransport({ server: 'filesystem' }), 'mcp')
+  assert.equal(classifyDiagnosticTransport({ provider: 'mcp://video-qa' }), 'mcp')
+  assert.equal(classifyDiagnosticTransport({ toolName: 'mcp__video_qa__inspect' }), 'mcp')
+  assert.equal(classifyDiagnosticTransport({ tool: 'render_video' }), 'tool')
+  assert.equal(classifyDiagnosticTransport(null), 'unknown')
+
+  assert.deepEqual(
+    buildDiagnosticsNodes({
+      nodes: [
+        {
+          id: 'node-b',
+          name: 'Second',
+          type: 'tool',
+          status: 'SUCCESS',
+          createdAt: '2026-01-01T00:00:02.000Z',
+          completedAt: 'invalid',
+          retryCount: 2,
+          maxRetry: 3,
+          tool: 'render_video',
+          input: { authorization: 'secret-token', source: '/Users/alice/source.mov' },
+          output: { file: String.raw`C:\Users\alice\result.mp4` },
+        },
+        {
+          id: 'node-a',
+          name: 'First',
+          status: 'RUNNING',
+          startedAt: '2026-01-01T00:00:01.000Z',
+          completedAt: '2026-01-01T00:00:01.500Z',
+          transport: 'mcp',
+          request: [{ password: 'hidden' }],
+          response: { artifactId: 'local://projects/vp-1/output.mp4' },
+        },
+        {
+          id: 'node-c',
+          createdAt: '2026-01-01T00:00:02.000Z',
+        },
+      ],
+    }),
+    [
+      {
+        id: 'node-a',
+        name: 'First',
+        type: 'unknown',
+        status: 'RUNNING',
+        startedAt: '2026-01-01T00:00:01.000Z',
+        completedAt: '2026-01-01T00:00:01.500Z',
+        durationMs: 500,
+        retryCount: 0,
+        maxRetry: 0,
+        transport: 'mcp',
+        request: [{ password: '[REDACTED]' }],
+        response: { artifactId: 'local://projects/vp-1/output.mp4' },
+      },
+      {
+        id: 'node-b',
+        name: 'Second',
+        type: 'tool',
+        status: 'SUCCESS',
+        startedAt: '2026-01-01T00:00:02.000Z',
+        completedAt: 'invalid',
+        retryCount: 2,
+        maxRetry: 3,
+        toolName: 'render_video',
+        transport: 'tool',
+        request: { authorization: '[REDACTED]', source: '<local-path>/source.mov' },
+        response: { file: String.raw`<local-path>\result.mp4` },
+      },
+      {
+        id: 'node-c',
+        name: 'node-c',
+        type: 'unknown',
+        status: 'unknown',
+        startedAt: '2026-01-01T00:00:02.000Z',
+        retryCount: 0,
+        maxRetry: 0,
+        transport: 'unknown',
+      },
+    ],
+  )
+  assert.deepEqual(buildDiagnosticsNodes({ nodes: 'not-an-array' }), [])
+  assert.deepEqual(buildDiagnosticsNodes(null), [])
+
   assert.match(directorPageSource, /放大播放/)
   assert.doesNotMatch(directorPageSource, /图片预览已就绪|照片预览已就绪|视频预览已就绪|参考图已登记|产物已登记/)
   assert.doesNotMatch(directorPageSource, /QA \{openGroup\.production\.qaStatus\}|\{openGroup\.production\.sourceType\}/)
