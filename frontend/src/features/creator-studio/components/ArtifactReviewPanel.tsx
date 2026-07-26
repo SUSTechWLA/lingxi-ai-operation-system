@@ -375,11 +375,13 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
 
   const handleTextSelectionChange = (draft: TextSelectionDraft | null) => {
     const backendSource = safeCreatorReviewText(content?.reviewText)
+    const sourceHash = content?.reviewTextSourceHash
     const renderedSource = projectCreatorReviewContent(content?.content).canonicalText ?? backendSource
-    const mappedSelection = draft && backendSource && renderedSource
+    const mappedSelection = draft && backendSource && renderedSource && /^sha256:[0-9a-f]{64}$/.test(sourceHash ?? '')
       ? rebaseTextSelection(backendSource, renderedSource, draft.selection)
       : null
-    const mappedDraft = draft && mappedSelection ? { ...draft, selection: mappedSelection } : null
+    const scopedSelection = mappedSelection && sourceHash ? { ...mappedSelection, sourceHash } : null
+    const mappedDraft = draft && scopedSelection ? { ...draft, selection: scopedSelection } : null
     setTextSelectionDraft(mappedDraft)
     setSelection(current => mappedDraft?.selection ?? (current?.kind === 'text' ? null : current))
   }
@@ -396,8 +398,8 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
   }
 
   const chooseTextQuickAction = (nextInstruction: string) => {
-    if (!textSelectionDraft) return
-    setSelection(textSelectionDraft.selection)
+    if (!textSelectionDraft || selection?.kind !== 'text') return
+    setSelection(selection)
     setMode('instruction')
     setInstruction(nextInstruction)
     setTextSelectionDraft(null)
@@ -405,8 +407,8 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
   }
 
   const chooseCustomTextInstruction = () => {
-    if (!textSelectionDraft) return
-    setSelection(textSelectionDraft.selection)
+    if (!textSelectionDraft || selection?.kind !== 'text') return
+    setSelection(selection)
     setMode('instruction')
     setTextSelectionDraft(null)
     window.getSelection()?.removeAllRanges()

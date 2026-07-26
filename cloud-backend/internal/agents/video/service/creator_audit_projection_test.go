@@ -184,6 +184,46 @@ func TestCreatorAuditCompletedProjectConfirmsPersistedBriefAndApprovedPreview(t 
 	}
 }
 
+func TestCreatorViewProjectsAuthoritativeFinalDeliveryVideoAcrossMultipleCurrentDeliveryArtifacts(t *testing.T) {
+	created := time.Date(2026, time.July, 26, 8, 0, 0, 0, time.UTC)
+	finalVideo := &artifact.Artifact{
+		ID: "final-video", ProjectID: "vp-complete", StageName: "render", UnitID: "final-video",
+		Kind: artifact.KindVideo, Name: "final.mp4", MimeType: "video/mp4", Version: 2, IsCurrent: true,
+		Status: "valid", HumanApproved: true, CreatedAt: created,
+		Metadata: map[string]interface{}{"artifactType": "external_generation_result", "generationKind": "video", "tags": []interface{}{"final_video"}},
+	}
+	publishCopy := &artifact.Artifact{
+		ID: "publish-copy", ProjectID: "vp-complete", StageName: "publish", UnitID: "publish-copy",
+		Kind: artifact.KindMarkdown, Name: "publish.md", Version: 9, IsCurrent: true,
+		Status: "valid", HumanApproved: true, CreatedAt: created.Add(time.Minute), Metadata: map[string]interface{}{"artifactType": "publish_copy"},
+	}
+	exportBundle := &artifact.Artifact{
+		ID: "export-bundle", ProjectID: "vp-complete", StageName: "export", UnitID: "package",
+		Kind: artifact.KindBundle, Name: "export.zip", Version: 11, IsCurrent: true,
+		Status: "valid", HumanApproved: true, CreatedAt: created.Add(2 * time.Minute),
+	}
+	reader := auditArtifactReader{current: []*artifact.Artifact{publishCopy, exportBundle, finalVideo}, history: map[string][]*artifact.Artifact{
+		"render/final-video": {finalVideo}, "publish/publish-copy": {publishCopy}, "export/package": {exportBundle},
+	}}
+	view, err := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &videoModel.VideoProject{ID: "vp-complete", UserID: "user-1", Status: videoModel.StatusCompleted}},
+		fakeCreatorShotReader{}, reader,
+	).GetCreationView(context.Background(), "user-1", "vp-complete")
+	if err != nil {
+		t.Fatalf("GetCreationView() error = %v", err)
+	}
+	if view.FinalDeliveryArtifactID != finalVideo.ID {
+		t.Fatalf("finalDeliveryArtifactId = %q, want %q", view.FinalDeliveryArtifactID, finalVideo.ID)
+	}
+	if delivery := view.Steps[5]; delivery.CurrentArtifactID != finalVideo.ID || delivery.CurrentVersion != finalVideo.Version {
+		t.Fatalf("delivery authority = %+v, want final video instead of publish/export artifacts", delivery)
+	}
+	descriptors := view.StepArtifacts[videoModel.CreatorStepDelivery]
+	if len(descriptors) == 0 || descriptors[0].ArtifactID != finalVideo.ID {
+		t.Fatalf("delivery descriptors = %+v, want authoritative final video first", descriptors)
+	}
+}
+
 func TestCreatorAuditGroupsCurrentAndHistoricalArtifactsByStep(t *testing.T) {
 	created := time.Date(2026, time.July, 22, 9, 0, 0, 0, time.UTC)
 	current := &artifact.Artifact{

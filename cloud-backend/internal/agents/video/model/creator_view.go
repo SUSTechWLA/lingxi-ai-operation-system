@@ -84,14 +84,15 @@ type CreatorProcessEvent struct {
 
 // CreationView is the backend-authoritative state for the creator workspace.
 type CreationView struct {
-	Project         *VideoProject                                 `json:"project"`
-	ActiveStep      CreatorStepID                                 `json:"activeStep"`
-	Steps           []CreatorStep                                 `json:"steps"`
-	ShotSummary     ShotSummary                                   `json:"shotSummary"`
-	ActiveTasks     []CreatorTask                                 `json:"activeTasks"`
-	AssemblyDirty   bool                                          `json:"assemblyDirty"`
-	ProcessTimeline []CreatorProcessEvent                         `json:"processTimeline"`
-	StepArtifacts   map[CreatorStepID][]CreatorArtifactDescriptor `json:"stepArtifacts"`
+	Project                 *VideoProject                                 `json:"project"`
+	ActiveStep              CreatorStepID                                 `json:"activeStep"`
+	FinalDeliveryArtifactID string                                        `json:"finalDeliveryArtifactId,omitempty"`
+	Steps                   []CreatorStep                                 `json:"steps"`
+	ShotSummary             ShotSummary                                   `json:"shotSummary"`
+	ActiveTasks             []CreatorTask                                 `json:"activeTasks"`
+	AssemblyDirty           bool                                          `json:"assemblyDirty"`
+	ProcessTimeline         []CreatorProcessEvent                         `json:"processTimeline"`
+	StepArtifacts           map[CreatorStepID][]CreatorArtifactDescriptor `json:"stepArtifacts"`
 }
 
 // CreatorTask only exposes durable work that a creator can safely resume after reconnecting.
@@ -157,16 +158,17 @@ type ShotWorkspace struct {
 }
 
 type ArtifactSelection struct {
-	Kind    string   `json:"kind"`
-	X       *float64 `json:"x,omitempty"`
-	Y       *float64 `json:"y,omitempty"`
-	Width   *float64 `json:"width,omitempty"`
-	Height  *float64 `json:"height,omitempty"`
-	StartMs *int64   `json:"startMs,omitempty"`
-	EndMs   *int64   `json:"endMs,omitempty"`
-	Start   *int     `json:"start,omitempty"`
-	End     *int     `json:"end,omitempty"`
-	Text    string   `json:"text,omitempty"`
+	Kind       string   `json:"kind"`
+	X          *float64 `json:"x,omitempty"`
+	Y          *float64 `json:"y,omitempty"`
+	Width      *float64 `json:"width,omitempty"`
+	Height     *float64 `json:"height,omitempty"`
+	StartMs    *int64   `json:"startMs,omitempty"`
+	EndMs      *int64   `json:"endMs,omitempty"`
+	Start      *int     `json:"start,omitempty"`
+	End        *int     `json:"end,omitempty"`
+	Text       string   `json:"text,omitempty"`
+	SourceHash string   `json:"sourceHash,omitempty"`
 }
 
 type ReplacementMaterial struct {

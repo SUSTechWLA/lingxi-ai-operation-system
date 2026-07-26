@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -974,6 +975,7 @@ func TestArtifactSelectionValidationCoversRectAndTimeBounds(t *testing.T) {
 		"negative time": {Kind: "time", StartMs: i64(-1), EndMs: i64(2)},
 		"empty time":    {Kind: "time", StartMs: i64(2), EndMs: i64(2)},
 		"mixed fields":  {Kind: "time", StartMs: i64(0), EndMs: i64(2), X: f64(.1)},
+		"mixed hash":    {Kind: "time", StartMs: i64(0), EndMs: i64(2), SourceHash: creatorSelectionSourceHash("unused")},
 		"unknown":       {Kind: "pixels", X: f64(.1), Y: f64(.1), Width: f64(.2), Height: f64(.2)},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -981,6 +983,13 @@ func TestArtifactSelectionValidationCoversRectAndTimeBounds(t *testing.T) {
 				t.Fatalf("error=%v", err)
 			}
 		})
+	}
+}
+
+func TestArtifactSelectionTextRequiresCanonicalSourceHash(t *testing.T) {
+	selection := decodeArtifactSelection(t, `{"kind":"text","start":0,"end":1,"text":"a"}`)
+	if _, err := normalizeArtifactSelection(selection); !errors.Is(err, ErrCreatorInvalidRequest) {
+		t.Fatalf("text selection without sourceHash error = %v, want invalid request", err)
 	}
 }
 
@@ -1012,18 +1021,20 @@ func TestArtifactSelectionTextSupportsBrowserUTF16OffsetsAndExactProvenance(t *t
 			).WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review"}).
 				WithArtifactReconciler(resolver)
 
+			textSelection := decodeArtifactSelection(t, test.selection)
+			textSelection.SourceHash = creatorSelectionSourceHash(test.source)
 			_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, model.StepRevisionRequest{
 				IdempotencyKey: "text-" + test.name, ArtifactID: base.ID, BaseVersion: 3,
 				Mode: "instruction", Instruction: "只改选中文字",
 				ModelProviders: map[string]interface{}{"text_to_text": map[string]interface{}{
 					"baseUrl": "https://model.test", "apiKey": "secret", "model": "writer",
 				}},
-				Selection: decodeArtifactSelection(t, test.selection),
+				Selection: textSelection,
 			})
 			if err != nil {
 				t.Fatalf("ReviseStep() error = %v", err)
 			}
-			want := map[string]interface{}{"kind": "text", "start": test.wantStart, "end": test.wantEnd}
+			want := map[string]interface{}{"kind": "text", "start": test.wantStart, "end": test.wantEnd, "sourceHash": creatorSelectionSourceHash(test.source)}
 			want["text"] = decodeArtifactSelectionText(t, test.selection)
 			if got := revisions.reviseRequest.Provenance["selection"]; !reflect.DeepEqual(got, want) {
 				t.Fatalf("selection provenance = %#v, want %#v", got, want)
@@ -1031,7 +1042,7 @@ func TestArtifactSelectionTextSupportsBrowserUTF16OffsetsAndExactProvenance(t *t
 			if revisions.reviseRequest.Message != "只改选中文字" || len(revisions.reviseRequest.DirectContent) != 0 {
 				t.Fatalf("selected instruction must reach the scoped generator path: %+v", revisions.reviseRequest)
 			}
-			if resolver.resolveCalls != 1 || resolver.resolvedArtifactID != base.ID {
+			if resolver.resolveCalls != 1 || resolver.resolvedArtifactID != base.ID || string(revisions.reviseRequest.SourceContent) != test.source {
 				t.Fatalf("resolver calls = %d artifact = %q", resolver.resolveCalls, resolver.resolvedArtifactID)
 			}
 		})
@@ -1072,7 +1083,8 @@ func TestArtifactSelectionTextConflictsOnStaleMismatchedOrUnavailableContent(t *
 		t.Run(test.name, func(t *testing.T) {
 			svc, revisions, resolver := newTextSelectionService(test.source)
 			resolver.err = test.resolveErr
-			_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, textSelectionRequest(t, "conflict-"+test.name, test.selection))
+			req := textSelectionRequest(t, "conflict-"+test.name, test.selection, test.source)
+			_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req)
 			if err == nil || err.Error() != "creator artifact selection conflict" || errors.Is(err, ErrCreatorInvalidRequest) || revisions.calls != 0 {
 				t.Fatalf("error = %v, revision calls = %d", err, revisions.calls)
 			}
@@ -1103,7 +1115,7 @@ func TestArtifactSelectionInstructionRetryReusesExistingRevision(t *testing.T) {
 		ModelProviders: map[string]interface{}{"text_to_text": map[string]interface{}{
 			"baseUrl": "https://model.test", "apiKey": "secret", "model": "writer",
 		}},
-		Selection: decodeArtifactSelection(t, `{"kind":"text","start":1,"end":3,"text":"bc"}`),
+		Selection: decodeArtifactSelection(t, fmt.Sprintf(`{"kind":"text","start":1,"end":3,"text":"bc","sourceHash":%q}`, creatorSelectionSourceHash("abcdef"))),
 	}
 	reviews := svc.reviews.(*fakeCreatorReviewMutations)
 	reviews.reopenErr = errors.New("temporary reopen failure")
@@ -1119,7 +1131,7 @@ func TestArtifactSelectionInstructionRetryReusesExistingRevision(t *testing.T) {
 	if revisions.calls != 1 || result.Artifact.ID != createdID {
 		t.Fatalf("identical instruction retry calls = %d, artifact = %q/%q", revisions.calls, result.Artifact.ID, createdID)
 	}
-	if revisions.reviseRequest.Message != req.Instruction || len(revisions.reviseRequest.DirectContent) != 0 || resolver.resolveCalls != 2 {
+	if revisions.reviseRequest.Message != req.Instruction || len(revisions.reviseRequest.DirectContent) != 0 || resolver.resolveCalls != 1 {
 		t.Fatalf("instruction retry request = %+v, resolver calls = %d", revisions.reviseRequest, resolver.resolveCalls)
 	}
 }
@@ -1176,7 +1188,7 @@ func TestArtifactSelectionTextIsRejectedForDirectModeBeforeMutation(t *testing.T
 	req := model.StepRevisionRequest{
 		IdempotencyKey: "direct-text-selection", ArtifactID: "script-v3", BaseVersion: 3,
 		Mode: "direct", DirectContent: "replacement",
-		Selection: decodeArtifactSelection(t, `{"kind":"text","start":1,"end":3,"text":"bc"}`),
+		Selection: decodeArtifactSelection(t, fmt.Sprintf(`{"kind":"text","start":1,"end":3,"text":"bc","sourceHash":%q}`, creatorSelectionSourceHash("abcdef"))),
 	}
 	_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req)
 	if !errors.Is(err, ErrCreatorInvalidRequest) || revisions.calls != 0 || resolver.resolveCalls != 0 {
@@ -1203,15 +1215,28 @@ func decodeArtifactSelectionText(t *testing.T, raw string) string {
 	return text
 }
 
-func textSelectionRequest(t *testing.T, key, raw string) model.StepRevisionRequest {
+func textSelectionRequest(t *testing.T, key, raw string, source ...string) model.StepRevisionRequest {
 	t.Helper()
+	selection := decodeArtifactSelection(t, raw)
+	if selection.Kind == "text" && selection.SourceHash == "" {
+		canonicalSource := "abcdef"
+		if len(source) > 0 {
+			canonicalSource = source[0]
+		}
+		selection.SourceHash = creatorSelectionSourceHash(canonicalSource)
+	}
 	return model.StepRevisionRequest{
 		IdempotencyKey: key, ArtifactID: "script-v3", BaseVersion: 3,
-		Mode: "instruction", Instruction: "rewrite", Selection: decodeArtifactSelection(t, raw),
+		Mode: "instruction", Instruction: "rewrite", Selection: selection,
 		ModelProviders: map[string]interface{}{"text_to_text": map[string]interface{}{
 			"baseUrl": "https://model.test", "apiKey": "secret", "model": "writer",
 		}},
 	}
+}
+
+func creatorSelectionSourceHash(source string) string {
+	digest := sha256.Sum256([]byte(source))
+	return fmt.Sprintf("sha256:%x", digest)
 }
 
 func newTextSelectionService(source string) (*CreatorViewService, *fakeCreatorRevisionService, *fakeCreatorArtifactTextResolver) {

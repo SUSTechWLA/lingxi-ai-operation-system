@@ -1,7 +1,9 @@
 import type { ArtifactSelection } from './types'
 
+export type TextSelectionOffsets = Omit<Extract<ArtifactSelection, { kind: 'text' }>, 'sourceHash'>
+
 export interface TextSelectionDraft {
-  selection: Extract<ArtifactSelection, { kind: 'text' }>
+  selection: TextSelectionOffsets
   anchor: { left: number; top: number }
 }
 
@@ -9,7 +11,7 @@ export function buildTextSelection(
   source: string,
   start: number,
   end: number,
-): Extract<ArtifactSelection, { kind: 'text' }> | null {
+): TextSelectionOffsets | null {
   if (!Number.isInteger(start) || !Number.isInteger(end)) return null
   const normalizedStart = Math.min(start, end)
   const normalizedEnd = Math.max(start, end)
@@ -31,7 +33,7 @@ export function buildTextSelectionFromLengths(
   startOffset: number,
   endNodeIndex: number,
   endOffset: number,
-): Extract<ArtifactSelection, { kind: 'text' }> | null {
+): TextSelectionOffsets | null {
   if (
     ![startNodeIndex, startOffset, endNodeIndex, endOffset].every(Number.isInteger) ||
     startNodeIndex < 0 || endNodeIndex < 0 ||
@@ -56,8 +58,8 @@ export function buildTextSelectionFromLengths(
 export function rebaseTextSelection(
   backendSource: string,
   renderedSource: string,
-  selection: Extract<ArtifactSelection, { kind: 'text' }>,
-): Extract<ArtifactSelection, { kind: 'text' }> | null {
+  selection: TextSelectionOffsets,
+): TextSelectionOffsets | null {
   if (backendSource === renderedSource) {
     return selection
   }

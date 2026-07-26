@@ -332,10 +332,10 @@ func TestCloudSpec_ArtifactSelectionBranchesAreClosedAndDisjoint(t *testing.T) {
 				t.Fatalf("time required = %v, want %v", got, want)
 			}
 		case "text":
-			if got, want := sortedRawPropertyNames(wire.Properties), []string{"end", "kind", "start", "text"}; !reflect.DeepEqual(got, want) {
+			if got, want := sortedRawPropertyNames(wire.Properties), []string{"end", "kind", "sourceHash", "start", "text"}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("text properties = %v, want %v", got, want)
 			}
-			if got, want := wire.Required, []string{"kind", "start", "end", "text"}; !reflect.DeepEqual(got, want) {
+			if got, want := wire.Required, []string{"kind", "start", "end", "text", "sourceHash"}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("text required = %v, want %v", got, want)
 			}
 		default:
@@ -371,6 +371,10 @@ func TestCloudSpec_ArtifactContentResponseExposesOptionalReviewText(t *testing.T
 	reviewText := inlineProperty(t, data, "reviewText")
 	if reviewText.Type != "string" {
 		t.Fatalf("reviewText schema = %+v", reviewText)
+	}
+	reviewTextSourceHash := inlineProperty(t, data, "reviewTextSourceHash")
+	if reviewTextSourceHash.Type != "string" || reviewTextSourceHash.Pattern != `^sha256:[0-9a-f]{64}$` {
+		t.Fatalf("reviewTextSourceHash schema = %+v", reviewTextSourceHash)
 	}
 }
 

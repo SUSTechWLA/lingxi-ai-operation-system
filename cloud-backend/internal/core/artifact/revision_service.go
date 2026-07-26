@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,12 +32,21 @@ type RevisionResult struct {
 }
 
 type ReviseRequest struct {
-	NewArtifactID  string
-	ArtifactID     string
-	Message        string
-	DirectContent  []byte
-	ModelProvider  map[string]interface{}
-	ModelProviders map[string]interface{}
+	NewArtifactID string
+	ArtifactID    string
+	Message       string
+	DirectContent []byte
+	// SourceContent is an immutable snapshot resolved by the creator boundary
+	// immediately before a scoped revision. RevisionService uses these exact
+	// bytes for hash validation, prompting, and splicing.
+	SourceContent      []byte
+	ExpectedSourceHash string
+	// SourceContentValidated is set only by the authorized creator service after
+	// hashing the immutable SourceContent snapshot. It prevents a second read or
+	// validation from creating a time-of-check/time-of-use gap.
+	SourceContentValidated bool
+	ModelProvider          map[string]interface{}
+	ModelProviders         map[string]interface{}
 	// Provenance is immutable structured context supplied by higher-level
 	// revision surfaces, such as a normalized rectangle or time selection.
 	Provenance map[string]interface{}
@@ -73,6 +83,7 @@ var (
 	ErrRevisionContentUnavailable = errors.New("revision source content unavailable")
 	ErrRevisionGeneration         = errors.New("revision generation failed")
 	ErrRevisionInvalidReplacement = errors.New("revision replacement is invalid")
+	ErrRevisionSourceConflict     = errors.New("revision source content changed")
 )
 
 // RevisionService owns revision and restore orchestration. It never changes
@@ -115,9 +126,20 @@ func (s *RevisionService) Revise(ctx context.Context, req ReviseRequest) (*Revis
 		return nil, ErrRevisionInvalidReplacement
 	}
 	if data == nil {
-		originalContent := s.resolveOriginalContent(ctx, base)
+		originalContent := ""
+		if req.SourceContent != nil {
+			originalContent = string(req.SourceContent)
+		} else {
+			originalContent = s.resolveOriginalContent(ctx, base)
+		}
 		if originalContent == "" {
 			return nil, ErrRevisionContentUnavailable
+		}
+		if hasSelection && strings.TrimSpace(req.ExpectedSourceHash) != "" && !req.SourceContentValidated {
+			actualHash := sha256.Sum256([]byte(originalContent))
+			if req.ExpectedSourceHash != fmt.Sprintf("sha256:%x", actualHash) {
+				return nil, ErrRevisionSourceConflict
+			}
 		}
 		if s.generator != nil {
 			systemPrompt := buildRevisionSystemPrompt(base.StageName, s.readStageInstruction(base))
@@ -136,6 +158,9 @@ func (s *RevisionService) Revise(ctx context.Context, req ReviseRequest) (*Revis
 				replacement, replacementErr := normalizeSelectedReplacement(revisedText)
 				if replacementErr != nil {
 					return nil, replacementErr
+				}
+				if selectedReplacementLooksLikeFullDocument(originalContent, selection, replacement) {
+					return nil, ErrRevisionInvalidReplacement
 				}
 				for depth := jsonStringSelectionDepth(originalContent, selection); depth > 0; depth-- {
 					encoded, marshalErr := json.Marshal(replacement)
@@ -373,11 +398,25 @@ func buildRevisionSystemPrompt(stageName string, stageInstruction string) string
 - 如果原始内容是 Markdown 格式，输出 Markdown
 - 如果原始内容是 JSON 格式，输出严格符合相同结构的 JSON
 - 不要引入原始内容中没有的新字段、新章节或额外内容
-- 输出完整内容，不要省略或截断`, stageName)
+- 如果用户消息包含「所选文字」并要求只返回替换文字，只输出该选中片段的替换文字，不得输出完整文档
+- 其他情况输出完整内容，不要省略或截断`, stageName)
 	if stageInstruction != "" {
 		prompt += "\n\n阶段说明（参考上下文）：\n" + stageInstruction
 	}
 	return prompt
+}
+
+func selectedReplacementLooksLikeFullDocument(source string, selection revisionTextSelection, replacement string) bool {
+	if replacement == source {
+		return true
+	}
+	units := utf16.Encode([]rune(source))
+	if selection.Start <= 0 || selection.End >= len(units) {
+		return false
+	}
+	prefix := string(utf16.Decode(units[:selection.Start]))
+	suffix := string(utf16.Decode(units[selection.End:]))
+	return prefix != "" && suffix != "" && strings.HasPrefix(replacement, prefix) && strings.HasSuffix(replacement, suffix)
 }
 
 type revisionTextSelection struct {

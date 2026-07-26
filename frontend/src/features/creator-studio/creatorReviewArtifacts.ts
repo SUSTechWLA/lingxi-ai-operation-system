@@ -1,4 +1,4 @@
-import type { CreatorArtifactDescriptor } from './types'
+import type { CreatorArtifactDescriptor, CreatorStepId } from './types'
 import { classifyCreatorReviewArtifact, type CreatorReviewCategory } from '../../utils/artifactClassification'
 
 export { classifyCreatorReviewArtifact, type CreatorReviewCategory } from '../../utils/artifactClassification'
@@ -97,4 +97,16 @@ export function selectCreatorReviewArtifact(
   return artifacts.find((artifact) => artifact.isCurrent && !artifact.isStale) ||
     artifacts.find((artifact) => artifact.isCurrent) ||
     artifacts[0]
+}
+
+export function authoritativeDeliveryReviewArtifacts(
+  stepArtifacts: Partial<Record<CreatorStepId, readonly CreatorArtifactDescriptor[]>> | undefined,
+  finalDeliveryArtifactId: string | undefined,
+): CreatorReviewArtifact[] {
+  if (!finalDeliveryArtifactId || !stepArtifacts) return []
+  for (const artifacts of Object.values(stepArtifacts)) {
+    const authoritative = artifacts?.find(artifact => artifact.artifactId === finalDeliveryArtifactId)
+    if (authoritative) return projectCreatorReviewArtifacts([authoritative])
+  }
+  return []
 }

@@ -2,8 +2,10 @@ package artifact
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -155,6 +157,8 @@ func (h *Handler) GetArtifactContent(c *gin.Context) {
 	}
 	if reviewText, err := h.ResolveReviewableText(c.Request.Context(), artifact); err == nil {
 		data["reviewText"] = reviewText
+		reviewTextHash := sha256.Sum256([]byte(reviewText))
+		data["reviewTextSourceHash"] = fmt.Sprintf("sha256:%x", reviewTextHash)
 		if artifact.StorageType == StorageLocal {
 			content = reviewText
 			mediaURLs = mediaURLsFromString(reviewText)

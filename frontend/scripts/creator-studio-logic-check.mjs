@@ -399,6 +399,15 @@ try {
   assert.equal(maliciousNamedArtifacts.find(item => item.artifactId === 'path-image')?.shotLabel, undefined, 'unsafe shot identifiers are not exposed')
   assert.equal(reviewArtifacts.selectCreatorReviewArtifact(projectedReviewArtifacts, 'older-script').artifactId, 'older-script')
   assert.equal(reviewArtifacts.selectCreatorReviewArtifact(projectedReviewArtifacts).artifactId, 'current-script')
+
+  const authoritativeDelivery = reviewArtifacts.authoritativeDeliveryReviewArtifacts({
+    preview: [{ artifactId: 'final-video', stepId: 'preview', kind: 'VIDEO', name: 'final.mp4', version: 2, attempt: 2, isCurrent: true, isStale: false, createdAt: '2026-07-26T00:00:00Z' }],
+    delivery: [
+      { artifactId: 'publish-copy', stepId: 'delivery', kind: 'MARKDOWN', name: 'publish.md', version: 9, attempt: 9, isCurrent: true, isStale: false, createdAt: '2026-07-26T00:01:00Z' },
+      { artifactId: 'export-bundle', stepId: 'delivery', kind: 'BUNDLE', name: 'export.zip', version: 11, attempt: 11, isCurrent: true, isStale: false, createdAt: '2026-07-26T00:02:00Z' },
+    ],
+  }, 'final-video')
+  assert.deepEqual(authoritativeDelivery.map(artifact => artifact.artifactId), ['final-video'], 'delivery review uses only the server-authoritative final video identity')
   assert.equal(
     reviewArtifacts.selectCreatorReviewArtifact(
       reviewArtifacts.projectCreatorReviewArtifacts([
@@ -643,14 +652,29 @@ try {
     logic.resolveCreatorArtifactMediaUrl('vp-1', { ...localRenderContent, mediaUrl: 'https://media.example/final.mp4' }, 'http://127.0.0.1:18080'),
     'https://media.example/final.mp4',
   )
+  assert.equal(
+    logic.resolveCreatorArtifactMediaUrl('vp-1', { ...localRenderContent, mediaUrl: 'http://127.0.0.1:18080/api/local/media?projectId=vp-2&storageRef=local%3A%2F%2Fprojects%2Fvp-2%2Fartifacts%2Fvideo-1%2Ffinal.mp4' }, 'http://127.0.0.1:18080'),
+    undefined,
+    'absolute local media cannot cross the active project boundary',
+  )
+  assert.equal(
+    logic.resolveCreatorArtifactMediaUrl('vp-1', { ...localRenderContent, mediaUrl: '/api/local/media?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-2%2Fartifacts%2Fvideo-1%2Ffinal.mp4' }, 'http://127.0.0.1:18080'),
+    undefined,
+    'root-relative local media must carry an active-project storageRef',
+  )
+  assert.equal(
+    logic.resolveCreatorArtifactMediaUrl('vp-1', { ...localRenderContent, mediaUrl: '/api/local/media?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4' }, ''),
+    undefined,
+    'root-relative local media is not usable until the owned local-agent origin is known',
+  )
   const normalizedRelativeLocalMedia = logic.resolveCreatorArtifactMediaUrl(
     'vp-1',
-    { ...localRenderContent, mediaUrl: '/api/local/media?projectId=vp-1&storageRef=local-ref' },
+    { ...localRenderContent, mediaUrl: '/api/local/media?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4' },
     'http://127.0.0.1:18080',
   )
   assert.equal(
     normalizedRelativeLocalMedia,
-    'http://127.0.0.1:18080/api/local/media?projectId=vp-1&storageRef=local-ref',
+    'http://127.0.0.1:18080/api/local/media?projectId=vp-1&storageRef=local%3A%2F%2Fprojects%2Fvp-1%2Fartifacts%2Fvideo-1%2Ffinal.mp4',
     'a root-relative local media URL is canonicalized once at the resolver boundary',
   )
   assert.equal(
@@ -1568,7 +1592,9 @@ try {
   assert.match(reviewableTextSurfaceSource, /NodeFilter\.SHOW_TEXT/)
   assert.doesNotMatch(reviewableTextSurfaceSource, /textContent[\s\S]*buildTextSelection/, 'selection offsets must never be reconstructed from decorated DOM text')
   assert.match(reviewSource, /内容已更新，请重新选择需要修改的文字。/)
-  assert.match(reviewSource, /setSelection\(textSelectionDraft\.selection\)/)
+  assert.match(reviewSource, /reviewTextSourceHash/)
+  assert.match(reviewSource, /\^sha256:\[0-9a-f\]\{64\}\$/)
+  assert.match(reviewSource, /setSelection\(selection\)/)
   assert.match(reviewSource, /rebaseTextSelection/, 'projected readable selections map back to the exact backend review source')
   assert.match(reviewSource, /setInstruction\(nextInstruction\)/)
   assert.match(reviewSource, /setMode\('instruction'\)/)

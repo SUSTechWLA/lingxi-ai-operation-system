@@ -26,6 +26,8 @@ End-to-end regeneration and interactive playback could not be executed in this r
 
 The frontend checks cover readable creator projections, deterministic selected-text mapping, scoped revision behavior, completed-task Shot projection, local media URL handling, completed delivery recovery, and separation of creator views from Developer Diagnostics.
 
+The final review fix wave additionally verifies the production prompt contract, exact-byte source hashes for text selections, rejection of obvious full-document responses on scoped edits, server-authoritative final-video selection when publish/export artifacts coexist, and active-project ownership for direct local-media URLs.
+
 ## Real completed demo evidence
 
 The matching completed project was identified only in transient local inspection; its project, task, and artifact identifiers are intentionally omitted here.
@@ -73,6 +75,10 @@ The previous delivered application was retained in `.workspace-archive/task6-pre
 - Corrected the escaped-text contract fixture and documented the colocated DOM-selection test helper for lint.
 - Made the desktop build default to repository-writable Go and Electron Builder caches.
 - Added a deployment contract test that prevents those cache defaults from regressing.
+- Removed the scoped-revision prompt contradiction: one stable system prefix now explicitly distinguishes fragment-only selection replies from full-document revisions, and obvious full-document replies are rejected before splice or persistence.
+- Added an exact-byte `sha256` source contract to review text. Selected revisions require the projected hash, resolve one immutable source snapshot immediately before generation, and fail conflict-safe without mutation when the source changes.
+- Added a server-authoritative final-delivery-video identity. Completed delivery review, playback, QA, recovery, and regeneration now select that video instead of a generic current publish/export artifact.
+- Required every direct local-agent media URL to prove active-project ownership through matching `projectId` and canonical project-scoped `storageRef`; valid external media URLs remain supported.
 
 ## Acceptance matrix
 

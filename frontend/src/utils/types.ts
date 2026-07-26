@@ -243,6 +243,7 @@ export interface ArtifactContentResponse {
   mediaUrl?: string
   mediaUrls?: string[]
   reviewText?: string
+  reviewTextSourceHash?: string
 }
 
 export interface ArtifactHistoryResponse {

@@ -368,6 +368,7 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 	if err != nil {
 		return nil, err
 	}
+	finalDelivery := authoritativeFinalDeliveryArtifact(artifacts)
 	shotState, err := s.shots.getCreatorShotReadState(ctx, userID, projectID)
 	if err != nil {
 		return nil, err
@@ -408,6 +409,10 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 				Label: creatorTaskLabel(stepID),
 			})
 		}
+	}
+	if finalDelivery != nil {
+		index := stepIndexes[model.CreatorStepDelivery]
+		applyArtifact(&steps[index], finalDelivery, stateForArtifact(finalDelivery))
 	}
 
 	shotsIndex := stepIndexes[model.CreatorStepShots]
@@ -471,6 +476,19 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 	if err != nil {
 		return nil, err
 	}
+	if finalDelivery != nil {
+		items := stepArtifacts[model.CreatorStepDelivery]
+		sort.SliceStable(items, func(i, j int) bool {
+			if items[i].ArtifactID == finalDelivery.ID {
+				return true
+			}
+			if items[j].ArtifactID == finalDelivery.ID {
+				return false
+			}
+			return false
+		})
+		stepArtifacts[model.CreatorStepDelivery] = items
+	}
 	for i := range steps {
 		steps[i].AllowedActions = actionsForCreatorState(steps[i].State)
 		if steps[i].HasHistory && steps[i].ReviewID != "" && steps[i].State != model.CreatorStepGenerating {
@@ -479,7 +497,7 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 	}
 
 	return &model.CreationView{
-		Project: project, ActiveStep: activeCreatorStep(steps), Steps: steps,
+		Project: project, ActiveStep: activeCreatorStep(steps), FinalDeliveryArtifactID: artifactID(finalDelivery), Steps: steps,
 		ShotSummary: shotState.Summary, ActiveTasks: activeTasks, AssemblyDirty: viewAssemblyDirty,
 		ProcessTimeline: processTimeline, StepArtifacts: stepArtifacts,
 	}, nil
@@ -580,18 +598,6 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	if mode == "direct" && selection != nil && selection["kind"] == "text" {
 		return nil, ErrCreatorInvalidRequest
 	}
-	if selection != nil && selection["kind"] == "text" {
-		if s.artifactTextResolver == nil {
-			return nil, ErrCreatorSelectionConflict
-		}
-		reviewText, resolveErr := s.artifactTextResolver.ResolveReviewableText(ctx, base)
-		if resolveErr != nil {
-			return nil, ErrCreatorSelectionConflict
-		}
-		if err := validateTextArtifactSelection(selection, reviewText); err != nil {
-			return nil, err
-		}
-	}
 	impact, err := s.stepImpact(ctx, userID, projectID, stepID, base)
 	if err != nil {
 		return nil, err
@@ -632,6 +638,22 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 			return nil, err
 		}
 	}
+	var sourceContent []byte
+	var expectedSourceHash string
+	if selection != nil && selection["kind"] == "text" {
+		if s.artifactTextResolver == nil {
+			return nil, ErrCreatorSelectionConflict
+		}
+		reviewText, resolveErr := s.artifactTextResolver.ResolveReviewableText(ctx, base)
+		if resolveErr != nil {
+			return nil, ErrCreatorSelectionConflict
+		}
+		expectedSourceHash, _ = selection["sourceHash"].(string)
+		if err := validateTextArtifactSelection(selection, reviewText, expectedSourceHash); err != nil {
+			return nil, err
+		}
+		sourceContent = []byte(reviewText)
+	}
 	var revised *artifact.RevisionResult
 	if replacement != nil {
 		revised, err = s.revisions.Replace(ctx, artifact.ReplaceRequest{
@@ -641,10 +663,14 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	} else {
 		revised, err = s.revisions.Revise(ctx, artifact.ReviseRequest{
 			ArtifactID: base.ID, NewArtifactID: receipt.NewArtifactID, Message: message, DirectContent: directContent,
+			SourceContent: sourceContent, ExpectedSourceHash: expectedSourceHash, SourceContentValidated: sourceContent != nil,
 			ModelProviders: providers, Provenance: provenance,
 		})
 	}
 	if err != nil {
+		if errors.Is(err, artifact.ErrRevisionSourceConflict) {
+			return nil, ErrCreatorSelectionConflict
+		}
 		if errors.Is(err, artifact.ErrArtifactVersionConflict) {
 			current, reloadErr := s.currentArtifactForStep(ctx, projectID, stepID)
 			if reloadErr == nil {
@@ -843,6 +869,11 @@ func (s *CreatorViewService) currentArtifactForStep(ctx context.Context, project
 	if err != nil {
 		return nil, err
 	}
+	if stepID == model.CreatorStepDelivery {
+		if finalDelivery := authoritativeFinalDeliveryArtifact(items); finalDelivery != nil {
+			return finalDelivery, nil
+		}
+	}
 	selection := model.CreatorStep{ID: stepID, State: model.CreatorStepNotStarted}
 	byID := make(map[string]*artifact.Artifact, len(items))
 	for _, candidate := range items {
@@ -936,7 +967,7 @@ func normalizeArtifactSelection(selection *model.ArtifactSelection) (map[string]
 	switch kind {
 	case "rect":
 		if selection.X == nil || selection.Y == nil || selection.Width == nil || selection.Height == nil ||
-			selection.StartMs != nil || selection.EndMs != nil || selection.Start != nil || selection.End != nil || selection.Text != "" {
+			selection.StartMs != nil || selection.EndMs != nil || selection.Start != nil || selection.End != nil || selection.Text != "" || selection.SourceHash != "" {
 			return nil, ErrCreatorInvalidRequest
 		}
 		x, y, width, height := *selection.X, *selection.Y, *selection.Width, *selection.Height
@@ -946,7 +977,7 @@ func normalizeArtifactSelection(selection *model.ArtifactSelection) (map[string]
 		return map[string]interface{}{"kind": kind, "x": x, "y": y, "width": width, "height": height}, nil
 	case "time":
 		if selection.StartMs == nil || selection.EndMs == nil || selection.X != nil || selection.Y != nil ||
-			selection.Width != nil || selection.Height != nil || selection.Start != nil || selection.End != nil || selection.Text != "" {
+			selection.Width != nil || selection.Height != nil || selection.Start != nil || selection.End != nil || selection.Text != "" || selection.SourceHash != "" {
 			return nil, ErrCreatorInvalidRequest
 		}
 		if *selection.StartMs < 0 || *selection.EndMs <= *selection.StartMs {
@@ -959,22 +990,32 @@ func normalizeArtifactSelection(selection *model.ArtifactSelection) (map[string]
 			selection.StartMs != nil || selection.EndMs != nil {
 			return nil, ErrCreatorInvalidRequest
 		}
-		start, end, text := *selection.Start, *selection.End, selection.Text
+		start, end, text, sourceHash := *selection.Start, *selection.End, selection.Text, strings.TrimSpace(selection.SourceHash)
 		if start < 0 || end <= start || end-start > 4000 || len(utf16.Encode([]rune(text))) > 4000 {
 			return nil, ErrCreatorInvalidRequest
 		}
-		return map[string]interface{}{"kind": kind, "start": start, "end": end, "text": text}, nil
+		if len(sourceHash) != len("sha256:")+64 || !strings.HasPrefix(sourceHash, "sha256:") {
+			return nil, ErrCreatorInvalidRequest
+		}
+		if _, decodeErr := hex.DecodeString(strings.TrimPrefix(sourceHash, "sha256:")); decodeErr != nil || sourceHash != strings.ToLower(sourceHash) {
+			return nil, ErrCreatorInvalidRequest
+		}
+		return map[string]interface{}{"kind": kind, "start": start, "end": end, "text": text, "sourceHash": sourceHash}, nil
 	default:
 		return nil, ErrCreatorInvalidRequest
 	}
 }
 
-func validateTextArtifactSelection(selection map[string]interface{}, source string) error {
+func validateTextArtifactSelection(selection map[string]interface{}, source, expectedSourceHash string) error {
 	start, startOK := selection["start"].(int)
 	end, endOK := selection["end"].(int)
 	text, textOK := selection["text"].(string)
 	if !startOK || !endOK || !textOK {
 		return ErrCreatorInvalidRequest
+	}
+	actualHash := sha256.Sum256([]byte(source))
+	if expectedSourceHash != fmt.Sprintf("sha256:%x", actualHash) {
+		return ErrCreatorSelectionConflict
 	}
 	sourceUnits := utf16.Encode([]rune(source))
 	if end > len(sourceUnits) || splitsUTF16SurrogatePair(sourceUnits, start) || splitsUTF16SurrogatePair(sourceUnits, end) {
@@ -1209,10 +1250,92 @@ func creatorStepForArtifact(item *artifact.Artifact) (model.CreatorStepID, bool)
 	if item == nil {
 		return "", false
 	}
+	if _, ok := finalDeliveryVideoScore(item); ok {
+		return model.CreatorStepDelivery, true
+	}
 	if step, ok := creatorStepForStage(item.StageName); ok {
 		return step, true
 	}
 	return creatorStepForStage(item.UnitID)
+}
+
+func artifactID(item *artifact.Artifact) string {
+	if item == nil {
+		return ""
+	}
+	return item.ID
+}
+
+func authoritativeFinalDeliveryArtifact(items []*artifact.Artifact) *artifact.Artifact {
+	var selected *artifact.Artifact
+	selectedScore := -1
+	for _, candidate := range items {
+		score, ok := finalDeliveryVideoScore(candidate)
+		if !ok {
+			continue
+		}
+		if selected == nil || score > selectedScore ||
+			(score == selectedScore && candidate.Version > selected.Version) ||
+			(score == selectedScore && candidate.Version == selected.Version && candidate.CreatedAt.After(selected.CreatedAt)) ||
+			(score == selectedScore && candidate.Version == selected.Version && candidate.CreatedAt.Equal(selected.CreatedAt) && candidate.ID > selected.ID) {
+			selected, selectedScore = candidate, score
+		}
+	}
+	return selected
+}
+
+func finalDeliveryVideoScore(item *artifact.Artifact) (int, bool) {
+	if item == nil || item.Kind != artifact.KindVideo || !item.IsCurrent || artifactIsStale(item) {
+		return 0, false
+	}
+	stage := normalizeCreatorStage(item.StageName)
+	unit := normalizeCreatorStage(item.UnitID)
+	name := normalizeCreatorStage(item.Name)
+	artifactType, generationKind, relatedShotID := creatorArtifactClassificationHints(item)
+	artifactType = normalizeCreatorStage(artifactType)
+	if relatedShotID != "" || artifactType == "publish_copy" || stage == "publish" || stage == "publish_copy" || stage == "export" || stage == "package" {
+		return 0, false
+	}
+	score := 0
+	if unit == "final_video" {
+		score += 80
+	}
+	if name == "final.mp4" || name == "final_video.mp4" {
+		score += 40
+	}
+	if stage == "delivery" {
+		score += 60
+	}
+	if stage == "render" || stage == "final_render" {
+		score += 30
+	}
+	if normalizeCreatorStage(generationKind) == "video" && artifactType == "external_generation_result" {
+		score += 20
+	}
+	if item.Metadata != nil {
+		for _, key := range []string{"generationRequestId", "externalGenerationRequestId"} {
+			if value, _ := item.Metadata[key].(string); normalizeCreatorStage(value) == "final_video" {
+				score += 100
+			}
+		}
+		if tags, ok := item.Metadata["tags"].([]interface{}); ok {
+			for _, raw := range tags {
+				if value, _ := raw.(string); normalizeCreatorStage(value) == "final_video" {
+					score += 120
+					break
+				}
+			}
+		}
+		if tags, ok := item.Metadata["tags"].([]string); ok {
+			for _, value := range tags {
+				if normalizeCreatorStage(value) == "final_video" {
+					score += 120
+					break
+				}
+			}
+		}
+	}
+	return score, score > 0
 }
 
 func normalizeCreatorStage(stage string) string {

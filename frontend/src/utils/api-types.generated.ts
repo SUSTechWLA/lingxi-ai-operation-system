@@ -114,7 +114,7 @@ export interface Artifact {
 // ArtifactContentResponse
 export interface ArtifactContentResponse {
   code?: number;
-  data?: { artifact?: { contentHash: string; createdAt: string; dependsOn?: string[]; humanApproved: boolean; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, unknown>; mimeType?: string; model?: string; name: string; parentId?: string; producedByNode?: string; producedByRole?: string; producedByTool?: string; projectId: string; promptHash?: string; provider?: string; roleAgentId?: string; sizeBytes: number; stageName: string; status: string; storageRef?: string; storageType: string; taskId?: string; unitId?: string; updatedAt: string; version: number; workflowRunId?: string }; content?: Record<string, unknown>; mediaUrl?: string; mediaUrls?: string[]; reviewText?: string };
+  data?: { artifact?: { contentHash: string; createdAt: string; dependsOn?: string[]; humanApproved: boolean; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, unknown>; mimeType?: string; model?: string; name: string; parentId?: string; producedByNode?: string; producedByRole?: string; producedByTool?: string; projectId: string; promptHash?: string; provider?: string; roleAgentId?: string; sizeBytes: number; stageName: string; status: string; storageRef?: string; storageType: string; taskId?: string; unitId?: string; updatedAt: string; version: number; workflowRunId?: string }; content?: Record<string, unknown>; mediaUrl?: string; mediaUrls?: string[]; reviewText?: string; reviewTextSourceHash?: string };
   message?: string;
 }
 
@@ -144,7 +144,7 @@ export interface ArtifactListResponse {
 
 /**  */
 // ArtifactSelection
-export type ArtifactSelection = { end?: never; endMs?: never; height: number; kind: 'rect'; start?: never; startMs?: never; text?: never; width: number; x: number; y: number } | { end?: never; endMs: number; height?: never; kind: 'time'; start?: never; startMs: number; text?: never; width?: never; x?: never; y?: never } | { end: number; endMs?: never; height?: never; kind: 'text'; start: number; startMs?: never; text: string; width?: never; x?: never; y?: never };
+export type ArtifactSelection = { end?: never; endMs?: never; height: number; kind: 'rect'; sourceHash?: never; start?: never; startMs?: never; text?: never; width: number; x: number; y: number } | { end?: never; endMs: number; height?: never; kind: 'time'; sourceHash?: never; start?: never; startMs: number; text?: never; width?: never; x?: never; y?: never } | { end: number; endMs?: never; height?: never; kind: 'text'; sourceHash: string; start: number; startMs?: never; text: string; width?: never; x?: never; y?: never };
 
 /**  */
 // AssemblyRebuildResponse
@@ -240,6 +240,7 @@ export interface CreationView {
   activeStep: 'requirements' | 'direction' | 'script' | 'shots' | 'preview' | 'delivery';
   activeTasks: CreatorTask[];
   assemblyDirty: boolean;
+  finalDeliveryArtifactId?: string;
   processTimeline: CreatorProcessEvent[];
   project: VideoProject;
   shotSummary: ShotSummary;

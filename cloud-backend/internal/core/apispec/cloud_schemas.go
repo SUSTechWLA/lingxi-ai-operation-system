@@ -776,7 +776,8 @@ func registerCloudSchemas(b *Builder) {
 
 	creationView := requiredObject(map[string]*SchemaRef{
 		"project": {Schema: RefSchema("VideoProject")}, "activeStep": {Schema: creatorStepID},
-		"steps": {Schema: ArraySchema(RefSchema("CreatorStep"))}, "shotSummary": {Schema: RefSchema("ShotSummary")},
+		"finalDeliveryArtifactId": {Schema: StringSchema()},
+		"steps":                   {Schema: ArraySchema(RefSchema("CreatorStep"))}, "shotSummary": {Schema: RefSchema("ShotSummary")},
 		"activeTasks": {Schema: ArraySchema(RefSchema("CreatorTask"))}, "assemblyDirty": {Schema: BoolSchema()},
 		"processTimeline": {Schema: ArraySchema(RefSchema("CreatorProcessEvent"))},
 		"stepArtifacts":   {Schema: &Schema{Type: "object", AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Schema: ArraySchema(RefSchema("CreatorArtifactDescriptor"))}}}},
@@ -793,7 +794,8 @@ func registerCloudSchemas(b *Builder) {
 		}, "kind", "startMs", "endMs")},
 		{Schema: closedObject(map[string]*SchemaRef{
 			"kind": {Schema: enumSchema("text")}, "start": {Schema: IntegerSchema()}, "end": {Schema: IntegerSchema()}, "text": {Schema: StringSchema()},
-		}, "kind", "start", "end", "text")},
+			"sourceHash": {Schema: &Schema{Type: "string", Pattern: `^sha256:[0-9a-f]{64}$`}},
+		}, "kind", "start", "end", "text", "sourceHash")},
 	}}
 	b.Schema("ArtifactSelection", selection)
 	replacementMaterialIdentity := requiredObject(map[string]*SchemaRef{
@@ -1120,11 +1122,12 @@ func registerCloudSchemas(b *Builder) {
 			"data": {Schema: &Schema{
 				Type: "object",
 				Properties: map[string]*SchemaRef{
-					"artifact":   {Schema: Reflect(artifacts.Artifact{})},
-					"content":    {Schema: ObjectSchema()},
-					"mediaUrl":   {Schema: StringSchema()},
-					"mediaUrls":  {Schema: ArraySchema(StringSchema())},
-					"reviewText": {Schema: StringSchema()},
+					"artifact":             {Schema: Reflect(artifacts.Artifact{})},
+					"content":              {Schema: ObjectSchema()},
+					"mediaUrl":             {Schema: StringSchema()},
+					"mediaUrls":            {Schema: ArraySchema(StringSchema())},
+					"reviewText":           {Schema: StringSchema()},
+					"reviewTextSourceHash": {Schema: &Schema{Type: "string", Pattern: `^sha256:[0-9a-f]{64}$`}},
 				},
 			}},
 		},

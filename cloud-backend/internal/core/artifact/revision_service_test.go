@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -186,12 +187,52 @@ func TestRevisionServiceSelectedInstructionStoresOnlyScopedReplacement(t *testin
 - 如果原始内容是 Markdown 格式，输出 Markdown
 - 如果原始内容是 JSON 格式，输出严格符合相同结构的 JSON
 - 不要引入原始内容中没有的新字段、新章节或额外内容
-- 输出完整内容，不要省略或截断`
+- 如果用户消息包含「所选文字」并要求只返回替换文字，只输出该选中片段的替换文字，不得输出完整文档
+- 其他情况输出完整内容，不要省略或截断`
 	if systemPrompt != wantSystemPrompt {
 		t.Fatalf("selected revision changed the pre-task system prompt:\n got %q\nwant %q", systemPrompt, wantSystemPrompt)
 	}
 	if !strings.Contains(userPrompt, "只返回替换文字") || strings.Contains(userPrompt, "重新生成完整内容") {
 		t.Fatalf("selected revision user prompt did not request replacement-only output: %q", userPrompt)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRejectsObviousFullDocumentResponse(t *testing.T) {
+	base := revisionTestArtifact()
+	base.InlineJSON = "开头正文结尾"
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		return "开头新文结尾", nil
+	})
+
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite",
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+	})
+	if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+		t.Fatalf("full-document generator response must fail before splice/persist: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRejectsChangedSourceHashWithoutMutation(t *testing.T) {
+	base := revisionTestArtifact()
+	base.InlineJSON = "开头已变更结尾"
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	called := false
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		called = true
+		return "新文", nil
+	})
+	originalHash := sha256.Sum256([]byte("开头正文结尾"))
+
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite", ExpectedSourceHash: fmt.Sprintf("sha256:%x", originalHash),
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+	})
+	if !errors.Is(err, ErrRevisionSourceConflict) || result != nil || called || repo.lastCreate != nil {
+		t.Fatalf("changed source hash must fail before generation/mutation: result=%+v err=%v called=%v create=%+v", result, err, called, repo.lastCreate)
 	}
 }
 

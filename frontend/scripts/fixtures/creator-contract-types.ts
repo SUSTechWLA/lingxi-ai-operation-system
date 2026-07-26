@@ -51,6 +51,7 @@ export const textSelection: ArtifactSelection = {
   start: 2,
   end: 6,
   text: '🙂你好',
+  sourceHash: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
 }
 
 export const creatorTextSelection: TextArtifactSelection = textSelection

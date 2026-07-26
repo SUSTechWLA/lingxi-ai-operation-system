@@ -232,10 +232,16 @@ export function resolveCreatorArtifactMediaUrl(
 	content: ArtifactContentResponse | null | undefined,
 	localAgentBaseUrl: string,
 ): string | undefined {
+	if (!content || content.artifact.projectId !== projectId || !isSafeStorageSegment(projectId)) return undefined
 	const direct = content?.mediaUrl || content?.mediaUrls?.[0]
 	const baseUrl = localAgentBaseUrl.replace(/\/+$/, '')
-	if (direct) return normalizeCreatorDirectMediaUrl(direct, baseUrl)
-	if (!content || content.artifact.projectId !== projectId || !isSafeStorageSegment(projectId)) return undefined
+	if (direct) {
+		const normalized = normalizeCreatorDirectMediaUrl(direct, baseUrl)
+		const rootRelativeLocal = isRootRelativeCreatorLocalMediaUrl(direct)
+		if (rootRelativeLocal && !baseUrl) return undefined
+		if (!rootRelativeLocal && !isCreatorLocalMediaUrl(normalized, baseUrl)) return normalized
+		return creatorLocalMediaBelongsToProject(normalized, projectId) ? normalized : undefined
+	}
 	const metadata = content.artifact.metadata
 	const localPath = typeof metadata?.localPath === 'string' ? metadata.localPath.trim() : ''
 	if (!baseUrl || metadata?.localOnly !== true) return undefined
@@ -246,6 +252,25 @@ export function resolveCreatorArtifactMediaUrl(
 	const projectStoragePrefix = `local://projects/${projectId}/`
 	if (!storageRef.startsWith(projectStoragePrefix)) return undefined
 	return `${baseUrl}/api/local/media?projectId=${encodeURIComponent(projectId)}&storageRef=${encodeURIComponent(storageRef)}`
+}
+
+function isRootRelativeCreatorLocalMediaUrl(src: string): boolean {
+	if (!src.startsWith('/')) return false
+	try {
+		return new URL(src, 'http://creator.local').pathname === '/api/local/media'
+	} catch {
+		return false
+	}
+}
+
+function creatorLocalMediaBelongsToProject(src: string, projectId: string): boolean {
+	try {
+		const url = new URL(src)
+		return url.searchParams.get('projectId') === projectId &&
+			(url.searchParams.get('storageRef') ?? '').startsWith(`local://projects/${projectId}/`)
+	} catch {
+		return false
+	}
 }
 
 function normalizeCreatorDirectMediaUrl(direct: string, localAgentBaseUrl: string): string {

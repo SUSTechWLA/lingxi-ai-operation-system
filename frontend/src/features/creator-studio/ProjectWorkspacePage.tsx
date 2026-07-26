@@ -37,6 +37,7 @@ import CreatorContentLibrary from './components/CreatorContentLibrary'
 import StepRegenerationDialog from './components/StepRegenerationDialog'
 import ProjectBriefPanel from './components/ProjectBriefPanel'
 import {
+  authoritativeDeliveryReviewArtifacts,
   projectCreatorReviewArtifacts,
   selectCreatorReviewArtifact,
   type CreatorReviewArtifact,
@@ -138,11 +139,13 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
     if (!shotFiltersUserChangedRef.current) setShotFilters(initialShotFilters(view.project.status))
     setShotFiltersReady(true)
   }, [projectId, view?.project.id, view?.project.status])
-  const visibleArtifacts = useMemo(
-    () => projectCreatorReviewArtifacts(view?.stepArtifacts?.[stepId] ?? []),
-    [stepId, view?.stepArtifacts],
-  )
-  const explicitArtifactId = selectedArtifactIds[stepId]
+  const visibleArtifacts = useMemo(() => {
+    if (stepId === 'delivery' && view?.finalDeliveryArtifactId) {
+      return authoritativeDeliveryReviewArtifacts(view.stepArtifacts, view.finalDeliveryArtifactId)
+    }
+    return projectCreatorReviewArtifacts(view?.stepArtifacts?.[stepId] ?? [])
+  }, [stepId, view?.finalDeliveryArtifactId, view?.stepArtifacts])
+  const explicitArtifactId = selectedArtifactIds[stepId] ?? (stepId === 'delivery' ? view?.finalDeliveryArtifactId : undefined)
   const explicitArtifact = explicitArtifactId
     ? visibleArtifacts.find(artifact => artifact.artifactId === explicitArtifactId)
     : undefined

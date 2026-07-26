@@ -2,8 +2,10 @@ package artifact
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -75,6 +77,10 @@ func TestArtifactContentReviewTextPreservesInlineSourceBytes(t *testing.T) {
 
 			if got, ok := data["reviewText"].(string); !ok || got != test.reviewText {
 				t.Fatalf("reviewText = %#v, want exact source %q", data["reviewText"], test.reviewText)
+			}
+			wantHash := sha256.Sum256([]byte(test.reviewText))
+			if got := data["reviewTextSourceHash"]; got != fmt.Sprintf("sha256:%x", wantHash) {
+				t.Fatalf("reviewTextSourceHash = %#v, want canonical exact-byte hash", got)
 			}
 		})
 	}
