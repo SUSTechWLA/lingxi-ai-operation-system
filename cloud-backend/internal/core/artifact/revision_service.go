@@ -455,11 +455,12 @@ func normalizeSelectedReplacement(generated string) (string, error) {
 		"替换文字：", "替换内容：", "修改后：", "修改后的文字：",
 		"说明：", "Replacement:", "Replacement text:", "Explanation:",
 	}
-	if firstNewline := strings.IndexByte(trimmed, '\n'); firstNewline >= 0 {
-		firstLine := strings.TrimSpace(strings.TrimSuffix(trimmed[:firstNewline], "\r"))
+	labelSource := strings.TrimSpace(replacement)
+	if firstNewline := strings.IndexByte(labelSource, '\n'); firstNewline >= 0 {
+		firstLine := strings.TrimSpace(strings.TrimSuffix(labelSource[:firstNewline], "\r"))
 		for _, label := range standaloneLabels {
 			if firstLine == label {
-				replacement = strings.TrimSpace(trimmed[firstNewline+1:])
+				replacement = strings.TrimSpace(labelSource[firstNewline+1:])
 				if replacement == "" {
 					return "", ErrRevisionInvalidReplacement
 				}

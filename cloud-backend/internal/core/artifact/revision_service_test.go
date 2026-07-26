@@ -215,6 +215,8 @@ func TestRevisionServiceSelectedInstructionNormalizesReplacementOnlyOutput(t *te
 		{name: "fenced", generated: "```text\n新文\n```", want: "开头新文结尾"},
 		{name: "standalone labeled", generated: "替换文字：\n新文", want: "开头新文结尾"},
 		{name: "standalone explanation label", generated: "Explanation:\n新文", want: "开头新文结尾"},
+		{name: "fenced Chinese standalone label", generated: "```text\n说明：\n新文\n```", want: "开头新文结尾"},
+		{name: "fenced English standalone label", generated: "```text\nExplanation:\n新文\n```", want: "开头新文结尾"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			base := revisionTestArtifact()
