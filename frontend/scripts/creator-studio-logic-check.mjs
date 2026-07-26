@@ -268,17 +268,40 @@ try {
   )
   assert.deepEqual(
     textSelection.rebaseTextSelection(
-      '{"script":"开头正文结尾"}',
-      '开头正文结尾',
-      { kind: 'text', start: 2, end: 4, text: '正文' },
+      '{"detailedScript":"开头\\n正\\\"文结尾","script":"开头\\n正\\\"文结尾"}',
+      '开头\n正"文结尾',
+      { kind: 'text', start: 2, end: 6, text: '\n正"文' },
     ),
-    { kind: 'text', start: 13, end: 15, text: '正文' },
-    'projected readable text rebases to the identical slice in the immutable backend source',
+    { kind: 'text', start: 21, end: 27, text: '\\n正\\\"文' },
+    'escaped projected text maps to the deterministic detailedScript token in the immutable backend source',
   )
   assert.equal(
     textSelection.rebaseTextSelection('x开头正文结尾|开头正文结尾', '开头正文结尾', { kind: 'text', start: 2, end: 4, text: '正文' }),
     null,
     'ambiguous projections never guess backend offsets',
+  )
+  assert.equal(
+    textSelection.rebaseTextSelection('xx正文', '开头正文', { kind: 'text', start: 2, end: 4, text: '正文' }),
+    null,
+    'same-offset coincidence never substitutes for canonical source provenance',
+  )
+  assert.deepEqual(
+    textSelection.rebaseTextSelection(
+      '{"content":"{\\"script\\":\\"开头\\\\n正文\\"}"}',
+      '开头\n正文',
+      { kind: 'text', start: 2, end: 5, text: '\n正文' },
+    ),
+    { kind: 'text', start: 28, end: 33, text: '\\\\n正文' },
+    'nested JSON-string envelopes compose decoded offsets back to the immutable outer source',
+  )
+  assert.equal(
+    textSelection.rebaseTextSelection(
+      '{"content":{"script":"正文"},"payload":{"script":"正文"}}',
+      '正文',
+      { kind: 'text', start: 0, end: 2, text: '正文' },
+    ),
+    null,
+    'same-priority JSON candidates fail closed instead of guessing a source token',
   )
 
   const reviewClassificationCases = [
@@ -1268,7 +1291,7 @@ try {
   assert.match(reviewSource, /onTextSelectionChange=\{revisionInputsLocked \? undefined : handleTextSelectionChange\}/, 'text selection cannot diverge from an in-flight snapshot')
   assert.match(reviewSource, /<ImageReviewDialog[\s\S]*?revisionInputsLocked=\{revisionInputsLocked\}/, 'the full-screen image review receives the shared loading and confirmation lock')
   assert.match(reviewSource, /disabled=\{!canRevise \|\| revisionInputsLocked\} onClick=\{\(\) => setMode\('instruction'\)\}/, 'instruction mode cannot replace a pending snapshot')
-  assert.match(reviewSource, /disabled=\{!canRevise \|\| revisionInputsLocked\} onClick=\{\(\) => setMode\('direct'\)\}/, 'direct mode cannot replace a pending snapshot')
+  assert.match(reviewSource, /disabled=\{!canRevise \|\| revisionInputsLocked\} onClick=\{enterDirectMode\}/, 'direct mode cannot replace a pending snapshot')
   assert.match(reviewSource, /<textarea value=\{directContent\}[\s\S]*?disabled=\{!canRevise \|\| revisionInputsLocked\}[\s\S]*?previewRevision\(\)/, 'direct preview cannot replace a pending snapshot')
   assert.match(reviewSource, /artifact-preview-button" disabled=\{!canRevise \|\| revisionInputsLocked \|\| mediaRangePending\}/, 'instruction preview stays locked while confirmation owns the snapshot')
   assert.match(reviewSource, /disabled=\{!canRevise \|\| revisionInputsLocked\} onClick=\{event => \{ impactTriggerRef\.current = event\.currentTarget; previewRestore\(version\.version\) \}\}>恢复这一版<\/button>/, 'restore cannot open a second snapshot while revision inputs are locked')
@@ -1346,6 +1369,9 @@ try {
   assert.match(reviewSource, /rebaseTextSelection/, 'projected readable selections map back to the exact backend review source')
   assert.match(reviewSource, /setInstruction\(nextInstruction\)/)
   assert.match(reviewSource, /setMode\('instruction'\)/)
+  assert.match(reviewSource, /const enterDirectMode = \(\) => \{[\s\S]*?setSelection\(current => current\?\.kind === 'text' \? null : current\)[\s\S]*?setTextSelectionDraft\(null\)[\s\S]*?setMode\('direct'\)/, 'entering direct mode clears any text selection before changing mode')
+  assert.match(reviewSource, /onClick=\{enterDirectMode\}>\u76f4\u63a5\u7f16\u8f91<\/button>/, 'the direct-edit action uses the selection-clearing transition')
+  assert.match(reviewSource, /mode: 'direct', directContent: trimmedContent,[\s\S]*?selection: undefined/, 'direct requests cannot retain text-selection provenance')
   assert.match(reviewSource, /instructionRef\.current\?\.focus\(\)/)
   assert.match(timelineSource, /创作进度/)
   assert.match(timelineSource, /onSelect: \(stepId: CreatorStepId\) => void/)

@@ -177,8 +177,159 @@ func TestRevisionServiceSelectedInstructionStoresOnlyScopedReplacement(t *testin
 	if strings.Contains(systemPrompt, base.InlineJSON) || strings.Contains(systemPrompt, "正文") {
 		t.Fatalf("stable system prompt contains request-specific source or selection: %q", systemPrompt)
 	}
+	wantSystemPrompt := `你是一个专业的内容返工助手，正在帮助用户修改「script」阶段的产物。
+
+重要规则：
+- 严格根据用户的修改意见，在原始内容的基础上进行修改
+- 保持原始内容的整体结构和格式风格
+- 只修改用户明确要求修改的部分，不要擅自改动其他内容
+- 如果原始内容是 Markdown 格式，输出 Markdown
+- 如果原始内容是 JSON 格式，输出严格符合相同结构的 JSON
+- 不要引入原始内容中没有的新字段、新章节或额外内容
+- 输出完整内容，不要省略或截断`
+	if systemPrompt != wantSystemPrompt {
+		t.Fatalf("selected revision changed the pre-task system prompt:\n got %q\nwant %q", systemPrompt, wantSystemPrompt)
+	}
 	if !strings.Contains(userPrompt, "只返回替换文字") || strings.Contains(userPrompt, "重新生成完整内容") {
 		t.Fatalf("selected revision user prompt did not request replacement-only output: %q", userPrompt)
+	}
+}
+
+func TestRevisionServiceDirectContentRejectsTextSelectionProvenance(t *testing.T) {
+	repo := newRevisionServiceFake(t, revisionTestArtifact())
+	result, err := NewRevisionService(repo).Revise(context.Background(), ReviseRequest{
+		ArtifactID: "artifact-v1", DirectContent: []byte("full replacement"),
+		Provenance: map[string]interface{}{
+			"selection": map[string]interface{}{"kind": "text", "start": 0, "end": 8, "text": "original"},
+		},
+	})
+	if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+		t.Fatalf("direct content with text selection must fail closed: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionNormalizesReplacementOnlyOutput(t *testing.T) {
+	for _, test := range []struct {
+		name, generated, want string
+	}{
+		{name: "fenced", generated: "```text\n新文\n```", want: "开头新文结尾"},
+		{name: "labeled", generated: "替换文字：新文", want: "开头新文结尾"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.InlineJSON = "开头正文结尾"
+			repo := newRevisionServiceFake(t, base)
+			revisions := NewRevisionService(repo)
+			revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) { return test.generated, nil })
+			_, err := revisions.Revise(context.Background(), ReviseRequest{
+				ArtifactID: base.ID, Message: "rewrite",
+				Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+			})
+			if err != nil || string(repo.lastCreate.Data) != test.want {
+				t.Fatalf("normalized revision error=%v data=%q want=%q", err, repo.lastCreate.Data, test.want)
+			}
+		})
+	}
+}
+
+func TestRevisionServiceSelectedInstructionEscapesJSONSensitiveReplacement(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindJSON
+	base.MimeType = "application/json"
+	base.InlineJSON = `{"script":"开头正文结尾"}`
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		return "新\"文\\下一行\n结束", nil
+	})
+	_, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite",
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 13, "end": 15, "text": "正文"}},
+	})
+	if err != nil {
+		t.Fatalf("Revise error: %v", err)
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal(repo.lastCreate.Data, &decoded); err != nil {
+		t.Fatalf("spliced JSON is invalid: %v data=%q", err, repo.lastCreate.Data)
+	}
+	if got, want := decoded["script"], "开头新\"文\\下一行\n结束结尾"; got != want {
+		t.Fatalf("decoded script=%q want=%q", got, want)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRejectsInvalidJSONFragment(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindJSON
+	base.MimeType = "application/json"
+	base.InlineJSON = `{"count":12}`
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		return "not-json", nil
+	})
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite",
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 9, "end": 11, "text": "12"}},
+	})
+	if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+		t.Fatalf("invalid JSON fragment must fail closed: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionPreservesNestedJSONEnvelope(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindJSON
+	base.MimeType = "application/json"
+	base.InlineJSON = `{"content":"{\"script\":\"开头\\n正文结尾\"}"}`
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		return "\n新\"文", nil
+	})
+	_, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite",
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 28, "end": 33, "text": `\\n正文`}},
+	})
+	if err != nil {
+		t.Fatalf("Revise error: %v", err)
+	}
+	var outer map[string]string
+	if err := json.Unmarshal(repo.lastCreate.Data, &outer); err != nil {
+		t.Fatalf("outer JSON invalid: %v data=%q", err, repo.lastCreate.Data)
+	}
+	var inner map[string]string
+	if err := json.Unmarshal([]byte(outer["content"]), &inner); err != nil {
+		t.Fatalf("nested JSON invalid: %v content=%q", err, outer["content"])
+	}
+	if got, want := inner["script"], "开头\n新\"文结尾"; got != want {
+		t.Fatalf("nested script=%q want=%q", got, want)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRejectsExplanatoryOutput(t *testing.T) {
+	base := revisionTestArtifact()
+	base.InlineJSON = "开头正文结尾"
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		return "以下是修改后的文字：新文", nil
+	})
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite",
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+	})
+	if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+		t.Fatalf("explanatory output must fail closed: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+	}
+}
+
+func TestBuildSelectedRevisionUserPromptClampsEmojiContextBoundaries(t *testing.T) {
+	source := "🙂" + strings.Repeat("前", 319) + "正文" + strings.Repeat("后", 319) + "🙂"
+	selection := revisionTextSelection{Start: 321, End: 323, Text: "正文"}
+	prompt, err := buildSelectedRevisionUserPrompt(source, selection, "rewrite")
+	if err != nil || strings.Contains(prompt, "�") {
+		t.Fatalf("emoji context boundary prompt error=%v prompt=%q", err, prompt)
 	}
 }
 

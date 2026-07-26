@@ -106,15 +106,18 @@ func (s *RevisionService) Revise(ctx context.Context, req ReviseRequest) (*Revis
 		return nil, fmt.Errorf("%w: %v", ErrRevisionArtifactNotFound, err)
 	}
 
+	selection, hasSelection, selectionErr := textSelectionFromProvenance(req.Provenance)
+	if selectionErr != nil {
+		return nil, selectionErr
+	}
 	data := req.DirectContent
+	if data != nil && hasSelection {
+		return nil, ErrRevisionInvalidReplacement
+	}
 	if data == nil {
 		originalContent := s.resolveOriginalContent(ctx, base)
 		if originalContent == "" {
 			return nil, ErrRevisionContentUnavailable
-		}
-		selection, hasSelection, selectionErr := textSelectionFromProvenance(req.Provenance)
-		if selectionErr != nil {
-			return nil, selectionErr
 		}
 		if s.generator != nil {
 			systemPrompt := buildRevisionSystemPrompt(base.StageName, s.readStageInstruction(base))
@@ -130,9 +133,23 @@ func (s *RevisionService) Revise(ctx context.Context, req ReviseRequest) (*Revis
 				return nil, fmt.Errorf("%w: %v", ErrRevisionGeneration, err)
 			}
 			if hasSelection {
-				spliced, spliceErr := spliceUTF16Selection(originalContent, selection, revisedText)
+				replacement, replacementErr := normalizeSelectedReplacement(revisedText)
+				if replacementErr != nil {
+					return nil, replacementErr
+				}
+				for depth := jsonStringSelectionDepth(originalContent, selection); depth > 0; depth-- {
+					encoded, marshalErr := json.Marshal(replacement)
+					if marshalErr != nil || len(encoded) < 2 {
+						return nil, ErrRevisionInvalidReplacement
+					}
+					replacement = string(encoded[1 : len(encoded)-1])
+				}
+				spliced, spliceErr := spliceUTF16Selection(originalContent, selection, replacement)
 				if spliceErr != nil {
 					return nil, spliceErr
+				}
+				if json.Valid([]byte(originalContent)) && !json.Valid([]byte(spliced)) {
+					return nil, ErrRevisionInvalidReplacement
 				}
 				data = []byte(spliced)
 			} else {
@@ -350,11 +367,13 @@ func buildRevisionSystemPrompt(stageName string, stageInstruction string) string
 	prompt := fmt.Sprintf(`你是一个专业的内容返工助手，正在帮助用户修改「%s」阶段的产物。
 
 重要规则：
-- 严格根据用户的修改意见，在给定内容的基础上进行修改
-- 严格遵循当前用户消息指定的输出范围
-- 保持原始内容的结构、格式风格和未指定部分
+- 严格根据用户的修改意见，在原始内容的基础上进行修改
+- 保持原始内容的整体结构和格式风格
 - 只修改用户明确要求修改的部分，不要擅自改动其他内容
-- 不要引入原始内容中没有的新字段、新章节或额外内容`, stageName)
+- 如果原始内容是 Markdown 格式，输出 Markdown
+- 如果原始内容是 JSON 格式，输出严格符合相同结构的 JSON
+- 不要引入原始内容中没有的新字段、新章节或额外内容
+- 输出完整内容，不要省略或截断`, stageName)
 	if stageInstruction != "" {
 		prompt += "\n\n阶段说明（参考上下文）：\n" + stageInstruction
 	}
@@ -392,6 +411,12 @@ func buildSelectedRevisionUserPrompt(source string, selection revisionTextSelect
 	}
 	contextStart := max(0, selection.Start-320)
 	contextEnd := min(len(sourceUnits), selection.End+320)
+	if splitsRevisionSurrogatePair(sourceUnits, contextStart) {
+		contextStart++
+	}
+	if splitsRevisionSurrogatePair(sourceUnits, contextEnd) {
+		contextEnd--
+	}
 	before := string(utf16.Decode(sourceUnits[contextStart:selection.Start]))
 	selected := string(utf16.Decode(sourceUnits[selection.Start:selection.End]))
 	after := string(utf16.Decode(sourceUnits[selection.End:contextEnd]))
@@ -408,6 +433,169 @@ func buildSelectedRevisionUserPrompt(source string, selection revisionTextSelect
 %s
 
 只返回替换文字，不要返回上下文、说明、标题或代码块。`, before, selected, after, instruction), nil
+}
+
+func normalizeSelectedReplacement(generated string) (string, error) {
+	replacement := generated
+	trimmed := strings.TrimSpace(generated)
+	if strings.HasPrefix(trimmed, "```") {
+		replacement = trimmed
+	}
+	if strings.HasPrefix(replacement, "```") {
+		firstNewline := strings.IndexByte(replacement, '\n')
+		if firstNewline < 0 || !strings.HasSuffix(replacement, "```") {
+			return "", ErrRevisionInvalidReplacement
+		}
+		replacement = strings.TrimSpace(replacement[firstNewline+1 : len(replacement)-3])
+	}
+	if strings.Contains(replacement, "```") {
+		return "", ErrRevisionInvalidReplacement
+	}
+	for _, prefix := range []string{
+		"替换文字：", "替换内容：", "修改后：", "修改后的文字：",
+		"Replacement:", "Replacement text:",
+	} {
+		if strings.HasPrefix(trimmed, prefix) {
+			replacement = strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+			break
+		}
+	}
+	for _, explanationPrefix := range []string{"以下是", "说明：", "Explanation:"} {
+		if strings.HasPrefix(strings.TrimSpace(replacement), explanationPrefix) {
+			return "", ErrRevisionInvalidReplacement
+		}
+	}
+	return replacement, nil
+}
+
+type revisionJSONStringToken struct {
+	decoded    string
+	boundaries []int
+}
+
+func jsonStringSelectionDepth(source string, selection revisionTextSelection) int {
+	if !json.Valid([]byte(source)) {
+		return 0
+	}
+	for _, token := range revisionJSONStringTokens(source) {
+		start := revisionBoundaryIndex(token.boundaries, selection.Start)
+		end := revisionBoundaryIndex(token.boundaries, selection.End)
+		if start < 0 || end < 0 || end <= start {
+			continue
+		}
+		decodedUnits := utf16.Encode([]rune(token.decoded))
+		if end > len(decodedUnits) {
+			return 0
+		}
+		inner := revisionTextSelection{
+			Start: start,
+			End:   end,
+			Text:  string(utf16.Decode(decodedUnits[start:end])),
+		}
+		if nested := jsonStringSelectionDepth(token.decoded, inner); nested > 0 {
+			return nested + 1
+		}
+		return 1
+	}
+	return 0
+}
+
+func revisionJSONStringTokens(source string) []revisionJSONStringToken {
+	units := utf16.Encode([]rune(source))
+	tokens := make([]revisionJSONStringToken, 0)
+	for index := 0; index < len(units); index++ {
+		if units[index] != '"' {
+			continue
+		}
+		contentStart := index + 1
+		boundaries := []int{contentStart}
+		decodedUnits := make([]uint16, 0)
+		cursor := contentStart
+		for cursor < len(units) && units[cursor] != '"' {
+			if units[cursor] == '\\' {
+				if cursor+1 >= len(units) {
+					return nil
+				}
+				if units[cursor+1] == 'u' {
+					if cursor+5 >= len(units) || !revisionHexUnits(units[cursor+2:cursor+6]) {
+						return nil
+					}
+					decodedUnits = append(decodedUnits, revisionHexValue(units[cursor+2:cursor+6]))
+					cursor += 6
+				} else {
+					decoded, ok := revisionEscapedUnit(units[cursor+1])
+					if !ok {
+						return nil
+					}
+					decodedUnits = append(decodedUnits, decoded)
+					cursor += 2
+				}
+			} else {
+				decodedUnits = append(decodedUnits, units[cursor])
+				cursor++
+			}
+			boundaries = append(boundaries, cursor)
+		}
+		if cursor >= len(units) {
+			return nil
+		}
+		tokens = append(tokens, revisionJSONStringToken{decoded: string(utf16.Decode(decodedUnits)), boundaries: boundaries})
+		index = cursor
+	}
+	return tokens
+}
+
+func revisionBoundaryIndex(boundaries []int, offset int) int {
+	for index, boundary := range boundaries {
+		if boundary == offset {
+			return index
+		}
+	}
+	return -1
+}
+
+func revisionEscapedUnit(unit uint16) (uint16, bool) {
+	switch unit {
+	case '"', '\\', '/':
+		return unit, true
+	case 'b':
+		return '\b', true
+	case 'f':
+		return '\f', true
+	case 'n':
+		return '\n', true
+	case 'r':
+		return '\r', true
+	case 't':
+		return '\t', true
+	default:
+		return 0, false
+	}
+}
+
+func revisionHexValue(units []uint16) uint16 {
+	var value uint16
+	for _, unit := range units {
+		value *= 16
+		switch {
+		case unit >= '0' && unit <= '9':
+			value += unit - '0'
+		case unit >= 'a' && unit <= 'f':
+			value += unit - 'a' + 10
+		case unit >= 'A' && unit <= 'F':
+			value += unit - 'A' + 10
+		}
+	}
+	return value
+}
+
+func revisionHexUnits(units []uint16) bool {
+	for _, unit := range units {
+		if !((unit >= '0' && unit <= '9') || (unit >= 'a' && unit <= 'f') || (unit >= 'A' && unit <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func spliceUTF16Selection(source string, selection revisionTextSelection, replacement string) (string, error) {

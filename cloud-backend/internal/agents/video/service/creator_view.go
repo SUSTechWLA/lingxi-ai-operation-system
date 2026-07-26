@@ -577,6 +577,9 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	if mode == "replace" && selection != nil && selection["kind"] != "rect" {
 		return nil, ErrCreatorInvalidRequest
 	}
+	if mode == "direct" && selection != nil && selection["kind"] == "text" {
+		return nil, ErrCreatorInvalidRequest
+	}
 	if selection != nil && selection["kind"] == "text" {
 		if s.artifactTextResolver == nil {
 			return nil, ErrCreatorSelectionConflict

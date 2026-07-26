@@ -1171,6 +1171,19 @@ func TestArtifactSelectionResolverIsNotUsedForRectSelection(t *testing.T) {
 	}
 }
 
+func TestArtifactSelectionTextIsRejectedForDirectModeBeforeMutation(t *testing.T) {
+	svc, revisions, resolver := newTextSelectionService("abcdef")
+	req := model.StepRevisionRequest{
+		IdempotencyKey: "direct-text-selection", ArtifactID: "script-v3", BaseVersion: 3,
+		Mode: "direct", DirectContent: "replacement",
+		Selection: decodeArtifactSelection(t, `{"kind":"text","start":1,"end":3,"text":"bc"}`),
+	}
+	_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req)
+	if !errors.Is(err, ErrCreatorInvalidRequest) || revisions.calls != 0 || resolver.resolveCalls != 0 {
+		t.Fatalf("direct text selection error=%v revision calls=%d resolver calls=%d", err, revisions.calls, resolver.resolveCalls)
+	}
+}
+
 func decodeArtifactSelection(t *testing.T, raw string) *model.ArtifactSelection {
 	t.Helper()
 	var selection model.ArtifactSelection
@@ -1194,7 +1207,10 @@ func textSelectionRequest(t *testing.T, key, raw string) model.StepRevisionReque
 	t.Helper()
 	return model.StepRevisionRequest{
 		IdempotencyKey: key, ArtifactID: "script-v3", BaseVersion: 3,
-		Mode: "direct", DirectContent: "new", Selection: decodeArtifactSelection(t, raw),
+		Mode: "instruction", Instruction: "rewrite", Selection: decodeArtifactSelection(t, raw),
+		ModelProviders: map[string]interface{}{"text_to_text": map[string]interface{}{
+			"baseUrl": "https://model.test", "apiKey": "secret", "model": "writer",
+		}},
 	}
 }
 
@@ -1207,7 +1223,9 @@ func newTextSelectionService(source string) (*CreatorViewService, *fakeCreatorRe
 	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
 	resolver := &fakeCreatorArtifactTextResolver{text: source}
 	svc := NewCreatorViewService(
-		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1"}},
+		fakeCreatorProjectReader{project: &model.VideoProject{
+			ID: "vp-1", Config: json.RawMessage(`{"modelProviderRefs":{"text_to_text":{"source":"local_agent","baseUrl":"https://model.test","model":"writer"}}}`),
+		}},
 		fakeCreatorShotReader{},
 		artifacts,
 	).WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review"}).

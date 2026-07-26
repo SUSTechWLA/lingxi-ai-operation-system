@@ -208,7 +208,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
         }
       : {
           artifactId, baseVersion, mode: 'direct', directContent: trimmedContent,
-          reviewId: step.reviewId, runId: step.runId, selection, confirmedAffectedShotIds: [],
+          reviewId: step.reviewId, runId: step.runId, selection: undefined, confirmedAffectedShotIds: [],
         }
     void withErrorHandling(async (signal, isCurrent) => {
       const impact = await previewStepRevision(projectId, step.id, { artifactId, baseVersion }, signal)
@@ -424,6 +424,13 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
     window.requestAnimationFrame(() => instructionRef.current?.focus())
   }
 
+  const enterDirectMode = () => {
+    setSelection(current => current?.kind === 'text' ? null : current)
+    setTextSelectionDraft(null)
+    window.getSelection()?.removeAllRanges()
+    setMode('direct')
+  }
+
   return (
     <section className="artifact-review-panel" aria-labelledby="artifact-review-title">
       <div className="artifact-review-heading">
@@ -480,7 +487,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
           <div className="artifact-actions">
             <button type="button" className="creator-primary-button" disabled={!canConfirm || working} onClick={handleConfirm}>确认并继续</button>
             <button type="button" className="creator-secondary-button" disabled={!canRevise || revisionInputsLocked} onClick={() => setMode('instruction')}>告诉 AI 怎么改</button>
-            {canDirectEdit && <button type="button" className="creator-secondary-button" disabled={!canRevise || revisionInputsLocked} onClick={() => setMode('direct')}>直接编辑</button>}
+            {canDirectEdit && <button type="button" className="creator-secondary-button" disabled={!canRevise || revisionInputsLocked} onClick={enterDirectMode}>直接编辑</button>}
           </div>
 
           {mode === 'instruction' && (
