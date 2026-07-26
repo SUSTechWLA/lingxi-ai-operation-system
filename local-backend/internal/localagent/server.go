@@ -30,9 +30,10 @@ type Config struct {
 }
 
 type Server struct {
-	cfg   Config
-	paths Paths
-	mux   *http.ServeMux
+	cfg                    Config
+	paths                  Paths
+	mux                    *http.ServeMux
+	localMediaIdentityHook func(stage, name string)
 }
 
 type Paths struct {
@@ -620,13 +621,13 @@ func (s *Server) handleLocalProjectMedia(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid project media reference")
 		return
 	}
-	root, err := openLocalMediaRoot(media.rootBase, media.rootSegments...)
+	root, err := openLocalMediaRoot(media.rootBase, s.localMediaIdentityHook, media.rootSegments...)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "project media not found")
 		return
 	}
 	defer root.Close()
-	file, err := root.Open(media.relativePath)
+	file, err := openRootRegularFile(root, media.relativePath, s.localMediaIdentityHook)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "project media not found")
 		return
@@ -639,7 +640,7 @@ func (s *Server) handleLocalProjectMedia(w http.ResponseWriter, r *http.Request)
 	}
 	contentType := ""
 	if media.metadataPath != "" {
-		contentType, err = localArtifactMimeType(root, media.metadataPath)
+		contentType, err = localArtifactMimeType(root, media.metadataPath, s.localMediaIdentityHook)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "project media not found")
 			return
@@ -737,33 +738,73 @@ func pathWithinRoot(root, path string) bool {
 	return err == nil && relativePath != ".." && !strings.HasPrefix(relativePath, ".."+string(filepath.Separator))
 }
 
-func openLocalMediaRoot(rootBase string, segments ...string) (*os.Root, error) {
-	current := filepath.Clean(rootBase)
-	for index := 0; index <= len(segments); index++ {
-		info, err := os.Lstat(current)
+func openLocalMediaRoot(rootBase string, identityHook func(stage, name string), segments ...string) (*os.Root, error) {
+	current, err := os.OpenRoot(filepath.Clean(rootBase))
+	if err != nil {
+		return nil, err
+	}
+	for _, segment := range segments {
+		if !isSafePathSegment(segment) {
+			current.Close()
+			return nil, errors.New("unsafe local media root segment")
+		}
+		before, err := current.Lstat(segment)
 		if err != nil {
+			current.Close()
 			return nil, err
 		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		if before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+			current.Close()
 			return nil, errors.New("local media root must contain only real directories")
 		}
-		if index < len(segments) {
-			if !isSafePathSegment(segments[index]) {
-				return nil, errors.New("unsafe local media root segment")
-			}
-			current = filepath.Join(current, segments[index])
+		if identityHook != nil {
+			identityHook("before_open_root_component", segment)
 		}
+		child, err := current.OpenRoot(segment)
+		if err != nil {
+			current.Close()
+			return nil, err
+		}
+		after, err := child.Stat(".")
+		if err != nil || !os.SameFile(before, after) {
+			child.Close()
+			current.Close()
+			return nil, errors.New("local media root identity changed")
+		}
+		current.Close()
+		current = child
 	}
-	return os.OpenRoot(current)
+	return current, nil
 }
 
-func localArtifactMimeType(root *os.Root, metadataPath string) (string, error) {
-	metadata := map[string]interface{}{}
-	info, err := root.Lstat(metadataPath)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return "", errors.New("invalid artifact metadata")
+func openRootRegularFile(root *os.Root, name string, identityHook func(stage, name string)) (*os.File, error) {
+	before, err := root.Lstat(name)
+	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return nil, errors.New("invalid local media file")
 	}
-	data, err := root.ReadFile(metadataPath)
+	if identityHook != nil {
+		identityHook("before_open_regular_file", name)
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(before, after) {
+		file.Close()
+		return nil, errors.New("local media file identity changed")
+	}
+	return file, nil
+}
+
+func localArtifactMimeType(root *os.Root, metadataPath string, identityHook func(stage, name string)) (string, error) {
+	metadata := map[string]interface{}{}
+	file, err := openRootRegularFile(root, metadataPath, identityHook)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
 	if err != nil || json.Unmarshal(data, &metadata) != nil {
 		return "", errors.New("invalid artifact metadata")
 	}

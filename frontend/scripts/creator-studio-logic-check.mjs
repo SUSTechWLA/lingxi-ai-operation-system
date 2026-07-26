@@ -643,6 +643,22 @@ try {
     logic.resolveCreatorArtifactMediaUrl('vp-1', { ...localRenderContent, mediaUrl: 'https://media.example/final.mp4' }, 'http://127.0.0.1:18080'),
     'https://media.example/final.mp4',
   )
+  const normalizedRelativeLocalMedia = logic.resolveCreatorArtifactMediaUrl(
+    'vp-1',
+    { ...localRenderContent, mediaUrl: '/api/local/media?projectId=vp-1&storageRef=local-ref' },
+    'http://127.0.0.1:18080',
+  )
+  assert.equal(
+    normalizedRelativeLocalMedia,
+    'http://127.0.0.1:18080/api/local/media?projectId=vp-1&storageRef=local-ref',
+    'a root-relative local media URL is canonicalized once at the resolver boundary',
+  )
+  assert.equal(
+    logic.resolveCreatorArtifactMediaUrl('vp-1', { ...localRenderContent, mediaUrl: '/media/final.mp4' }, 'http://127.0.0.1:18080'),
+    '/media/final.mp4',
+    'other relative direct media remains document-relative without local-service semantics',
+  )
+  assert.equal(logic.isCreatorLocalMediaUrl(normalizedRelativeLocalMedia, 'http://127.0.0.1:18080'), true, 'resolver output and local probe classification agree')
   assert.equal(logic.resolveCreatorArtifactMediaUrl('other-project', localRenderContent, 'http://127.0.0.1:18080'), undefined)
   assert.equal(
     logic.resolveCreatorArtifactMediaUrl('vp-1', {
@@ -679,6 +695,11 @@ try {
   assert.equal(logic.canApplyCreatorMediaProbe(3, 4, 'local-a', 'local-a', false), false, 'an older probe token is stale')
   assert.equal(logic.canApplyCreatorMediaProbe(4, 4, 'local-a', 'local-b', false), false, 'a probe for an older source is stale')
   assert.equal(logic.canApplyCreatorMediaProbe(4, 4, 'local-a', 'local-a', true), false, 'an aborted probe is stale')
+  assert.equal(logic.canonicalCreatorMediaElementSrc('/media/final.mp4', 'https://creator.example/workspace'), 'https://creator.example/media/final.mp4')
+  assert.equal(logic.canApplyCreatorMediaElementEvent('https://creator.example/media/a.mp4', 'https://creator.example/media/a.mp4', 7, 7), true)
+  assert.equal(logic.canApplyCreatorMediaElementEvent('https://creator.example/media/old.mp4', 'https://creator.example/media/new.mp4', 7, 7), false, 'an event from the prior source is stale')
+  assert.equal(logic.canApplyCreatorMediaElementEvent('https://creator.example/media/a.mp4', 'https://creator.example/media/a.mp4', 6, 7), false, 'an event from the prior source token is stale')
+  assert.equal(logic.canApplyCreatorMediaElementEvent('', 'https://creator.example/media/a.mp4', 7, 7), true, 'an empty currentSrc still uses the source token for browser load failures')
   assert.equal(logic.isCreatorStepReadable({ state: 'confirmed' }), true)
   assert.equal(logic.isCreatorStepReadable({ state: 'needs_attention' }), true)
   assert.equal(logic.isCreatorStepReadable({ state: 'not_started', hasHistory: true }), true)
@@ -1624,6 +1645,9 @@ try {
   assert.match(playerSource, /creatorMediaStateAfterMediaError\(mediaErrorCode, undefined, false\)/, 'direct sources never enter the local service failure path')
   assert.match(playerSource, /if \(!localMediaSource\) return/, 'remote, signed, blob, and data sources skip the local HEAD probe')
   assert.match(playerSource, /canApplyCreatorMediaProbe/, 'stale async probes cannot update a newer source')
+  assert.match(playerSource, /key=\{src\}/, 'each source gets a distinct media element')
+  assert.match(playerSource, /event\.currentTarget\.currentSrc/, 'media events verify the browser-resolved source')
+  assert.ok((playerSource.match(/canApplyCreatorMediaElementEvent\(/g) || []).length >= 2, 'loadedmetadata and error events both reject stale source identities')
   assert.match(
     playerSource,
     /mediaState === 'unavailable'\s*\? '视频暂时无法读取，请稍后重试'/,

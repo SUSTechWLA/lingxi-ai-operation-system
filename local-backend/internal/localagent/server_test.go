@@ -295,6 +295,93 @@ func TestLocalProjectMediaRejectsCrossProjectSymlinks(t *testing.T) {
 	assertRejectedLocalMediaDoesNotLeak(t, rec, vp2ArtifactDir, "vp-2-artifact-secret", "video/vp-2-secret")
 }
 
+func TestLocalProjectMediaRejectsIdentitySwapsWhileOpening(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+
+	vp1Dir := filepath.Join(root, "projects", "vp-1")
+	vp2Dir := filepath.Join(root, "projects", "vp-2")
+	if err := os.MkdirAll(filepath.Join(vp1Dir, "renders"), 0o755); err != nil {
+		t.Fatalf("create vp-1 render dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(vp1Dir, "renders", "final.mp4"), []byte("vp-1-original"), 0o644); err != nil {
+		t.Fatalf("write vp-1 render: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(vp2Dir, "renders"), 0o755); err != nil {
+		t.Fatalf("create vp-2 render dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(vp2Dir, "renders", "final.mp4"), []byte("vp-2-swap-secret"), 0o644); err != nil {
+		t.Fatalf("write vp-2 render: %v", err)
+	}
+
+	var rootSwapErr error
+	rootSwapped := false
+	server.localMediaIdentityHook = func(stage, name string) {
+		if rootSwapped || stage != "before_open_root_component" || name != "vp-1" {
+			return
+		}
+		rootSwapped = true
+		original := filepath.Join(root, "projects", "vp-1-original")
+		if err := os.Rename(vp1Dir, original); err != nil {
+			rootSwapErr = err
+			return
+		}
+		rootSwapErr = os.Symlink("vp-2", vp1Dir)
+	}
+	renderRef := "local://projects/vp-1/renders/final.mp4"
+	req := httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(renderRef), nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rootSwapErr != nil {
+		t.Fatalf("swap project root identity: %v", rootSwapErr)
+	}
+	if !rootSwapped {
+		t.Fatal("project root identity hook was not called")
+	}
+	assertRejectedLocalMediaDoesNotLeak(t, rec, vp2Dir, "vp-2-swap-secret")
+
+	artifactDir := filepath.Join(root, "artifacts", "vp-file", "video-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	contentPath := filepath.Join(artifactDir, "content")
+	if err := os.WriteFile(contentPath, []byte("original-content"), 0o644); err != nil {
+		t.Fatalf("write original content: %v", err)
+	}
+	replacementPath := filepath.Join(artifactDir, "replacement")
+	if err := os.WriteFile(replacementPath, []byte("replacement-secret"), 0o644); err != nil {
+		t.Fatalf("write replacement content: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "metadata.json"), []byte(`{"mimeType":"video/mp4"}`), 0o644); err != nil {
+		t.Fatalf("write artifact metadata: %v", err)
+	}
+
+	var fileSwapErr error
+	fileSwapped := false
+	server.localMediaIdentityHook = func(stage, name string) {
+		if fileSwapped || stage != "before_open_regular_file" || name != "content" {
+			return
+		}
+		fileSwapped = true
+		if err := os.Rename(contentPath, filepath.Join(artifactDir, "content-original")); err != nil {
+			fileSwapErr = err
+			return
+		}
+		fileSwapErr = os.Rename(replacementPath, contentPath)
+	}
+	artifactRef := "local://projects/vp-file/artifacts/video-1/hash/final.mp4"
+	req = httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-file&storageRef="+url.QueryEscape(artifactRef), nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if fileSwapErr != nil {
+		t.Fatalf("swap content file identity: %v", fileSwapErr)
+	}
+	if !fileSwapped {
+		t.Fatal("regular file identity hook was not called")
+	}
+	assertRejectedLocalMediaDoesNotLeak(t, rec, replacementPath, "replacement-secret")
+}
+
 func assertRejectedLocalMediaDoesNotLeak(t *testing.T, rec *httptest.ResponseRecorder, forbidden ...string) {
 	t.Helper()
 	if rec.Code == http.StatusOK {

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react'
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import {
+  canApplyCreatorMediaElementEvent,
   canApplyCreatorMediaProbe,
+  canonicalCreatorMediaElementSrc,
   creatorMediaStateAfterHttpProbe,
   creatorMediaStateAfterLoadedMetadata,
   creatorMediaStateAfterMediaError,
@@ -40,11 +42,18 @@ export default function SimpleVideoPlayer({
   const errorProbeControllerRef = useRef<AbortController | null>(null)
   const mediaSourceRef = useRef(src)
   const probeTokenRef = useRef(0)
+  const mediaElementTokenRef = useRef(0)
   const localMediaSource = isCreatorLocalMediaUrl(src, getLocalAgentBaseUrl())
   if (mediaSourceRef.current !== src) {
     mediaSourceRef.current = src
     probeTokenRef.current += 1
+    mediaElementTokenRef.current += 1
   }
+  const mediaElementToken = mediaElementTokenRef.current
+  const expectedMediaElementSrc = canonicalCreatorMediaElementSrc(
+    src,
+    typeof document === 'undefined' ? src : document.baseURI,
+  )
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -173,6 +182,7 @@ export default function SimpleVideoPlayer({
   }
 
   const handleError = (event: SyntheticEvent<HTMLVideoElement>) => {
+    if (!canApplyCreatorMediaElementEvent(event.currentTarget.currentSrc, expectedMediaElementSrc, mediaElementToken, mediaElementTokenRef.current)) return
     setIsPlaying(false)
     const mediaErrorCode = event.currentTarget.error?.code
     if (!localMediaSource) {
@@ -247,12 +257,14 @@ export default function SimpleVideoPlayer({
     >
       <div className="simple-video-stage">
         <video
+          key={src}
           ref={videoRef}
           className="artifact-video-preview"
           preload="metadata"
           src={src}
           onClick={togglePlayback}
           onLoadedMetadata={(event) => {
+            if (!canApplyCreatorMediaElementEvent(event.currentTarget.currentSrc, expectedMediaElementSrc, mediaElementToken, mediaElementTokenRef.current)) return
             setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)
             setMediaStatus({ src, state: creatorMediaStateAfterLoadedMetadata(), httpProbeSucceeded: true })
           }}

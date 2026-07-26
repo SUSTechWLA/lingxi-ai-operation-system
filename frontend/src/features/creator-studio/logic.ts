@@ -148,11 +148,11 @@ export function resolveCreatorArtifactMediaUrl(
 	localAgentBaseUrl: string,
 ): string | undefined {
 	const direct = content?.mediaUrl || content?.mediaUrls?.[0]
-	if (direct) return direct
+	const baseUrl = localAgentBaseUrl.replace(/\/+$/, '')
+	if (direct) return normalizeCreatorDirectMediaUrl(direct, baseUrl)
 	if (!content || content.artifact.projectId !== projectId || !isSafeStorageSegment(projectId)) return undefined
 	const metadata = content.artifact.metadata
 	const localPath = typeof metadata?.localPath === 'string' ? metadata.localPath.trim() : ''
-	const baseUrl = localAgentBaseUrl.replace(/\/+$/, '')
 	if (!baseUrl || metadata?.localOnly !== true) return undefined
 	if (localPath) {
 		return `${baseUrl}/api/local/media?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(localPath)}`
@@ -161,6 +161,19 @@ export function resolveCreatorArtifactMediaUrl(
 	const projectStoragePrefix = `local://projects/${projectId}/`
 	if (!storageRef.startsWith(projectStoragePrefix)) return undefined
 	return `${baseUrl}/api/local/media?projectId=${encodeURIComponent(projectId)}&storageRef=${encodeURIComponent(storageRef)}`
+}
+
+function normalizeCreatorDirectMediaUrl(direct: string, localAgentBaseUrl: string): string {
+	if (!direct.startsWith('/') || !localAgentBaseUrl) return direct
+	try {
+		const localAgent = new URL(localAgentBaseUrl)
+		if (localAgent.protocol !== 'http:' && localAgent.protocol !== 'https:') return direct
+		const normalized = new URL(direct, localAgent)
+		if (normalized.origin !== localAgent.origin || normalized.pathname !== '/api/local/media') return direct
+		return normalized.toString()
+	} catch {
+		return direct
+	}
 }
 
 export type CreatorMediaState = 'loading' | 'playable' | 'missing' | 'unsupported' | 'service_unavailable' | 'unavailable'
@@ -208,6 +221,23 @@ export function canApplyCreatorMediaProbe(
 	aborted: boolean,
 ): boolean {
 	return !aborted && probeToken === latestProbeToken && probeSrc === currentSrc
+}
+
+export function canonicalCreatorMediaElementSrc(src: string, documentBase: string): string {
+	try {
+		return new URL(src, documentBase).toString()
+	} catch {
+		return src
+	}
+}
+
+export function canApplyCreatorMediaElementEvent(
+	eventCurrentSrc: string,
+	expectedSrc: string,
+	eventToken: number,
+	latestToken: number,
+): boolean {
+	return eventToken === latestToken && (eventCurrentSrc === '' || eventCurrentSrc === expectedSrc)
 }
 
 export function creatorStartIdempotencyKey(projectId: string): string {
