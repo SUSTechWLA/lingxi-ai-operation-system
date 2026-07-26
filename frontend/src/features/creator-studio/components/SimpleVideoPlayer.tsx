@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } 
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import {
   canApplyCreatorMediaProbe,
-  creatorMediaStateAfterBrowserEvent,
   creatorMediaStateAfterHttpProbe,
+  creatorMediaStateAfterLoadedMetadata,
   creatorMediaStateAfterMediaError,
   isCreatorLocalMediaUrl,
   type CreatorMediaState,
@@ -92,7 +92,7 @@ export default function SimpleVideoPlayer({
 
   useEffect(() => {
     onMediaStateChangeRef.current?.(mediaState)
-    if (mediaState === 'missing' || mediaState === 'unsupported' || mediaState === 'service_unavailable') {
+    if (mediaState === 'missing' || mediaState === 'unsupported' || mediaState === 'service_unavailable' || mediaState === 'unavailable') {
       onErrorRef.current?.(mediaState)
     }
   }, [mediaState, src])
@@ -217,12 +217,14 @@ export default function SimpleVideoPlayer({
     )
   }
 
-  if (mediaState === 'missing' || mediaState === 'unsupported' || mediaState === 'service_unavailable') {
+  if (mediaState === 'missing' || mediaState === 'unsupported' || mediaState === 'service_unavailable' || mediaState === 'unavailable') {
     const message = mediaState === 'missing'
       ? '成片文件缺失，可从成片步骤重新生成'
       : mediaState === 'service_unavailable'
         ? '本地媒体服务未启动'
-        : '当前编码不受客户端支持，需要转为 H.264/AAC MP4'
+        : mediaState === 'unavailable'
+          ? '视频暂时无法读取，请稍后重试'
+          : '当前编码不受客户端支持，需要转为 H.264/AAC MP4'
     return (
       <div className="simple-video-player is-error" role="group" aria-label={title}>
         <div className="simple-video-error" role="alert">
@@ -252,7 +254,7 @@ export default function SimpleVideoPlayer({
           onClick={togglePlayback}
           onLoadedMetadata={(event) => {
             setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)
-            setMediaStatus({ src, state: creatorMediaStateAfterBrowserEvent('loadedmetadata'), httpProbeSucceeded: true })
+            setMediaStatus({ src, state: creatorMediaStateAfterLoadedMetadata(), httpProbeSucceeded: true })
           }}
           onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
           onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}

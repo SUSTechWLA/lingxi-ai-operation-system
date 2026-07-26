@@ -620,7 +620,7 @@ func (s *Server) handleLocalProjectMedia(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid project media reference")
 		return
 	}
-	root, err := os.OpenRoot(media.rootPath)
+	root, err := openLocalMediaRoot(media.rootBase, media.rootSegments...)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "project media not found")
 		return
@@ -637,7 +637,14 @@ func (s *Server) handleLocalProjectMedia(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "project media not found")
 		return
 	}
-	contentType := media.mimeType
+	contentType := ""
+	if media.metadataPath != "" {
+		contentType, err = localArtifactMimeType(root, media.metadataPath)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "project media not found")
+			return
+		}
+	}
 	if contentType == "" {
 		contentType = mime.TypeByExtension(strings.ToLower(filepath.Ext(media.name)))
 		if contentType == "" {
@@ -651,10 +658,11 @@ func (s *Server) handleLocalProjectMedia(w http.ResponseWriter, r *http.Request)
 }
 
 type resolvedLocalProjectMedia struct {
-	rootPath     string
+	rootBase     string
+	rootSegments []string
 	relativePath string
+	metadataPath string
 	name         string
-	mimeType     string
 }
 
 func (s *Server) resolveLocalProjectMedia(projectID, storageRef, absolutePath string) (resolvedLocalProjectMedia, error) {
@@ -668,12 +676,13 @@ func (s *Server) resolveLocalProjectMedia(projectID, storageRef, absolutePath st
 		if !filepath.IsAbs(requestedPath) || !pathWithinRoot(projectRoot, requestedPath) {
 			return resolvedLocalProjectMedia{}, errors.New("media path is outside project")
 		}
-		relativePath, err := filepath.Rel(projectBase, requestedPath)
+		relativePath, err := filepath.Rel(projectRoot, requestedPath)
 		if err != nil {
 			return resolvedLocalProjectMedia{}, errors.New("invalid project media path")
 		}
 		return resolvedLocalProjectMedia{
-			rootPath:     projectBase,
+			rootBase:     projectBase,
+			rootSegments: []string{projectID},
 			relativePath: relativePath,
 			name:         filepath.Base(requestedPath),
 		}, nil
@@ -699,26 +708,25 @@ func (s *Server) resolveLocalProjectMedia(projectID, storageRef, absolutePath st
 		if len(segments) < 3 {
 			return resolvedLocalProjectMedia{}, errors.New("artifact id is required")
 		}
-		artifactRoot := filepath.Clean(s.paths.ArtifactDir)
-		contentPath := filepath.Join(projectID, segments[2], "content")
-		metadataPath := filepath.Join(projectID, segments[2], "metadata.json")
 		return resolvedLocalProjectMedia{
-			rootPath:     artifactRoot,
-			relativePath: contentPath,
+			rootBase:     filepath.Clean(s.paths.ArtifactDir),
+			rootSegments: []string{projectID, segments[2]},
+			relativePath: "content",
+			metadataPath: "metadata.json",
 			name:         segments[len(segments)-1],
-			mimeType:     localArtifactMimeType(artifactRoot, metadataPath),
 		}, nil
 	}
 	requestedPath := filepath.Join(append([]string{projectRoot}, segments[1:]...)...)
 	if !pathWithinRoot(projectRoot, requestedPath) {
 		return resolvedLocalProjectMedia{}, errors.New("media path is outside project")
 	}
-	relativePath, err := filepath.Rel(projectBase, requestedPath)
+	relativePath, err := filepath.Rel(projectRoot, requestedPath)
 	if err != nil {
 		return resolvedLocalProjectMedia{}, errors.New("invalid project media path")
 	}
 	return resolvedLocalProjectMedia{
-		rootPath:     projectBase,
+		rootBase:     projectBase,
+		rootSegments: []string{projectID},
 		relativePath: relativePath,
 		name:         filepath.Base(requestedPath),
 	}, nil
@@ -729,19 +737,38 @@ func pathWithinRoot(root, path string) bool {
 	return err == nil && relativePath != ".." && !strings.HasPrefix(relativePath, ".."+string(filepath.Separator))
 }
 
-func localArtifactMimeType(rootPath, metadataPath string) string {
-	metadata := map[string]interface{}{}
-	root, err := os.OpenRoot(rootPath)
-	if err != nil {
-		return ""
+func openLocalMediaRoot(rootBase string, segments ...string) (*os.Root, error) {
+	current := filepath.Clean(rootBase)
+	for index := 0; index <= len(segments); index++ {
+		info, err := os.Lstat(current)
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return nil, errors.New("local media root must contain only real directories")
+		}
+		if index < len(segments) {
+			if !isSafePathSegment(segments[index]) {
+				return nil, errors.New("unsafe local media root segment")
+			}
+			current = filepath.Join(current, segments[index])
+		}
 	}
-	defer root.Close()
+	return os.OpenRoot(current)
+}
+
+func localArtifactMimeType(root *os.Root, metadataPath string) (string, error) {
+	metadata := map[string]interface{}{}
+	info, err := root.Lstat(metadataPath)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "", errors.New("invalid artifact metadata")
+	}
 	data, err := root.ReadFile(metadataPath)
 	if err != nil || json.Unmarshal(data, &metadata) != nil {
-		return ""
+		return "", errors.New("invalid artifact metadata")
 	}
 	mimeType, _ := metadata["mimeType"].(string)
-	return strings.TrimSpace(mimeType)
+	return strings.TrimSpace(mimeType), nil
 }
 
 func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {

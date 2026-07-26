@@ -179,7 +179,7 @@ func TestLocalProjectMediaRejectsSymlinkEscapesAndAmbiguousReferences(t *testing
 	req := httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(renderRef), nil)
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
-	assertRejectedLocalMediaDoesNotLeak(t, rec, outsidePath)
+	assertRejectedLocalMediaDoesNotLeak(t, rec, outsidePath, "outside-secret")
 
 	artifactDir := filepath.Join(root, "artifacts", "vp-1", "video-1")
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
@@ -195,7 +195,7 @@ func TestLocalProjectMediaRejectsSymlinkEscapesAndAmbiguousReferences(t *testing
 	req = httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(artifactRef), nil)
 	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
-	assertRejectedLocalMediaDoesNotLeak(t, rec, outsidePath)
+	assertRejectedLocalMediaDoesNotLeak(t, rec, outsidePath, "outside-secret")
 
 	encodedTraversalRef := "local://projects/vp-1/renders/%2e%2e/outside-secret.mp4"
 	req = httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(encodedTraversalRef), nil)
@@ -217,13 +217,93 @@ func TestLocalProjectMediaRejectsSymlinkEscapesAndAmbiguousReferences(t *testing
 	}
 }
 
-func assertRejectedLocalMediaDoesNotLeak(t *testing.T, rec *httptest.ResponseRecorder, outsidePath string) {
+func TestLocalProjectMediaRejectsCrossProjectSymlinks(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+
+	vp2RenderDir := filepath.Join(root, "projects", "vp-2", "renders")
+	if err := os.MkdirAll(vp2RenderDir, 0o755); err != nil {
+		t.Fatalf("create vp-2 render dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(vp2RenderDir, "final.mp4"), []byte("vp-2-render-secret"), 0o644); err != nil {
+		t.Fatalf("write vp-2 render: %v", err)
+	}
+	vp1ProjectDir := filepath.Join(root, "projects", "vp-1")
+	if err := os.MkdirAll(vp1ProjectDir, 0o755); err != nil {
+		t.Fatalf("create vp-1 project dir: %v", err)
+	}
+	if err := os.Symlink(filepath.Join("..", "vp-2", "renders"), filepath.Join(vp1ProjectDir, "renders")); err != nil {
+		t.Fatalf("create cross-project render symlink: %v", err)
+	}
+	renderRef := "local://projects/vp-1/renders/final.mp4"
+	req := httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(renderRef), nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	assertRejectedLocalMediaDoesNotLeak(t, rec, vp2RenderDir, "vp-2-render-secret")
+
+	vp2ArtifactDir := filepath.Join(root, "artifacts", "vp-2", "video-2")
+	if err := os.MkdirAll(vp2ArtifactDir, 0o755); err != nil {
+		t.Fatalf("create vp-2 artifact dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(vp2ArtifactDir, "content"), []byte("vp-2-artifact-secret"), 0o644); err != nil {
+		t.Fatalf("write vp-2 artifact content: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(vp2ArtifactDir, "metadata.json"), []byte(`{"mimeType":"video/vp-2-secret"}`), 0o644); err != nil {
+		t.Fatalf("write vp-2 artifact metadata: %v", err)
+	}
+
+	vp1ArtifactDir := filepath.Join(root, "artifacts", "vp-1", "video-1")
+	if err := os.MkdirAll(vp1ArtifactDir, 0o755); err != nil {
+		t.Fatalf("create vp-1 artifact dir: %v", err)
+	}
+	if err := os.Symlink(filepath.Join("..", "..", "vp-2", "video-2", "content"), filepath.Join(vp1ArtifactDir, "content")); err != nil {
+		t.Fatalf("create cross-project artifact content symlink: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(vp1ArtifactDir, "metadata.json"), []byte(`{"mimeType":"video/mp4"}`), 0o644); err != nil {
+		t.Fatalf("write vp-1 artifact metadata: %v", err)
+	}
+	artifactRef := "local://projects/vp-1/artifacts/video-1/hash/final.mp4"
+	req = httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(artifactRef), nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	assertRejectedLocalMediaDoesNotLeak(t, rec, vp2ArtifactDir, "vp-2-artifact-secret")
+
+	metadataArtifactDir := filepath.Join(root, "artifacts", "vp-1", "video-metadata")
+	if err := os.MkdirAll(metadataArtifactDir, 0o755); err != nil {
+		t.Fatalf("create metadata artifact dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataArtifactDir, "content"), []byte("vp-1-content"), 0o644); err != nil {
+		t.Fatalf("write metadata artifact content: %v", err)
+	}
+	if err := os.Symlink(filepath.Join("..", "..", "vp-2", "video-2", "metadata.json"), filepath.Join(metadataArtifactDir, "metadata.json")); err != nil {
+		t.Fatalf("create cross-project metadata symlink: %v", err)
+	}
+	metadataRef := "local://projects/vp-1/artifacts/video-metadata/hash/final.mp4"
+	req = httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(metadataRef), nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	assertRejectedLocalMediaDoesNotLeak(t, rec, vp2ArtifactDir, "video/vp-2-secret", "vp-1-content")
+
+	vp1ArtifactProjectDir := filepath.Join(root, "artifacts", "vp-1")
+	if err := os.Symlink(filepath.Join("..", "vp-2", "video-2"), filepath.Join(vp1ArtifactProjectDir, "video-link")); err != nil {
+		t.Fatalf("create artifact directory symlink: %v", err)
+	}
+	intermediateRef := "local://projects/vp-1/artifacts/video-link/hash/final.mp4"
+	req = httptest.NewRequest(http.MethodGet, "/api/local/media?projectId=vp-1&storageRef="+url.QueryEscape(intermediateRef), nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	assertRejectedLocalMediaDoesNotLeak(t, rec, vp2ArtifactDir, "vp-2-artifact-secret", "video/vp-2-secret")
+}
+
+func assertRejectedLocalMediaDoesNotLeak(t *testing.T, rec *httptest.ResponseRecorder, forbidden ...string) {
 	t.Helper()
 	if rec.Code == http.StatusOK {
-		t.Fatalf("symlink escape unexpectedly served outside media: %q", rec.Body.String())
+		t.Fatalf("symlink escape unexpectedly served scoped media: %q", rec.Body.String())
 	}
-	if strings.Contains(rec.Body.String(), outsidePath) || strings.Contains(rec.Body.String(), "outside-secret") {
-		t.Fatalf("rejected media response leaked outside target: %s", rec.Body.String())
+	for _, value := range forbidden {
+		if strings.Contains(rec.Body.String(), value) {
+			t.Fatalf("rejected media response leaked forbidden target %q: %s", value, rec.Body.String())
+		}
 	}
 }
 

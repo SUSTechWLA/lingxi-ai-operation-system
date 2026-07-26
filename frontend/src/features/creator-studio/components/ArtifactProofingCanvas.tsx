@@ -125,7 +125,7 @@ export default function ArtifactProofingCanvas({
       markPlaybackReady()
     } else if (state === 'loading') {
       setPlaybackAvailable(false)
-    } else if (state === 'missing' || state === 'unsupported' || state === 'service_unavailable') {
+    } else if (state === 'missing' || state === 'unsupported' || state === 'service_unavailable' || state === 'unavailable') {
       invalidateMediaReview()
     }
   }

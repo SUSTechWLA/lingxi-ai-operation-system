@@ -163,7 +163,7 @@ export function resolveCreatorArtifactMediaUrl(
 	return `${baseUrl}/api/local/media?projectId=${encodeURIComponent(projectId)}&storageRef=${encodeURIComponent(storageRef)}`
 }
 
-export type CreatorMediaState = 'loading' | 'playable' | 'missing' | 'unsupported' | 'service_unavailable'
+export type CreatorMediaState = 'loading' | 'playable' | 'missing' | 'unsupported' | 'service_unavailable' | 'unavailable'
 
 export function creatorMediaStateAfterHttpProbe(status: number | undefined): CreatorMediaState {
 	if (status === 404) return 'missing'
@@ -171,11 +171,8 @@ export function creatorMediaStateAfterHttpProbe(status: number | undefined): Cre
 	return 'service_unavailable'
 }
 
-export function creatorMediaStateAfterBrowserEvent(
-	event: 'loadedmetadata' | 'error',
-): CreatorMediaState {
-	if (event === 'loadedmetadata') return 'playable'
-	return 'unsupported'
+export function creatorMediaStateAfterLoadedMetadata(): CreatorMediaState {
+	return 'playable'
 }
 
 export function creatorMediaStateAfterMediaError(
@@ -183,7 +180,7 @@ export function creatorMediaStateAfterMediaError(
 	deliveryStatus: number | undefined,
 	localSource: boolean,
 ): CreatorMediaState {
-	if (!localSource) return 'unsupported'
+	if (!localSource) return mediaErrorCode === 3 || mediaErrorCode === 4 ? 'unsupported' : 'unavailable'
 	if (deliveryStatus === 404) return 'missing'
 	if (deliveryStatus === undefined || deliveryStatus < 200 || deliveryStatus >= 300) return 'service_unavailable'
 	return mediaErrorCode === 3 || mediaErrorCode === 4 ? 'unsupported' : 'service_unavailable'
@@ -192,7 +189,7 @@ export function creatorMediaStateAfterMediaError(
 export function isCreatorLocalMediaUrl(src: string, localAgentBaseUrl: string): boolean {
 	try {
 		const localAgent = new URL(localAgentBaseUrl)
-		const source = new URL(src, localAgent)
+		const source = new URL(src)
 		return (source.protocol === 'http:' || source.protocol === 'https:') &&
 			source.origin === localAgent.origin &&
 			source.username === '' &&

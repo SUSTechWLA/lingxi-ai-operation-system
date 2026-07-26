@@ -657,16 +657,20 @@ try {
   assert.equal(logic.creatorMediaStateAfterHttpProbe(404), 'missing', 'a definite missing media response has its own recovery state')
   assert.equal(logic.creatorMediaStateAfterHttpProbe(503), 'service_unavailable', 'an unhealthy local media response is a service failure')
   assert.equal(logic.creatorMediaStateAfterHttpProbe(undefined), 'service_unavailable', 'a connection failure is a service failure')
-  assert.equal(logic.creatorMediaStateAfterBrowserEvent('loadedmetadata'), 'playable', 'loaded metadata confirms browser playback')
+  assert.equal(logic.creatorMediaStateAfterLoadedMetadata(), 'playable', 'loaded metadata confirms browser playback')
   assert.equal(logic.creatorMediaStateAfterMediaError(3, 200, true), 'unsupported', 'successful local delivery plus decode failure is unsupported')
   assert.equal(logic.creatorMediaStateAfterMediaError(4, 200, true), 'unsupported', 'successful local delivery plus unsupported source is unsupported')
+  assert.equal(logic.creatorMediaStateAfterMediaError(1, 200, true), 'service_unavailable', 'an aborted local load is not mislabeled as a codec failure')
   assert.equal(logic.creatorMediaStateAfterMediaError(2, 200, true), 'service_unavailable', 'a network or range failure is not mislabeled as a codec failure')
   assert.equal(logic.creatorMediaStateAfterMediaError(3, 404, true), 'missing', 'a file that disappears before decode is missing')
   assert.equal(logic.creatorMediaStateAfterMediaError(3, undefined, true), 'service_unavailable', 'a failed local re-probe is a service failure')
-  assert.equal(logic.creatorMediaStateAfterMediaError(2, undefined, false), 'unsupported', 'direct source failures never claim the local service is down')
+  assert.equal(logic.creatorMediaStateAfterMediaError(1, undefined, false), 'unavailable', 'an aborted direct source uses neutral delivery copy')
+  assert.equal(logic.creatorMediaStateAfterMediaError(2, undefined, false), 'unavailable', 'a direct network failure uses neutral delivery copy')
+  assert.equal(logic.creatorMediaStateAfterMediaError(3, undefined, false), 'unsupported', 'a direct decode failure is unsupported')
+  assert.equal(logic.creatorMediaStateAfterMediaError(4, undefined, false), 'unsupported', 'a direct unsupported source is unsupported')
   const localAgentBaseUrl = 'http://127.0.0.1:18080'
   assert.equal(logic.isCreatorLocalMediaUrl('http://127.0.0.1:18080/api/local/media?projectId=vp-1', localAgentBaseUrl), true)
-  assert.equal(logic.isCreatorLocalMediaUrl('/api/local/media?projectId=vp-1', localAgentBaseUrl), true)
+  assert.equal(logic.isCreatorLocalMediaUrl('/api/local/media?projectId=vp-1', localAgentBaseUrl), false, 'relative URLs resolve against the document, so local probing fails closed')
   assert.equal(logic.isCreatorLocalMediaUrl('https://media.example/final.mp4?signature=secret', localAgentBaseUrl), false)
   assert.equal(logic.isCreatorLocalMediaUrl('https://media.example/api/local/media?signature=secret', localAgentBaseUrl), false)
   assert.equal(logic.isCreatorLocalMediaUrl('blob:https://creator.example/id', localAgentBaseUrl), false)
@@ -1340,7 +1344,7 @@ try {
   )
   assert.match(
     proofingSource,
-    /state === 'missing' \|\| state === 'unsupported' \|\| state === 'service_unavailable'[\s\S]*?invalidateMediaReview\(\)/,
+    /state === 'missing' \|\| state === 'unsupported' \|\| state === 'service_unavailable' \|\| state === 'unavailable'[\s\S]*?invalidateMediaReview\(\)/,
     'every explicit video failure clears completed and pending ranges',
   )
   assert.match(proofingSource, /mediaReviewAfterPlaybackFailure\(/, 'video and audio share executable range invalidation behavior')
@@ -1614,16 +1618,22 @@ try {
   assert.match(playerSource, /onPlaybackStateChange\?:/)
   assert.match(playerSource, /fetch\(src,\s*\{\s*method:\s*'HEAD'/, 'local video delivery is probed before browser decoding')
   assert.match(playerSource, /creatorMediaStateAfterHttpProbe/, 'HTTP failures map independently from browser codec failures')
-  assert.match(playerSource, /creatorMediaStateAfterBrowserEvent\('loadedmetadata'\)/, 'loaded metadata confirms playable media')
+  assert.match(playerSource, /creatorMediaStateAfterLoadedMetadata\(\)/, 'loaded metadata confirms playable media')
   assert.match(playerSource, /event\.currentTarget\.error\?\.code/, 'browser media failures use the MediaError code')
   assert.match(playerSource, /creatorMediaStateAfterMediaError\(mediaErrorCode, response\.status, true\)/, 'local media errors are reclassified after a fresh delivery probe')
   assert.match(playerSource, /creatorMediaStateAfterMediaError\(mediaErrorCode, undefined, false\)/, 'direct sources never enter the local service failure path')
   assert.match(playerSource, /if \(!localMediaSource\) return/, 'remote, signed, blob, and data sources skip the local HEAD probe')
   assert.match(playerSource, /canApplyCreatorMediaProbe/, 'stale async probes cannot update a newer source')
+  assert.match(
+    playerSource,
+    /mediaState === 'unavailable'\s*\? '视频暂时无法读取，请稍后重试'/,
+    'the neutral direct-delivery state renders neutral copy rather than local-service or codec copy',
+  )
   for (const copy of [
     '成片文件缺失，可从成片步骤重新生成',
     '本地媒体服务未启动',
     '当前编码不受客户端支持，需要转为 H.264/AAC MP4',
+    '视频暂时无法读取，请稍后重试',
   ]) {
     assert.match(playerSource, new RegExp(copy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `video player exposes recovery copy: ${copy}`)
   }
