@@ -18,10 +18,13 @@ export interface DiagnosticsNode {
   retryCount: number
   maxRetry: number
   toolName?: string
+  serverName?: string
   transport?: 'tool' | 'mcp' | 'control' | 'unknown'
   request?: unknown
   response?: unknown
   error?: string
+  errorClass?: string
+  relatedArtifactIds?: string[]
 }
 
 export interface DeveloperDiagnosticsSnapshot {
@@ -397,6 +400,13 @@ function nonNegativeInteger(value: unknown): number {
     : 0
 }
 
+function stringListField(record: Record<string, unknown>, keys: readonly string[]): string[] {
+  const value = firstField(record, keys)
+  if (typeof value === 'string' && value.length > 0) return [value]
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+}
+
 export function diagnosticDurationMs(startedAt?: string, completedAt?: string): number | undefined {
   if (typeof startedAt !== 'string' || typeof completedAt !== 'string' || !startedAt || !completedAt) {
     return undefined
@@ -459,6 +469,7 @@ export function buildDiagnosticsNodes(trace: unknown): DiagnosticsNode[] {
 
         const id = stringField(record, ['id', 'nodeId']) ?? `node-${index + 1}`
         const toolName = stringField(record, ['toolName', 'tool'])
+        const serverName = stringField(record, ['server', 'serverName', 'mcpServer', 'mcp_server'])
         const startedAt = stringField(record, ['startedAt', 'startTime', 'createdAt'])
         const completedAt = stringField(record, ['completedAt', 'endTime', 'finishedAt'])
         const durationMs = diagnosticDurationMs(startedAt, completedAt)
@@ -466,6 +477,11 @@ export function buildDiagnosticsNodes(trace: unknown): DiagnosticsNode[] {
         const response = firstField(record, ['response', 'output', 'result'])
         const errorValue = firstField(record, ['error', 'errorMessage'])
         const redactedError = errorValue === undefined ? undefined : redactDiagnosticValue(errorValue)
+        const responseRecord = recordValue(response)
+        const relatedArtifactIds = [...new Set([
+          ...stringListField(record, ['relatedArtifactIds', 'artifactIds', 'outputArtifactIds', 'artifactId']),
+          ...(responseRecord ? stringListField(responseRecord, ['relatedArtifactIds', 'artifactIds', 'outputArtifactIds', 'artifactId']) : []),
+        ])]
 
         const node: DiagnosticsNode & { sortIndex: number } = {
           id,
@@ -482,9 +498,13 @@ export function buildDiagnosticsNodes(trace: unknown): DiagnosticsNode[] {
         if (completedAt) node.completedAt = completedAt
         if (durationMs !== undefined) node.durationMs = durationMs
         if (toolName) node.toolName = toolName
+        if (serverName) node.serverName = serverName
         if (request !== undefined) node.request = redactDiagnosticValue(request)
         if (response !== undefined) node.response = redactDiagnosticValue(response)
         if (typeof redactedError === 'string' && redactedError.length > 0) node.error = redactedError
+        const errorClass = stringField(record, ['errorClass', 'exceptionClass', 'errorType'])
+        if (errorClass) node.errorClass = errorClass
+        if (relatedArtifactIds.length > 0) node.relatedArtifactIds = relatedArtifactIds
 
         return node
       })

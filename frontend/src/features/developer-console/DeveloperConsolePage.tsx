@@ -13,6 +13,7 @@ import type { AuthUser } from '../../services/auth'
 import type { VideoProject } from '../../utils/types'
 import DiagnosticsSummary, { DiagnosticsProjectSelector } from './components/DiagnosticsSummary'
 import DiagnosticsTimeline from './components/DiagnosticsTimeline'
+import ToolCallInspector from './components/ToolCallInspector'
 import {
   isTerminalAgentRunStatus,
   loadProjectDiagnostics,
@@ -302,6 +303,8 @@ function DiagnosticsContent({
     ? <DiagnosticsSummary project={selectedProject} diagnostics={diagnostics} />
     : currentView === 'timeline'
       ? <DiagnosticsTimeline nodes={diagnostics.nodes ?? []} />
+      : currentView === 'tools'
+        ? <ToolCallInspector nodes={diagnostics.nodes ?? []} />
       : (
           <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <DiagnosticsMetric label="运行状态" value={diagnostics.run.status} />

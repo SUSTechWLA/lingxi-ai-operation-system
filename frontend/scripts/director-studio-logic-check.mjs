@@ -12,6 +12,7 @@ const layerSelectorsOutfile = join(tempDir, 'talkingHeadLayerSelectors.mjs')
 const creatorRoutesOutfile = join(tempDir, 'creatorRoutes.mjs')
 const focusCycleOutfile = join(tempDir, 'focusCycle.mjs')
 const developerDiagnosticsOutfile = join(tempDir, 'developerDiagnostics.mjs')
+const toolCallInspectorOutfile = join(tempDir, 'toolCallInspector.mjs')
 
 try {
   await build({
@@ -57,6 +58,14 @@ try {
   await build({
     entryPoints: [new URL('../src/features/developer-console/developerDiagnostics.ts', import.meta.url).pathname],
     outfile: developerDiagnosticsOutfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/features/developer-console/components/ToolCallInspector.tsx', import.meta.url).pathname],
+    outfile: toolCallInspectorOutfile,
     bundle: true,
     format: 'esm',
     platform: 'node',
@@ -130,6 +139,11 @@ try {
     selectDiagnosticsProject,
     serializeRedactedDiagnosticValue,
   } = await import(pathToFileURL(developerDiagnosticsOutfile))
+  const {
+    buildToolCallGroups,
+    filterToolCalls,
+    toolCallCopyText,
+  } = await import(pathToFileURL(toolCallInspectorOutfile))
   const diagnosticsApiSource = await readFile(new URL('../src/services/api.ts', import.meta.url), 'utf8')
   const directorPageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
   const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
@@ -138,6 +152,7 @@ try {
   const developerDiagnosticsSource = await readFile(new URL('../src/features/developer-console/developerDiagnostics.ts', import.meta.url), 'utf8')
   const diagnosticsSummarySource = await readFile(new URL('../src/features/developer-console/components/DiagnosticsSummary.tsx', import.meta.url), 'utf8')
   const diagnosticsTimelineSource = await readFile(new URL('../src/features/developer-console/components/DiagnosticsTimeline.tsx', import.meta.url), 'utf8')
+  const toolCallInspectorSource = await readFile(new URL('../src/features/developer-console/components/ToolCallInspector.tsx', import.meta.url), 'utf8')
   const globalStylesSource = await readFile(new URL('../src/index.css', import.meta.url), 'utf8')
   assert.match(creatorShellSource, /开始创作/)
   assert.match(creatorShellSource, /我的视频/)
@@ -145,6 +160,7 @@ try {
     assert.doesNotMatch(creatorShellSource, new RegExp(forbiddenCreatorTerm))
   }
   assert.doesNotMatch(creatorShellSource, /developer-console|DeveloperConsolePage|DirectorStudioPage/)
+  assert.doesNotMatch(creatorShellSource, /ToolCallInspector|工具与 MCP/)
   assert.match(appSource, /hashchange/)
   assert.match(appSource, /removeEventListener\('hashchange', syncRoute\)/)
   assert.match(appSource, /history\.replaceState\(null, '', nextHash\)/)
@@ -223,9 +239,17 @@ try {
   assert.match(diagnosticsTimelineSource, /type="search"/)
   assert.match(diagnosticsTimelineSource, /serializeRedactedDiagnosticValue/)
   assert.doesNotMatch(diagnosticsTimelineSource, /<details[^>]*\sopen(?:=|\s|>)/)
+  assert.match(developerConsoleSource, /ToolCallInspector/)
+  assert.match(developerConsoleSource, /currentView === 'tools'/)
+  assert.match(toolCallInspectorSource, /type="search"/)
+  assert.match(toolCallInspectorSource, /navigator\.clipboard\.writeText/)
+  assert.match(toolCallInspectorSource, /serializeRedactedDiagnosticValue/)
+  assert.match(toolCallInspectorSource, /aria-pressed=/)
+  assert.doesNotMatch(toolCallInspectorSource, /<details[^>]*\sopen(?:=|\s|>)/)
   assert.match(globalStylesSource, /\.diagnostics-metric-grid/)
   assert.match(globalStylesSource, /\.diagnostics-timeline/)
   assert.match(globalStylesSource, /\.diagnostics-json-panel/)
+  assert.match(globalStylesSource, /\.diagnostics-tool-inspector/)
   assert.match(globalStylesSource, /@media\s*\(max-width:\s*390px\)/)
   assert.equal(replaceHashRoute('#/create'), '#/create')
   assert.equal(cycleFocusIndex(0, 2, false), 1)
@@ -451,6 +475,7 @@ try {
         transport: 'mcp',
         request: [{ password: '[REDACTED]' }],
         response: { artifactId: 'local://projects/vp-1/output.mp4' },
+        relatedArtifactIds: ['local://projects/vp-1/output.mp4'],
       },
       {
         id: 'node-b',
@@ -480,6 +505,90 @@ try {
   )
   assert.deepEqual(buildDiagnosticsNodes({ nodes: 'not-an-array' }), [])
   assert.deepEqual(buildDiagnosticsNodes(null), [])
+
+  const toolCallFixtures = [
+    {
+      id: 'tool-node',
+      name: 'Render frame',
+      type: 'tool',
+      status: 'SUCCESS',
+      retryCount: 0,
+      maxRetry: 1,
+      toolName: 'render_frame',
+      transport: 'tool',
+      request: { password: '[REDACTED]', prompt: 'hidden-request-value' },
+      response: { artifactId: 'artifact-rendered' },
+      relatedArtifactIds: ['artifact-rendered'],
+    },
+    {
+      id: 'mcp-failed-node',
+      name: 'Fetch source',
+      type: 'mcp',
+      status: 'FAILED',
+      retryCount: 0,
+      maxRetry: 2,
+      toolName: 'fetch_asset',
+      serverName: 'asset-server',
+      transport: 'mcp',
+      error: 'NetworkTimeout: access_token=super-hidden-error',
+      errorClass: 'NetworkTimeout',
+    },
+    {
+      id: 'mcp-retried-node',
+      name: 'Publish result',
+      type: 'mcp',
+      status: 'SUCCESS',
+      retryCount: 2,
+      maxRetry: 3,
+      toolName: 'publish_asset',
+      serverName: 'publish-server',
+      transport: 'mcp',
+    },
+    {
+      id: 'control-node',
+      name: 'Review gate',
+      type: 'control',
+      status: 'PENDING',
+      retryCount: 0,
+      maxRetry: 0,
+      transport: 'control',
+    },
+  ]
+  assert.deepEqual(
+    buildToolCallGroups(toolCallFixtures).map((group) => ({
+      key: group.key,
+      callIds: group.calls.map((call) => call.id),
+    })),
+    [
+      { key: 'tool', callIds: ['tool-node'] },
+      { key: 'mcp:asset-server', callIds: ['mcp-failed-node'] },
+      { key: 'mcp:publish-server', callIds: ['mcp-retried-node'] },
+    ],
+  )
+  assert.deepEqual(filterToolCalls(toolCallFixtures, 'all', '').map((call) => call.id), [
+    'tool-node', 'mcp-failed-node', 'mcp-retried-node',
+  ])
+  assert.deepEqual(filterToolCalls(toolCallFixtures, 'tool', '').map((call) => call.id), ['tool-node'])
+  assert.deepEqual(filterToolCalls(toolCallFixtures, 'mcp', '').map((call) => call.id), [
+    'mcp-failed-node', 'mcp-retried-node',
+  ])
+  assert.deepEqual(filterToolCalls(toolCallFixtures, 'failed', '').map((call) => call.id), ['mcp-failed-node'])
+  assert.deepEqual(filterToolCalls(toolCallFixtures, 'retried', '').map((call) => call.id), ['mcp-retried-node'])
+  for (const query of ['render_frame', 'asset-server', 'mcp-failed-node', 'NetworkTimeout']) {
+    assert.equal(filterToolCalls(toolCallFixtures, 'all', query).length, 1)
+  }
+  for (const hiddenQuery of ['hidden-request-value', 'super-hidden-error']) {
+    assert.deepEqual(filterToolCalls(toolCallFixtures, 'all', hiddenQuery), [])
+  }
+  const copiedToolCall = toolCallCopyText({
+    ...toolCallFixtures[0],
+    request: { password: 'copy-secret', source: '/Users/alice/private.mov' },
+    response: { accessToken: 'copy-response-secret' },
+    error: 'RenderError: credential=copy-error-secret',
+  })
+  assert.match(copiedToolCall, /\[REDACTED\]/)
+  assert.match(copiedToolCall, /<local-path>\/private\.mov/)
+  assert.doesNotMatch(copiedToolCall, /copy-secret|copy-response-secret|copy-error-secret|\/Users\/alice/)
 
   const projectFixtures = [
     { id: 'newest-without-run', updatedAt: '2026-01-04T00:00:00.000Z' },
