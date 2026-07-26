@@ -1,7 +1,4 @@
-import {
-  buildArtifactReviewModel,
-  type ArtifactReviewModel,
-} from './artifactPresentation'
+import type { ArtifactReviewModel } from './artifactPresentation'
 
 export interface CreatorReviewProjection {
   canonicalText?: string
@@ -27,12 +24,11 @@ export function projectCreatorReviewContent(content: unknown): CreatorReviewProj
   const fallbackCandidates: ProjectionCandidate[] = []
 
   for (const candidate of creatorPayloadCandidates(content, 0)) {
-    const document = buildArtifactReviewModel(candidate)
-    const body = longestCreatorText(document?.script, longestCreatorField(candidate, BODY_FIELDS))
-    if (body) bodyCandidates.push({ text: body, document: document?.script === body ? document : null })
+    const body = longestCreatorField(candidate, BODY_FIELDS)
+    if (body) bodyCandidates.push({ text: body, document: creatorReviewDocument(candidate, body) })
 
     const fallback = readableCreatorScalar(candidate) || longestCreatorField(candidate, FALLBACK_FIELDS)
-    if (fallback) fallbackCandidates.push({ text: fallback, document })
+    if (fallback) fallbackCandidates.push({ text: fallback, document: null })
   }
 
   const selected = longestCandidate(bodyCandidates) || longestCandidate(fallbackCandidates)
@@ -118,11 +114,6 @@ function longestCandidate(candidates: readonly ProjectionCandidate[]): Projectio
   )
 }
 
-function longestCreatorText(...values: Array<string | undefined>): string | undefined {
-  return values.filter((value): value is string => Boolean(value))
-    .sort((left, right) => right.length - left.length)[0]
-}
-
 function compactCreatorExcerpt(value: string): string {
   const compact = value.replace(/\s+/g, ' ').trim()
   return compact.length > CREATOR_EXCERPT_LENGTH ? `${compact.slice(0, CREATOR_EXCERPT_LENGTH)}…` : compact
@@ -130,4 +121,20 @@ function compactCreatorExcerpt(value: string): string {
 
 function isCreatorRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function creatorReviewDocument(value: unknown, script: string): ArtifactReviewModel | null {
+  if (!isCreatorRecord(value)) return null
+  const title = readableCreatorString(value.title) || '口播脚本'
+  const summary = longestCreatorField(value, ['summary', 'description'])
+  return {
+    kind: 'script',
+    title,
+    summary: summary && summary !== script ? summary : undefined,
+    script,
+    metrics: [],
+    characters: [],
+    sections: [],
+    warnings: [],
+  }
 }

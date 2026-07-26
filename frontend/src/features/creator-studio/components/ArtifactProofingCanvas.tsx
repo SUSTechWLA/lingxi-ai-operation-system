@@ -106,9 +106,8 @@ export default function ArtifactProofingCanvas({
   }
   const displayedContent = localText?.key === hydrationKey && localText.text !== undefined ? localText.text : content.content
   const displayedProjection = projectCreatorReviewContent(displayedContent)
-  const reviewTextProjection = projectCreatorReviewContent(content.reviewText)
   const readableText = safeCreatorReviewText(displayedProjection.canonicalText)
-  const selectionSource = safeCreatorReviewText(reviewTextProjection.canonicalText)
+  const selectionSource = safeCreatorReviewText(content.reviewText)
   const selectionEnabled = Boolean(textSurfaceRef && onTextSelectionChange)
   const invalidateMediaReview = () => {
     const next = mediaReviewAfterPlaybackFailure({

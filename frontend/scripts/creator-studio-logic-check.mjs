@@ -354,6 +354,12 @@ try {
   assert.equal(presentation.safeCreatorReviewText('  {"storageRef":"private"}'), undefined)
   assert.equal(presentation.safeCreatorReviewText('\n[{"kind":"LOG"}]'), undefined)
   assert.equal(presentation.safeCreatorReviewText({ prompt: '不得序列化' }), undefined)
+  const exactReviewText = '  原始审阅文本保留前后空白。 \n'
+  assert.equal(
+    presentation.safeCreatorReviewText(exactReviewText),
+    exactReviewText,
+    'selection sources preserve exact persisted UTF-16 text including leading and trailing whitespace',
+  )
   assert.equal(typeof presentation.creatorDirectEditText, 'function', 'direct editing needs an explicit safe canonical-text policy')
   assert.equal(typeof presentation.reconcileCreatorEditMode, 'function', 'artifact switches need a pure edit-mode reconciler')
   assert.equal(
@@ -475,6 +481,11 @@ try {
   assert.equal(projection.creatorReviewExcerpt(historical), '真实口播正文。')
   assert.equal(projection.creatorReviewExcerpt(historical).includes('{'), false)
   assert.equal(projection.projectCreatorReviewContent(historical).canonicalText, '真实口播正文。')
+  assert.equal(
+    presentation.safeCreatorReviewText(historical),
+    undefined,
+    'historical JSON envelopes remain non-selectable until a direct offset mapping exists',
+  )
   assert.equal(projection.creatorReviewExcerpt('{"toolCall":{"name":"debug"}}'), '内容已生成，选择后可查看。')
   assert.equal(projection.creatorReviewExcerpt('[{"toolCall"'), '内容已生成，选择后可查看。')
   const longestBodyProjection = projection.projectCreatorReviewContent({
@@ -488,11 +499,36 @@ try {
     '这是一段比标题和摘要更完整的生成提示词正文。',
     'the longest allow-listed creator body wins over titles and summaries',
   )
-  assert.equal(longestBodyProjection.document, null, 'a shorter structured model must not replace the canonical creator body')
+  assert.equal(
+    longestBodyProjection.document?.script,
+    longestBodyProjection.canonicalText,
+    'a sanitized document must retain the selected canonical creator body',
+  )
   assert.equal(
     projection.creatorReviewExcerpt({ data: { diagnostics: { toolCall: { name: 'debug' } } } }),
     '内容已生成，选择后可查看。',
     'unknown nested metadata must not be serialized into creator UI',
+  )
+  const sanitizedProjection = projection.projectCreatorReviewContent({
+    title: '允许的标题',
+    summary: '允许的摘要',
+    script: '允许的脚本正文。',
+    characters: [{ name: '禁止的角色' }],
+    cast: [{ name: '禁止的演员' }],
+    sections: [{ name: '禁止的段落', text: '禁止的段落正文' }],
+    scriptSpans: [{ name: '禁止的脚本片段' }],
+    segments: [{ name: '禁止的片段' }],
+    logline: '禁止的故事梗概',
+    documentTitle: '禁止的文档标题',
+    projectName: '禁止的项目名称',
+    estimatedDurationSec: 42,
+    warnings: ['禁止的警告'],
+  })
+  assert.equal(sanitizedProjection.document?.script, '允许的脚本正文。')
+  assert.doesNotMatch(
+    JSON.stringify(sanitizedProjection.document),
+    /禁止的角色|禁止的演员|禁止的段落|禁止的脚本片段|禁止的片段|禁止的故事梗概|禁止的文档标题|禁止的项目名称|禁止的警告|42/,
+    'creator review documents include only allow-listed creator content',
   )
 
   const emptyView = { steps: [] }
@@ -1170,7 +1206,7 @@ try {
   assert.doesNotMatch(proofingSource, /<video\b/, 'artifact proofing delegates video playback to the shared player')
   assert.match(proofingSource, /projectCreatorReviewContent\(displayedContent\)/)
   assert.doesNotMatch(proofingSource, /artifactContentText\(displayedContent\)/, 'creator plain-text proofing must never serialize non-string content')
-  assert.match(proofingSource, /projectCreatorReviewContent\(content\.reviewText\)/, 'scoped selection must use the exact reviewText contract')
+  assert.match(proofingSource, /const selectionSource = safeCreatorReviewText\(content\.reviewText\)/, 'scoped selection must use the exact reviewText contract')
   assert.doesNotMatch(
     proofingSource,
     /buildTextSelection\((?:displayedContent|readableText)/,
@@ -1237,7 +1273,7 @@ try {
   assert.match(agentReviewSource, /safeCreatorReviewText\(content\)/)
   assert.doesNotMatch(agentReviewSource, /looksLikeStructuredContent|qualityReview && content/, 'quality review content must use the shared safe-text boundary')
   assert.match(jsonViewerSource, /projectCreatorReviewContent/)
-  assert.match(projectionSource, /buildArtifactReviewModel/)
+  assert.doesNotMatch(projectionSource, /buildArtifactReviewModel/)
   assert.match(jsonViewerSource, /关键内容仍在准备中/)
   assert.match(jsonViewerSource, /artifact-review-script/)
   assert.match(jsonViewerSource, /结构化内容可整体优化，局部划选暂不可用。/)
