@@ -4,6 +4,7 @@ import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import type { ArtifactContentResponse } from '../../../utils/types'
 import { resolveCreatorArtifactMediaUrl } from '../logic'
 import type { CreatorReviewArtifact, CreatorReviewCategory } from '../creatorReviewArtifacts'
+import { creatorReviewExcerpt } from '../creatorReviewProjection'
 
 interface CreatorContentLibraryProps {
   projectId: string
@@ -165,7 +166,7 @@ function CreatorContentCard({
       ) : !preview ? (
         <div className="creator-content-preview-loading" aria-live="polite">正在准备预览…</div>
       ) : artifact.reviewCategory === 'text' ? (
-        <p className="creator-content-excerpt">{readableExcerpt(preview.content)}</p>
+        <p className="creator-content-excerpt">{creatorReviewExcerpt(preview.content)}</p>
       ) : artifact.reviewCategory === 'image' && mediaUrl ? (
         <button type="button" className="creator-content-image-thumbnail" onClick={onSelect} aria-label={`审阅${artifact.reviewLabel}`}>
           <img key={mediaLoadKey} src={mediaUrl} alt={`${artifact.reviewLabel}预览`} loading="lazy" onError={handleMediaError} />
@@ -193,28 +194,6 @@ function CreatorContentCard({
 
 function videoPreviewUrl(mediaUrl: string): string {
   return `${mediaUrl.split('#', 1)[0]}#t=0.001`
-}
-
-function readableExcerpt(value: unknown): string {
-  if (typeof value === 'string') return compactExcerpt(value)
-  if (!value || typeof value !== 'object') return '内容已生成，选择后可阅读全文。'
-  const record = value as Record<string, unknown>
-  for (const key of ['text', 'script', 'prompt', 'description', 'summary', 'title', 'narration', 'content', 'value']) {
-    const candidate = record[key]
-    if (typeof candidate === 'string' && candidate.trim()) return compactExcerpt(candidate)
-  }
-  for (const candidate of Object.values(record)) {
-    if (Array.isArray(candidate)) {
-      const readable = candidate.find(item => typeof item === 'string' && item.trim())
-      if (typeof readable === 'string') return compactExcerpt(readable)
-    }
-  }
-  return '内容已生成，选择后可阅读全文。'
-}
-
-function compactExcerpt(value: string): string {
-  const compact = value.replace(/\s+/g, ' ').trim()
-  return compact.length > 128 ? `${compact.slice(0, 128)}…` : compact
 }
 
 function previewDuration(content: ArtifactContentResponse): string | undefined {

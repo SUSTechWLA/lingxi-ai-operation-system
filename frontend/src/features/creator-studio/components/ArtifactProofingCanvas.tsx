@@ -3,6 +3,7 @@ import type { ArtifactContentResponse } from '../../../utils/types'
 import type { ArtifactSelection } from '../types'
 import type { TextSelectionDraft } from '../textSelection'
 import { artifactContentNeedsLocalHydration, classifyArtifactPresentation, safeCreatorReviewText } from '../artifactPresentation'
+import { projectCreatorReviewContent } from '../creatorReviewProjection'
 import { resolveCreatorArtifactMediaUrl } from '../logic'
 import { mediaReviewAfterPlaybackFailure } from '../mediaRange'
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
@@ -104,8 +105,10 @@ export default function ArtifactProofingCanvas({
     return <div className="artifact-file-fallback" role="alert"><div><strong>关键内容仍在准备中</strong><p>暂时无法读取这份内容，请重新读取当前内容后再试。</p></div></div>
   }
   const displayedContent = localText?.key === hydrationKey && localText.text !== undefined ? localText.text : content.content
-  const readableText = safeCreatorReviewText(displayedContent)
-  const selectionSource = safeCreatorReviewText(content.reviewText)
+  const displayedProjection = projectCreatorReviewContent(displayedContent)
+  const reviewTextProjection = projectCreatorReviewContent(content.reviewText)
+  const readableText = safeCreatorReviewText(displayedProjection.canonicalText)
+  const selectionSource = safeCreatorReviewText(reviewTextProjection.canonicalText)
   const selectionEnabled = Boolean(textSurfaceRef && onTextSelectionChange)
   const invalidateMediaReview = () => {
     const next = mediaReviewAfterPlaybackFailure({
@@ -212,9 +215,7 @@ export default function ArtifactProofingCanvas({
   if (presentation === 'text') {
     return selectionEnabled && selectionSource !== undefined && textSurfaceRef && onTextSelectionChange
       ? <CanonicalTextSelectionSurface source={selectionSource} surfaceRef={textSurfaceRef} onSelectionChange={onTextSelectionChange} />
-      : readableText === undefined
-      ? <JsonArtifactViewer content={displayedContent} />
-      : <pre className="artifact-raw-preview" tabIndex={0}>{readableText}</pre>
+      : <JsonArtifactViewer content={displayedContent} />
   }
   return <ArtifactFileFallback mediaFailed={mediaFailed} />
 }

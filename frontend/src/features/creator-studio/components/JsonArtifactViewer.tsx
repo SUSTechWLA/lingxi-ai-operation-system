@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState, type RefObject } from 'react'
-import {
-  buildArtifactReviewModel,
-  parseArtifactJson,
-  type ArtifactReviewModel,
-} from '../artifactPresentation'
+import type { ArtifactReviewModel } from '../artifactPresentation'
+import { projectCreatorReviewContent } from '../creatorReviewProjection'
 import type { TextSelectionDraft } from '../textSelection'
 import { CanonicalTextSelectionSurface } from './TextSelectionAssistant'
 
@@ -22,18 +19,18 @@ export default function JsonArtifactViewer({
   textSurfaceRef,
   onTextSelectionChange,
 }: JsonArtifactViewerProps) {
-  const parsed = useMemo(() => parseArtifactJson(content), [content])
-  const reviewModel = parsed.ok ? buildArtifactReviewModel(parsed.value) : null
+  const projection = useMemo(() => projectCreatorReviewContent(content), [content])
+  const reviewModel = projection.document
   const [selecting, setSelecting] = useState(false)
   useEffect(() => setSelecting(false), [selectionSource])
   const canSelect = selectionEnabled && selectionSource !== undefined && selectionSource.length > 0 && textSurfaceRef && onTextSelectionChange
 
-  if (!reviewModel && !canSelect) {
+  if (!reviewModel && !projection.canonicalText && !canSelect) {
     return (
       <section className="artifact-json-viewer" aria-label="内容审阅">
         <div className="artifact-parse-warning" role="alert">
           <strong>关键内容仍在准备中</strong>
-          <p>{parsed.ok ? '生成完成后会显示在这里。' : '暂时无法整理这份内容，请重新读取当前内容后再试。'}</p>
+          <p>{projection.excerpt}</p>
         </div>
       </section>
     )
@@ -54,7 +51,7 @@ export default function JsonArtifactViewer({
         ? <CanonicalTextSelectionSurface source={selectionSource} surfaceRef={textSurfaceRef} onSelectionChange={onTextSelectionChange} />
         : reviewModel
           ? <ArtifactReviewDocument model={reviewModel} />
-          : <PlainReviewDocument text={selectionSource ?? ''} />}
+          : <PlainReviewDocument text={projection.canonicalText ?? selectionSource ?? projection.excerpt} />}
       {selectionEnabled && !canSelect && reviewModel && <p className="artifact-selection-unavailable">结构化内容可整体优化，局部划选暂不可用。</p>}
     </section>
   )

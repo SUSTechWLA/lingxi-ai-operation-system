@@ -71,6 +71,7 @@ const focusBundle = join(temp, 'focus-cycle.mjs')
 const presentationBundle = join(temp, 'artifact-presentation.mjs')
 const authBundle = join(temp, 'auth.mjs')
 const reviewArtifactsBundle = join(temp, 'creator-review-artifacts.mjs')
+const projectionBundle = join(temp, 'creator-review-projection.mjs')
 const textSelectionBundle = join(temp, 'text-selection.mjs')
 const mediaRangeBundle = join(temp, 'media-range.mjs')
 
@@ -125,6 +126,16 @@ try {
     outfile: reviewArtifactsBundle,
   })
   const reviewArtifacts = await import(pathToFileURL(reviewArtifactsBundle))
+  const projectionUrl = new URL('../src/features/creator-studio/creatorReviewProjection.ts', import.meta.url)
+  assert.equal(existsSync(projectionUrl), true, 'creator review content needs one safe projection module')
+  await build({
+    entryPoints: [projectionUrl.pathname],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    outfile: projectionBundle,
+  })
+  const projection = await import(pathToFileURL(projectionBundle))
   await build({
     entryPoints: [textSelectionUrl.pathname],
     bundle: true,
@@ -456,6 +467,32 @@ try {
     presentation.buildArtifactReviewModel({ knowledgeTrace: { sourceCount: 0 }, artifacts: [] }),
     null,
     'pure technical metadata stays in the collapsed technical drawer',
+  )
+  const historical = JSON.stringify({ artifacts: [{
+    kind: 'VIDEO_SCRIPT',
+    content: JSON.stringify({ title: '30秒认识躺营', detailedScript: '真实口播正文。' }),
+  }] })
+  assert.equal(projection.creatorReviewExcerpt(historical), '真实口播正文。')
+  assert.equal(projection.creatorReviewExcerpt(historical).includes('{'), false)
+  assert.equal(projection.projectCreatorReviewContent(historical).canonicalText, '真实口播正文。')
+  assert.equal(projection.creatorReviewExcerpt('{"toolCall":{"name":"debug"}}'), '内容已生成，选择后可查看。')
+  assert.equal(projection.creatorReviewExcerpt('[{"toolCall"'), '内容已生成，选择后可查看。')
+  const longestBodyProjection = projection.projectCreatorReviewContent({
+    title: '短标题',
+    summary: '这是给创作者的简短摘要。',
+    prompt: '这是一段比标题和摘要更完整的生成提示词正文。',
+    script: '这是一段较短的脚本。',
+  })
+  assert.equal(
+    longestBodyProjection.canonicalText,
+    '这是一段比标题和摘要更完整的生成提示词正文。',
+    'the longest allow-listed creator body wins over titles and summaries',
+  )
+  assert.equal(longestBodyProjection.document, null, 'a shorter structured model must not replace the canonical creator body')
+  assert.equal(
+    projection.creatorReviewExcerpt({ data: { diagnostics: { toolCall: { name: 'debug' } } } }),
+    '内容已生成，选择后可查看。',
+    'unknown nested metadata must not be serialized into creator UI',
   )
 
   const emptyView = { steps: [] }
@@ -960,6 +997,7 @@ try {
     assert.equal(existsSync(prerequisiteUrl), true, `creator production prerequisite must be committed: ${prerequisiteUrl.pathname}`)
   }
   const proofingSource = readFileSync(new URL('../src/features/creator-studio/components/ArtifactProofingCanvas.tsx', import.meta.url), 'utf8')
+  const projectionSource = readFileSync(projectionUrl, 'utf8')
   const timelineSource = readFileSync(new URL('../src/features/creator-studio/components/CreatorProcessTimeline.tsx', import.meta.url), 'utf8')
   const reviewArtifactsSource = readFileSync(new URL('../src/features/creator-studio/creatorReviewArtifacts.ts', import.meta.url), 'utf8')
   const contentLibraryUrl = new URL('../src/features/creator-studio/components/CreatorContentLibrary.tsx', import.meta.url)
@@ -1002,6 +1040,7 @@ try {
     ['StepRegenerationDialog.tsx', regenerationDialogSource],
     ['ShotInspector.tsx', inspectorSource],
     ['ArtifactProofingCanvas.tsx', proofingSource],
+    ['JsonArtifactViewer.tsx', jsonViewerSource],
     ['PreviewDeliveryPanel.tsx', previewSource],
   ]))
   for (const functionName of [
@@ -1129,9 +1168,9 @@ try {
   assert.match(proofingSource, /onPointerCancel/)
   assert.match(proofingSource, /SimpleVideoPlayer/)
   assert.doesNotMatch(proofingSource, /<video\b/, 'artifact proofing delegates video playback to the shared player')
-  assert.match(proofingSource, /safeCreatorReviewText\(displayedContent\)/)
+  assert.match(proofingSource, /projectCreatorReviewContent\(displayedContent\)/)
   assert.doesNotMatch(proofingSource, /artifactContentText\(displayedContent\)/, 'creator plain-text proofing must never serialize non-string content')
-  assert.match(proofingSource, /safeCreatorReviewText\(content\.reviewText\)/, 'scoped selection must use the exact reviewText contract')
+  assert.match(proofingSource, /projectCreatorReviewContent\(content\.reviewText\)/, 'scoped selection must use the exact reviewText contract')
   assert.doesNotMatch(
     proofingSource,
     /buildTextSelection\((?:displayedContent|readableText)/,
@@ -1197,7 +1236,8 @@ try {
   assert.match(agentReviewSource, /review\.reviewOutput/, 'the readable gate uses the structured source payload when available')
   assert.match(agentReviewSource, /safeCreatorReviewText\(content\)/)
   assert.doesNotMatch(agentReviewSource, /looksLikeStructuredContent|qualityReview && content/, 'quality review content must use the shared safe-text boundary')
-  assert.match(jsonViewerSource, /buildArtifactReviewModel/)
+  assert.match(jsonViewerSource, /projectCreatorReviewContent/)
+  assert.match(projectionSource, /buildArtifactReviewModel/)
   assert.match(jsonViewerSource, /关键内容仍在准备中/)
   assert.match(jsonViewerSource, /artifact-review-script/)
   assert.match(jsonViewerSource, /结构化内容可整体优化，局部划选暂不可用。/)
@@ -1206,6 +1246,12 @@ try {
     /技术数据|查看原文|parsed\.raw|JSON\.stringify|JsonTree|downloadText|navigator\.clipboard|<pre\b/,
     'creator JSON proofing must never expose raw payloads or technical field views',
   )
+  assert.match(contentLibrarySource, /creatorReviewExcerpt\(preview\.content\)/)
+  assert.doesNotMatch(contentLibrarySource, /function readableExcerpt/)
+  assert.match(proofingSource, /projectCreatorReviewContent/)
+  assert.match(projectionSource, /creatorPayloadCandidates/)
+  assert.match(projectionSource, /MAX_CREATOR_PAYLOAD_DEPTH = 6/)
+  assert.match(projectionSource, /MAX_CREATOR_ARRAY_ENTRIES = 64/)
   assert.doesNotMatch(
     proofingSource,
     /<p>[^<]*artifact\.(?:mimeType|kind|sizeBytes)|formatBytes\s*\(|未知文件类型|打开原文件/,
