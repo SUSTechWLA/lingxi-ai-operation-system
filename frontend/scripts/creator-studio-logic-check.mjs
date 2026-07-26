@@ -303,6 +303,15 @@ try {
     null,
     'same-priority JSON candidates fail closed instead of guessing a source token',
   )
+  assert.deepEqual(
+    textSelection.rebaseTextSelection(
+      '{"content":"{\\"script\\":\\"  🙂开头\\\\n正文  \\"}"}',
+      '🙂开头\n正文',
+      { kind: 'text', start: 0, end: 7, text: '🙂开头\n正文' },
+    ),
+    { kind: 'text', start: 28, end: 37, text: '🙂开头\\\\n正文' },
+    'projector trimming preserves nested escaped JSON and emoji UTF-16 boundaries',
+  )
 
   const reviewClassificationCases = [
     [{ kind: 'JSON', mimeType: 'application/json', name: 'shot-02-image-request.json', artifactType: 'external_generation_request', generationKind: 'image' }, 'text'],

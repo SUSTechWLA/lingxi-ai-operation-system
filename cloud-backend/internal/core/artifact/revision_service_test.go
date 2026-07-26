@@ -213,7 +213,8 @@ func TestRevisionServiceSelectedInstructionNormalizesReplacementOnlyOutput(t *te
 		name, generated, want string
 	}{
 		{name: "fenced", generated: "```text\n新文\n```", want: "开头新文结尾"},
-		{name: "labeled", generated: "替换文字：新文", want: "开头新文结尾"},
+		{name: "standalone labeled", generated: "替换文字：\n新文", want: "开头新文结尾"},
+		{name: "standalone explanation label", generated: "Explanation:\n新文", want: "开头新文结尾"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			base := revisionTestArtifact()
@@ -227,6 +228,56 @@ func TestRevisionServiceSelectedInstructionNormalizesReplacementOnlyOutput(t *te
 			})
 			if err != nil || string(repo.lastCreate.Data) != test.want {
 				t.Fatalf("normalized revision error=%v data=%q want=%q", err, repo.lastCreate.Data, test.want)
+			}
+		})
+	}
+}
+
+func TestRevisionServiceSelectedInstructionPreservesLiteralPrefixes(t *testing.T) {
+	for _, generated := range []string{
+		"替换文字：这是正文",
+		"Replacement: literal content",
+		"说明：这是正文",
+		"Explanation: literal content",
+	} {
+		t.Run(generated, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.InlineJSON = "开头正文结尾"
+			repo := newRevisionServiceFake(t, base)
+			revisions := NewRevisionService(repo)
+			revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) { return generated, nil })
+			_, err := revisions.Revise(context.Background(), ReviseRequest{
+				ArtifactID: base.ID, Message: "rewrite",
+				Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+			})
+			var data []byte
+			if repo.lastCreate != nil {
+				data = repo.lastCreate.Data
+			}
+			if err != nil || string(data) != "开头"+generated+"结尾" {
+				t.Fatalf("literal prefix error=%v data=%q", err, data)
+			}
+		})
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRejectsInlineExplanatoryPhrases(t *testing.T) {
+	for _, generated := range []string{
+		"修改后的文字如下：新文",
+		"Here is the revised text: new text",
+	} {
+		t.Run(generated, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.InlineJSON = "开头正文结尾"
+			repo := newRevisionServiceFake(t, base)
+			revisions := NewRevisionService(repo)
+			revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) { return generated, nil })
+			result, err := revisions.Revise(context.Background(), ReviseRequest{
+				ArtifactID: base.ID, Message: "rewrite",
+				Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+			})
+			if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+				t.Fatalf("inline explanation must fail closed: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
 			}
 		})
 	}

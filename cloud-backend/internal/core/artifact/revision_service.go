@@ -451,17 +451,37 @@ func normalizeSelectedReplacement(generated string) (string, error) {
 	if strings.Contains(replacement, "```") {
 		return "", ErrRevisionInvalidReplacement
 	}
-	for _, prefix := range []string{
+	standaloneLabels := []string{
 		"替换文字：", "替换内容：", "修改后：", "修改后的文字：",
-		"Replacement:", "Replacement text:",
-	} {
-		if strings.HasPrefix(trimmed, prefix) {
-			replacement = strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
-			break
+		"说明：", "Replacement:", "Replacement text:", "Explanation:",
+	}
+	if firstNewline := strings.IndexByte(trimmed, '\n'); firstNewline >= 0 {
+		firstLine := strings.TrimSpace(strings.TrimSuffix(trimmed[:firstNewline], "\r"))
+		for _, label := range standaloneLabels {
+			if firstLine == label {
+				replacement = strings.TrimSpace(trimmed[firstNewline+1:])
+				if replacement == "" {
+					return "", ErrRevisionInvalidReplacement
+				}
+				break
+			}
 		}
 	}
-	for _, explanationPrefix := range []string{"以下是", "说明：", "Explanation:"} {
-		if strings.HasPrefix(strings.TrimSpace(replacement), explanationPrefix) {
+	normalizedOutput := strings.TrimSpace(replacement)
+	for _, explanationPrefix := range []string{
+		"修改后的文字如下：", "修改后的内容如下：",
+		"以下是修改后的文字：", "以下是修改后的内容：",
+	} {
+		if strings.HasPrefix(normalizedOutput, explanationPrefix) {
+			return "", ErrRevisionInvalidReplacement
+		}
+	}
+	lowerOutput := strings.ToLower(normalizedOutput)
+	for _, explanationPrefix := range []string{
+		"here is the revised text:", "here is the replacement text:",
+		"the revised text is:", "the replacement text is:",
+	} {
+		if strings.HasPrefix(lowerOutput, explanationPrefix) {
 			return "", ErrRevisionInvalidReplacement
 		}
 	}

@@ -116,11 +116,23 @@ function collectCanonicalJSONStringRanges(
   const candidates: Array<{ token: JSONStringToken; priority: number }> = []
   tokens.forEach((token, index) => {
     const rootToken = { ...token, boundaries: token.boundaries.map(toRootOffset) }
-    if (token.decoded === renderedSource && index > 0) {
+    const normalized = token.decoded.trim()
+    if (normalized === renderedSource && index > 0) {
       const key = tokens[index - 1]
       if (/^\s*:\s*$/.test(source.slice(key.fullEnd, token.fullStart))) {
         const priority = CREATOR_TEXT_FIELD_PRIORITY.indexOf(key.decoded as typeof CREATOR_TEXT_FIELD_PRIORITY[number])
-        if (priority >= 0) candidates.push({ token: rootToken, priority })
+        const leadingUnits = token.decoded.length - token.decoded.trimStart().length
+        const normalizedEnd = leadingUnits + normalized.length
+        if (
+          priority >= 0 &&
+          token.decoded.slice(leadingUnits, normalizedEnd) === renderedSource &&
+          rootToken.boundaries.length > normalizedEnd
+        ) {
+          candidates.push({
+            token: { ...rootToken, boundaries: rootToken.boundaries.slice(leadingUnits, normalizedEnd + 1) },
+            priority,
+          })
+        }
       }
     }
     if (depth < 6 && /^[{[]/.test(token.decoded.trimStart())) {
