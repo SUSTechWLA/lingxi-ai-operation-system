@@ -350,10 +350,11 @@ try {
     nodes: [{
       id: 'embedded-sensitive',
       status: 'FAILED',
-      error: 'Request failed: Authorization: Bearer super-secret at /Users/alice/.config/key.json; retry remains available',
+      error: String.raw`Request failed: Authorization: Bearer super-secret at /Users/alice/.config/key.json; UNC \\server\share\secret.txt and shallow /etc; keep https://docs.example.test/help?next=/guides/start#target=/reference/api; retry remains available`,
       request: {
         message: String.raw`Upload failed with Cookie: session=abc123; theme=dark from C:\Users\alice\AppData\Local\agent\session.json; keep this context`,
         context: 'Worker rejected credential=client-credential token: oauth-token secret=hidden-secret; useful tail remains',
+        pathBoundaries: String.raw`Inspect \\server\share\secret.txt and /etc, but keep https://docs.example.test/help?next=/guides/start&mode=plain#target=/reference/api`,
         download: 'https://cdn.example.test/render.mp4?X-Amz-Credential=AKIA-EXAMPLE&X-Amz-Signature=deadbeef&variant=preview',
         publicUrl: 'https://cdn.example.test/assets/video.mp4?variant=preview',
       },
@@ -362,10 +363,15 @@ try {
   const embeddedSensitiveError = embeddedSensitiveNodes[0]?.error ?? ''
   assert.match(embeddedSensitiveError, /Request failed:/)
   assert.match(embeddedSensitiveError, /retry remains available/)
-  assert.doesNotMatch(embeddedSensitiveError, /super-secret|\/Users\/alice/)
+  assert.doesNotMatch(embeddedSensitiveError, /super-secret|\/Users\/alice|shallow \/etc/)
+  assert.equal(embeddedSensitiveError.includes(String.raw`\\server\share`), false)
+  assert.match(embeddedSensitiveError, /UNC <local-path>\\secret\.txt and shallow <local-path>\/etc/)
+  assert.match(embeddedSensitiveError, /https:\/\/docs\.example\.test\/help\?next=\/guides\/start#target=\/reference\/api/)
   const embeddedSensitiveJson = serializeRedactedDiagnosticValue(embeddedSensitiveNodes[0]?.request)
-  for (const sensitiveValue of ['session=abc123', 'theme=dark', String.raw`C:\Users\alice`, 'client-credential', 'oauth-token', 'hidden-secret', 'AKIA-EXAMPLE', 'deadbeef']) {
-    assert.doesNotMatch(embeddedSensitiveJson, new RegExp(sensitiveValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  const embeddedSensitivePayload = JSON.parse(embeddedSensitiveJson)
+  const embeddedSensitiveText = Object.values(embeddedSensitivePayload).join('\n')
+  for (const sensitiveValue of ['session=abc123', 'theme=dark', String.raw`C:\Users\alice`, String.raw`\\server\share`, 'client-credential', 'oauth-token', 'hidden-secret', 'AKIA-EXAMPLE', 'deadbeef']) {
+    assert.equal(embeddedSensitiveText.includes(sensitiveValue), false)
   }
   assert.match(embeddedSensitiveJson, /Upload failed with/)
   assert.match(embeddedSensitiveJson, /keep this context/)
@@ -374,6 +380,11 @@ try {
   assert.match(embeddedSensitiveJson, /https:\/\/cdn\.example\.test\/render\.mp4/)
   assert.match(embeddedSensitiveJson, /variant=preview/)
   assert.match(embeddedSensitiveJson, /https:\/\/cdn\.example\.test\/assets\/video\.mp4\?variant=preview/)
+  assert.equal(
+    embeddedSensitivePayload.pathBoundaries.includes('https://docs.example.test/help?next=/guides/start&mode=plain#target=/reference/api'),
+    true,
+  )
+  assert.equal(embeddedSensitivePayload.pathBoundaries.includes('and /etc,'), false)
 
   assert.equal(diagnosticDurationMs('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.250Z'), 1250)
   assert.equal(diagnosticDurationMs('invalid', '2026-01-01T00:00:01.250Z'), undefined)

@@ -205,11 +205,42 @@ function localPathPlaceholder(value: string, separator: '/' | '\\'): string {
   return `<local-path>${separator}${fileName}`
 }
 
+function redactLocalPathsInText(value: string): string {
+  return value
+    .replace(
+      /\\\\[^\\\s"'<>|?*,;:()[\]{}]+\\[^\\\s"'<>|?*,;:()[\]{}]+(?:\\[^\\\s"'<>|?*,;:()[\]{}]+)*/g,
+      (path) => localPathPlaceholder(path, '\\'),
+    )
+    .replace(
+      /\b[A-Za-z]:\\(?:[^\\\s"'<>|?*,;:()[\]{}]+\\)+[^\\\s"'<>|?*,;:()[\]{}]+/g,
+      (path) => localPathPlaceholder(path, '\\'),
+    )
+    .replace(
+      /(^|[\s("'=])((?:\/[^/\s"'<>?,;:()[\]{}]+)+)/g,
+      (_match, prefix: string, path: string) => `${prefix}${localPathPlaceholder(path, '/')}`,
+    )
+}
+
+function redactLocalPathsOutsideHttpUrls(value: string): string {
+  const httpUrl = /\bhttps?:\/\/[^\s<>"']+/gi
+  let redacted = ''
+  let cursor = 0
+
+  for (const match of value.matchAll(httpUrl)) {
+    const index = match.index
+    redacted += redactLocalPathsInText(value.slice(cursor, index))
+    redacted += match[0]
+    cursor = index + match[0].length
+  }
+
+  return redacted + redactLocalPathsInText(value.slice(cursor))
+}
+
 function redactDiagnosticString(value: string): string {
   const wholePath = redactWholeLocalPath(value)
   if (wholePath !== value) return wholePath
 
-  return value
+  const secretRedacted = value
     .replace(
       /([?&](?:x-amz-(?:credential|signature|security-token)|x-goog-(?:credential|signature)|googleaccessid|signature|sig|access[_-]?token|token)=)[^&#\s]+/gi,
       (_match, prefix: string) => `${prefix}${REDACTED}`,
@@ -227,14 +258,8 @@ function redactDiagnosticString(value: string): string {
       /(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|credential|password|secret|token|signature)\b\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;&]+)/gi,
       (_match, prefix: string) => `${prefix}${REDACTED}`,
     )
-    .replace(
-      /\b[A-Za-z]:\\(?:[^\\\s"'<>|?*,;:()[\]{}]+\\)+[^\\\s"'<>|?*,;:()[\]{}]+/g,
-      (path) => localPathPlaceholder(path, '\\'),
-    )
-    .replace(
-      /(^|[\s("'=])((?:\/[^/\s"'<>?,;:()[\]{}]+){2,})/g,
-      (_match, prefix: string, path: string) => `${prefix}${localPathPlaceholder(path, '/')}`,
-    )
+
+  return redactLocalPathsOutsideHttpUrls(secretRedacted)
 }
 
 function redactValue(value: unknown, ancestors: WeakSet<object>): unknown {
