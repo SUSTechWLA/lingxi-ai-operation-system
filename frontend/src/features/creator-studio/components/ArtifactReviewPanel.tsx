@@ -31,10 +31,12 @@ import {
   classifyArtifactPresentation,
   creatorDirectEditText,
   reconcileCreatorEditMode,
+  safeCreatorReviewText,
 } from '../artifactPresentation'
 import type { CreatorReviewArtifact } from '../creatorReviewArtifacts'
 import { creatorRevisionInputsLocked, type TimeSelection } from '../mediaRange'
-import type { TextSelectionDraft } from '../textSelection'
+import { rebaseTextSelection, type TextSelectionDraft } from '../textSelection'
+import { projectCreatorReviewContent } from '../creatorReviewProjection'
 import ArtifactProofingCanvas from './ArtifactProofingCanvas'
 import ImageReviewDialog from './ImageReviewDialog'
 import TextSelectionAssistant from './TextSelectionAssistant'
@@ -70,7 +72,7 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
   const [error, setError] = useState('')
   const [working, setWorking] = useState(false)
   const imageRef = useRef<HTMLImageElement>(null)
-  const textSurfaceRef = useRef<HTMLPreElement>(null)
+  const textSurfaceRef = useRef<HTMLElement>(null)
   const instructionRef = useRef<HTMLTextAreaElement>(null)
   const selectionStart = useRef<{ x: number; y: number } | null>(null)
   const mountedRef = useRef(true)
@@ -372,8 +374,14 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
   }
 
   const handleTextSelectionChange = (draft: TextSelectionDraft | null) => {
-    setTextSelectionDraft(draft)
-    setSelection(current => draft?.selection ?? (current?.kind === 'text' ? null : current))
+    const backendSource = safeCreatorReviewText(content?.reviewText)
+    const renderedSource = projectCreatorReviewContent(content?.content).canonicalText ?? backendSource
+    const mappedSelection = draft && backendSource && renderedSource
+      ? rebaseTextSelection(backendSource, renderedSource, draft.selection)
+      : null
+    const mappedDraft = draft && mappedSelection ? { ...draft, selection: mappedSelection } : null
+    setTextSelectionDraft(mappedDraft)
+    setSelection(current => mappedDraft?.selection ?? (current?.kind === 'text' ? null : current))
   }
 
   const handleMediaSelectionChange = (nextSelection: TimeSelection | null) => {

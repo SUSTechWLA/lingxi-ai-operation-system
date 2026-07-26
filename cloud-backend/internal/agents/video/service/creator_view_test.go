@@ -1028,6 +1028,9 @@ func TestArtifactSelectionTextSupportsBrowserUTF16OffsetsAndExactProvenance(t *t
 			if got := revisions.reviseRequest.Provenance["selection"]; !reflect.DeepEqual(got, want) {
 				t.Fatalf("selection provenance = %#v, want %#v", got, want)
 			}
+			if revisions.reviseRequest.Message != "只改选中文字" || len(revisions.reviseRequest.DirectContent) != 0 {
+				t.Fatalf("selected instruction must reach the scoped generator path: %+v", revisions.reviseRequest)
+			}
 			if resolver.resolveCalls != 1 || resolver.resolvedArtifactID != base.ID {
 				t.Fatalf("resolver calls = %d artifact = %q", resolver.resolveCalls, resolver.resolvedArtifactID)
 			}

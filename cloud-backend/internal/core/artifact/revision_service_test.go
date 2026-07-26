@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -146,6 +147,103 @@ func TestRevisionServiceInstructionUsesGeneratorAndForwardsTextProvider(t *testi
 	}
 	if string(repo.lastCreate.Data) != "generator replacement" {
 		t.Fatalf("generated content was not versioned: %q", repo.lastCreate.Data)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionStoresOnlyScopedReplacement(t *testing.T) {
+	base := revisionTestArtifact()
+	base.InlineJSON = "开头正文结尾"
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	var systemPrompt, userPrompt string
+	revisions.SetConfig("", func(_ context.Context, system, user string, _ ReviseLLMOptions) (string, error) {
+		systemPrompt, userPrompt = system, user
+		return "新文", nil
+	})
+
+	_, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID,
+		Message:    "改得更简洁",
+		Provenance: map[string]interface{}{
+			"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Revise error: %v", err)
+	}
+	if got := string(repo.lastCreate.Data); got != "开头新文结尾" {
+		t.Fatalf("scoped revision data = %q, want %q", got, "开头新文结尾")
+	}
+	if strings.Contains(systemPrompt, base.InlineJSON) || strings.Contains(systemPrompt, "正文") {
+		t.Fatalf("stable system prompt contains request-specific source or selection: %q", systemPrompt)
+	}
+	if !strings.Contains(userPrompt, "只返回替换文字") || strings.Contains(userPrompt, "重新生成完整内容") {
+		t.Fatalf("selected revision user prompt did not request replacement-only output: %q", userPrompt)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionKeepsStablePromptAndBoundsContext(t *testing.T) {
+	source := strings.Repeat("前", 400) + "正文" + strings.Repeat("后", 400)
+	selection := map[string]interface{}{"kind": "text", "start": 400, "end": 402, "text": "正文"}
+	var systemPrompts, userPrompts []string
+	for index, message := range []string{"第一次修改", "第二次修改"} {
+		base := revisionTestArtifact()
+		base.ID = fmt.Sprintf("artifact-v%d", index+1)
+		base.InlineJSON = source
+		repo := newRevisionServiceFake(t, base)
+		revisions := NewRevisionService(repo)
+		revisions.SetConfig("", func(_ context.Context, system, user string, _ ReviseLLMOptions) (string, error) {
+			systemPrompts = append(systemPrompts, system)
+			userPrompts = append(userPrompts, user)
+			return "新文", nil
+		})
+		if _, err := revisions.Revise(context.Background(), ReviseRequest{
+			ArtifactID: base.ID, Message: message, Provenance: map[string]interface{}{"selection": selection},
+		}); err != nil {
+			t.Fatalf("Revise %d error: %v", index+1, err)
+		}
+	}
+	if len(systemPrompts) != 2 || systemPrompts[0] != systemPrompts[1] {
+		t.Fatalf("selected revisions changed stable system prompt: %#v", systemPrompts)
+	}
+	if len(userPrompts) != 2 || userPrompts[0] == userPrompts[1] {
+		t.Fatalf("selected revisions must vary only in user delta: %#v", userPrompts)
+	}
+	if strings.Contains(userPrompts[0], strings.Repeat("前", 321)) || strings.Contains(userPrompts[0], strings.Repeat("后", 321)) {
+		t.Fatalf("selected revision context exceeded 320 UTF-16 units: %q", userPrompts[0])
+	}
+}
+
+func TestRevisionServiceMalformedTextSelectionDoesNotFallBackToFullRevision(t *testing.T) {
+	repo := newRevisionServiceFake(t, revisionTestArtifact())
+	revisions := NewRevisionService(repo)
+	called := false
+	revisions.SetConfig("", func(_ context.Context, _, _ string, _ ReviseLLMOptions) (string, error) {
+		called = true
+		return "replacement", nil
+	})
+
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: "artifact-v1", Message: "rewrite",
+		Provenance: map[string]interface{}{
+			"selection": map[string]interface{}{"kind": "text", "start": "1", "end": 3, "text": "ri"},
+		},
+	})
+	if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || called || repo.lastCreate != nil {
+		t.Fatalf("malformed selection must fail closed: result=%+v err=%v called=%v create=%+v", result, err, called, repo.lastCreate)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRequiresScopedGenerator(t *testing.T) {
+	repo := newRevisionServiceFake(t, revisionTestArtifact())
+	result, err := NewRevisionService(repo).Revise(context.Background(), ReviseRequest{
+		ArtifactID: "artifact-v1", Message: "rewrite",
+		Provenance: map[string]interface{}{
+			"selection": map[string]interface{}{"kind": "text", "start": 0, "end": 8, "text": "original"},
+		},
+	})
+	if !errors.Is(err, ErrRevisionGeneration) || result != nil || repo.lastCreate != nil {
+		t.Fatalf("selected instruction without generator must not create a full local revision: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
 	}
 }
 

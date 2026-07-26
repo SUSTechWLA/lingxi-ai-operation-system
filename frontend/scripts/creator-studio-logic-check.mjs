@@ -256,6 +256,30 @@ try {
     null,
     'a selection over 4,000 UTF-16 code units is rejected',
   )
+  assert.deepEqual(
+    textSelection.buildTextSelectionFromLengths('开头正文结尾', [2, 2, 2], 1, 0, 1, 2),
+    { kind: 'text', start: 2, end: 4, text: '正文' },
+    'a selection spanning rendered text nodes resolves against one canonical UTF-16 source',
+  )
+  assert.equal(
+    textSelection.buildTextSelectionFromLengths('开头正文结尾', [2, 2, 2], 0, 1, 3, 0),
+    null,
+    'selection endpoints outside the rendered text-node list are rejected',
+  )
+  assert.deepEqual(
+    textSelection.rebaseTextSelection(
+      '{"script":"开头正文结尾"}',
+      '开头正文结尾',
+      { kind: 'text', start: 2, end: 4, text: '正文' },
+    ),
+    { kind: 'text', start: 13, end: 15, text: '正文' },
+    'projected readable text rebases to the identical slice in the immutable backend source',
+  )
+  assert.equal(
+    textSelection.rebaseTextSelection('x开头正文结尾|开头正文结尾', '开头正文结尾', { kind: 'text', start: 2, end: 4, text: '正文' }),
+    null,
+    'ambiguous projections never guess backend offsets',
+  )
 
   const reviewClassificationCases = [
     [{ kind: 'JSON', mimeType: 'application/json', name: 'shot-02-image-request.json', artifactType: 'external_generation_request', generationKind: 'image' }, 'text'],
@@ -1048,6 +1072,9 @@ try {
   const textSelectionAssistantUrl = new URL('../src/features/creator-studio/components/TextSelectionAssistant.tsx', import.meta.url)
   assert.equal(existsSync(textSelectionAssistantUrl), true, 'readable creator proofing needs one text selection assistant')
   const textSelectionAssistantSource = readFileSync(textSelectionAssistantUrl, 'utf8')
+  const reviewableTextSurfaceUrl = new URL('../src/features/creator-studio/components/ReviewableTextSurface.tsx', import.meta.url)
+  assert.equal(existsSync(reviewableTextSurfaceUrl), true, 'readable creator proofing needs one direct selection surface')
+  const reviewableTextSurfaceSource = existsSync(reviewableTextSurfaceUrl) ? readFileSync(reviewableTextSurfaceUrl, 'utf8') : ''
   const imageReviewDialogUrl = new URL('../src/features/creator-studio/components/ImageReviewDialog.tsx', import.meta.url)
   assert.equal(existsSync(imageReviewDialogUrl), true, 'image proofing needs a full-screen review dialog')
   const imageReviewDialogSource = existsSync(imageReviewDialogUrl) ? readFileSync(imageReviewDialogUrl, 'utf8') : ''
@@ -1295,7 +1322,10 @@ try {
   )
   assert.match(markdownViewerSource, /safeCreatorReviewText\(content\)/)
   assert.match(markdownViewerSource, /<JsonArtifactViewer content=\{content\}/)
-  assert.match(markdownViewerSource, /selectionSource/, 'Markdown selection must switch to the canonical manuscript source')
+  assert.match(markdownViewerSource, /<ReviewableTextSurface/, 'Markdown renders its canonical readable text as the direct selection surface')
+  assert.match(jsonViewerSource, /<ReviewableTextSurface/, 'JSON renders its projected canonical text as the direct selection surface')
+  assert.doesNotMatch(jsonViewerSource, /artifact-selection-mode|aria-pressed=|setSelecting/, 'JSON selection never requires a separate mode button')
+  assert.doesNotMatch(markdownViewerSource, /artifact-selection-mode|aria-pressed=|setSelecting/, 'Markdown selection never requires a separate mode button')
   assert.doesNotMatch(
     markdownViewerSource,
     /artifactContentText|源码|navigator\.clipboard|downloadText|artifact-raw-preview|<pre\b/,
@@ -1308,10 +1338,12 @@ try {
   assert.match(textSelectionAssistantSource, /只修改所选内容，使表达更精炼；保持上下文含义和未选内容不变。/)
   assert.match(textSelectionAssistantSource, /event\.key === 'Escape'/)
   assert.match(textSelectionAssistantSource, /removeAllRanges\(\)/)
-  assert.match(textSelectionAssistantSource, /buildTextSelection\(source, range\.startOffset, range\.endOffset\)/)
-  assert.doesNotMatch(textSelectionAssistantSource, /textContent[\s\S]*buildTextSelection/, 'selection offsets must never be reconstructed from decorated DOM text')
+  assert.match(reviewableTextSurfaceSource, /selectionFromDomRange/)
+  assert.match(reviewableTextSurfaceSource, /NodeFilter\.SHOW_TEXT/)
+  assert.doesNotMatch(reviewableTextSurfaceSource, /textContent[\s\S]*buildTextSelection/, 'selection offsets must never be reconstructed from decorated DOM text')
   assert.match(reviewSource, /内容已更新，请重新选择需要修改的文字。/)
   assert.match(reviewSource, /setSelection\(textSelectionDraft\.selection\)/)
+  assert.match(reviewSource, /rebaseTextSelection/, 'projected readable selections map back to the exact backend review source')
   assert.match(reviewSource, /setInstruction\(nextInstruction\)/)
   assert.match(reviewSource, /setMode\('instruction'\)/)
   assert.match(reviewSource, /instructionRef\.current\?\.focus\(\)/)

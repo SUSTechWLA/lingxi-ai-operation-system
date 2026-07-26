@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useState, type RefObject } from 'react'
+import { useMemo, type RefObject } from 'react'
 import type { ArtifactReviewModel } from '../artifactPresentation'
 import { projectCreatorReviewContent } from '../creatorReviewProjection'
 import type { TextSelectionDraft } from '../textSelection'
-import { CanonicalTextSelectionSurface } from './TextSelectionAssistant'
+import ReviewableTextSurface from './ReviewableTextSurface'
 
 interface JsonArtifactViewerProps {
   content: unknown
   selectionSource?: string
   selectionEnabled?: boolean
-  textSurfaceRef?: RefObject<HTMLPreElement>
+  textSurfaceRef?: RefObject<HTMLElement>
   onTextSelectionChange?: (draft: TextSelectionDraft | null) => void
 }
 
@@ -21,9 +21,8 @@ export default function JsonArtifactViewer({
 }: JsonArtifactViewerProps) {
   const projection = useMemo(() => projectCreatorReviewContent(content), [content])
   const reviewModel = projection.document
-  const [selecting, setSelecting] = useState(false)
-  useEffect(() => setSelecting(false), [selectionSource])
-  const canSelect = selectionEnabled && selectionSource !== undefined && selectionSource.length > 0 && textSurfaceRef && onTextSelectionChange
+  const reviewSource = projection.canonicalText ?? selectionSource
+  const canSelect = selectionEnabled && reviewSource !== undefined && reviewSource.length > 0 && textSurfaceRef && onTextSelectionChange
 
   if (!reviewModel && !projection.canonicalText && !canSelect) {
     return (
@@ -38,20 +37,11 @@ export default function JsonArtifactViewer({
 
   return (
     <section className="artifact-json-viewer" aria-label="内容审阅">
-      {canSelect && (
-        <div className="artifact-selection-mode">
-          <button type="button" className="creator-text-button" aria-pressed={selecting} onClick={() => {
-            setSelecting(current => !current)
-            onTextSelectionChange(null)
-          }}>{selecting ? '返回阅读视图' : '划选文字优化'}</button>
-          <span>{selecting ? '当前显示与接口完全一致的原稿，可精确划选。' : '局部优化会先切换到精确原稿。'}</span>
-        </div>
-      )}
-      {selecting && canSelect
-        ? <CanonicalTextSelectionSurface source={selectionSource} surfaceRef={textSurfaceRef} onSelectionChange={onTextSelectionChange} />
+      {canSelect
+        ? <ReviewableTextSurface source={reviewSource} surfaceRef={textSurfaceRef} onSelectionChange={onTextSelectionChange} />
         : reviewModel
           ? <ArtifactReviewDocument model={reviewModel} />
-          : <PlainReviewDocument text={projection.canonicalText ?? selectionSource ?? projection.excerpt} />}
+          : <PlainReviewDocument text={reviewSource ?? projection.excerpt} />}
       {selectionEnabled && !canSelect && reviewModel && <p className="artifact-selection-unavailable">结构化内容可整体优化，局部划选暂不可用。</p>}
     </section>
   )

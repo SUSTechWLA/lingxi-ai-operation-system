@@ -12,7 +12,7 @@ import MarkdownArtifactViewer from './MarkdownArtifactViewer'
 import MediaRangeControls from './MediaRangeControls'
 import SimpleAudioPlayer from './SimpleAudioPlayer'
 import SimpleVideoPlayer, { type MediaPlaybackState } from './SimpleVideoPlayer'
-import { CanonicalTextSelectionSurface } from './TextSelectionAssistant'
+import ReviewableTextSurface from './ReviewableTextSurface'
 
 type TimeSelection = Extract<ArtifactSelection, { kind: 'time' }>
 
@@ -25,7 +25,7 @@ interface ArtifactProofingCanvasProps {
   onImagePointerDown?: (event: PointerEvent<HTMLImageElement>) => void
   onImagePointerUp?: (event: PointerEvent<HTMLImageElement>) => void
   onImagePointerCancel?: () => void
-  textSurfaceRef?: RefObject<HTMLPreElement>
+  textSurfaceRef?: RefObject<HTMLElement>
   onTextSelectionChange?: (draft: TextSelectionDraft | null) => void
   mediaRangeResetKey?: string | number
   mediaRangeDisabled?: boolean
@@ -213,7 +213,7 @@ export default function ArtifactProofingCanvas({
   }
   if (presentation === 'text') {
     return selectionEnabled && selectionSource !== undefined && textSurfaceRef && onTextSelectionChange
-      ? <CanonicalTextSelectionSurface source={selectionSource} surfaceRef={textSurfaceRef} onSelectionChange={onTextSelectionChange} />
+      ? <ReviewableTextSurface source={selectionSource} surfaceRef={textSurfaceRef} onSelectionChange={onTextSelectionChange} />
       : <JsonArtifactViewer content={displayedContent} />
   }
   return <ArtifactFileFallback mediaFailed={mediaFailed} />

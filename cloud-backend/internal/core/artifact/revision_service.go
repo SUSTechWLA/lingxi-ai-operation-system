@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf16"
 )
 
-// RevisionGenerator generates full replacement content for an artifact.
+// RevisionGenerator generates either full replacement content or a selected
+// replacement fragment, as specified by the user prompt.
 type RevisionGenerator func(context.Context, string, string, ReviseLLMOptions) (string, error)
 
 // revisionArtifactStore is the subset of artifact operations shared by legacy
@@ -110,14 +112,34 @@ func (s *RevisionService) Revise(ctx context.Context, req ReviseRequest) (*Revis
 		if originalContent == "" {
 			return nil, ErrRevisionContentUnavailable
 		}
+		selection, hasSelection, selectionErr := textSelectionFromProvenance(req.Provenance)
+		if selectionErr != nil {
+			return nil, selectionErr
+		}
 		if s.generator != nil {
 			systemPrompt := buildRevisionSystemPrompt(base.StageName, s.readStageInstruction(base))
 			userPrompt := fmt.Sprintf("原始内容：\n\n%s\n\n---\n\n修改意见：\n%s\n\n请根据修改意见重新生成完整内容，保持原有的格式结构。", originalContent, req.Message)
+			if hasSelection {
+				userPrompt, err = buildSelectedRevisionUserPrompt(originalContent, selection, req.Message)
+				if err != nil {
+					return nil, err
+				}
+			}
 			revisedText, err := s.generator(ctx, systemPrompt, userPrompt, ReviseLLMOptions{ModelProvider: textModelProviderFromRevisionRequest(req.ModelProvider, req.ModelProviders)})
 			if err != nil {
 				return nil, fmt.Errorf("%w: %v", ErrRevisionGeneration, err)
 			}
-			data = []byte(revisedText)
+			if hasSelection {
+				spliced, spliceErr := spliceUTF16Selection(originalContent, selection, revisedText)
+				if spliceErr != nil {
+					return nil, spliceErr
+				}
+				data = []byte(spliced)
+			} else {
+				data = []byte(revisedText)
+			}
+		} else if hasSelection {
+			return nil, ErrRevisionGeneration
 		} else {
 			data = buildLocalRevisionData(base, req.Message)
 		}
@@ -328,17 +350,101 @@ func buildRevisionSystemPrompt(stageName string, stageInstruction string) string
 	prompt := fmt.Sprintf(`你是一个专业的内容返工助手，正在帮助用户修改「%s」阶段的产物。
 
 重要规则：
-- 严格根据用户的修改意见，在原始内容的基础上进行修改
-- 保持原始内容的整体结构和格式风格
+- 严格根据用户的修改意见，在给定内容的基础上进行修改
+- 严格遵循当前用户消息指定的输出范围
+- 保持原始内容的结构、格式风格和未指定部分
 - 只修改用户明确要求修改的部分，不要擅自改动其他内容
-- 如果原始内容是 Markdown 格式，输出 Markdown
-- 如果原始内容是 JSON 格式，输出严格符合相同结构的 JSON
-- 不要引入原始内容中没有的新字段、新章节或额外内容
-- 输出完整内容，不要省略或截断`, stageName)
+- 不要引入原始内容中没有的新字段、新章节或额外内容`, stageName)
 	if stageInstruction != "" {
 		prompt += "\n\n阶段说明（参考上下文）：\n" + stageInstruction
 	}
 	return prompt
+}
+
+type revisionTextSelection struct {
+	Start int
+	End   int
+	Text  string
+}
+
+func textSelectionFromProvenance(provenance map[string]interface{}) (revisionTextSelection, bool, error) {
+	value, exists := provenance["selection"]
+	if !exists {
+		return revisionTextSelection{}, false, nil
+	}
+	selection, ok := value.(map[string]interface{})
+	if !ok || selection["kind"] != "text" {
+		return revisionTextSelection{}, false, nil
+	}
+	start, startOK := selection["start"].(int)
+	end, endOK := selection["end"].(int)
+	text, textOK := selection["text"].(string)
+	if !startOK || !endOK || !textOK {
+		return revisionTextSelection{}, false, ErrRevisionInvalidReplacement
+	}
+	return revisionTextSelection{Start: start, End: end, Text: text}, true, nil
+}
+
+func buildSelectedRevisionUserPrompt(source string, selection revisionTextSelection, instruction string) (string, error) {
+	sourceUnits, err := validatedSelectionUnits(source, selection)
+	if err != nil {
+		return "", err
+	}
+	contextStart := max(0, selection.Start-320)
+	contextEnd := min(len(sourceUnits), selection.End+320)
+	before := string(utf16.Decode(sourceUnits[contextStart:selection.Start]))
+	selected := string(utf16.Decode(sourceUnits[selection.Start:selection.End]))
+	after := string(utf16.Decode(sourceUnits[selection.End:contextEnd]))
+	return fmt.Sprintf(`上文（最多 320 个 UTF-16 单元）：
+%s
+
+所选文字：
+%s
+
+下文（最多 320 个 UTF-16 单元）：
+%s
+
+修改意见：
+%s
+
+只返回替换文字，不要返回上下文、说明、标题或代码块。`, before, selected, after, instruction), nil
+}
+
+func spliceUTF16Selection(source string, selection revisionTextSelection, replacement string) (string, error) {
+	sourceUnits, err := validatedSelectionUnits(source, selection)
+	if err != nil {
+		return "", err
+	}
+	replacementUnits := utf16.Encode([]rune(replacement))
+	result := make([]uint16, 0, len(sourceUnits)-(selection.End-selection.Start)+len(replacementUnits))
+	result = append(result, sourceUnits[:selection.Start]...)
+	result = append(result, replacementUnits...)
+	result = append(result, sourceUnits[selection.End:]...)
+	return string(utf16.Decode(result)), nil
+}
+
+func validatedSelectionUnits(source string, selection revisionTextSelection) ([]uint16, error) {
+	units := utf16.Encode([]rune(source))
+	if selection.Start < 0 || selection.End <= selection.Start || selection.End > len(units) ||
+		selection.End-selection.Start > 4000 || splitsRevisionSurrogatePair(units, selection.Start) ||
+		splitsRevisionSurrogatePair(units, selection.End) {
+		return nil, ErrRevisionInvalidReplacement
+	}
+	selectedUnits := utf16.Encode([]rune(selection.Text))
+	if len(selectedUnits) != selection.End-selection.Start {
+		return nil, ErrRevisionInvalidReplacement
+	}
+	for index, unit := range selectedUnits {
+		if units[selection.Start+index] != unit {
+			return nil, ErrRevisionInvalidReplacement
+		}
+	}
+	return units, nil
+}
+
+func splitsRevisionSurrogatePair(units []uint16, offset int) bool {
+	return offset > 0 && offset < len(units) &&
+		utf16.IsSurrogate(rune(units[offset-1])) && utf16.IsSurrogate(rune(units[offset]))
 }
 
 func textModelProviderFromRevisionRequest(modelProvider, modelProviders map[string]interface{}) map[string]interface{} {

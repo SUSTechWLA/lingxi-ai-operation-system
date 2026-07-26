@@ -1,15 +1,9 @@
 import { useCallback, useEffect, type RefObject } from 'react'
-import { buildTextSelection, type TextSelectionDraft } from '../textSelection'
-
-interface CanonicalTextSelectionSurfaceProps {
-  source: string
-  surfaceRef: RefObject<HTMLPreElement>
-  onSelectionChange: (draft: TextSelectionDraft | null) => void
-}
+import type { TextSelectionDraft } from '../textSelection'
 
 interface TextSelectionAssistantProps {
   draft: TextSelectionDraft
-  surfaceRef: RefObject<HTMLPreElement>
+  surfaceRef: RefObject<HTMLElement>
   onQuickAction: (instruction: string) => void
   onCustomInstruction: () => void
   onClear: () => void
@@ -20,53 +14,6 @@ const QUICK_ACTIONS = [
   ['增强画面感', '只修改所选内容，增强画面感和具体细节；保持上下文含义和未选内容不变。'],
   ['优化节奏', '只修改所选内容，优化表达节奏；保持上下文含义和未选内容不变。'],
 ] as const
-
-export function CanonicalTextSelectionSurface({
-  source,
-  surfaceRef,
-  onSelectionChange,
-}: CanonicalTextSelectionSurfaceProps) {
-  const captureSelection = () => {
-    const surface = surfaceRef.current
-    const browserSelection = window.getSelection()
-    if (!surface || !browserSelection || browserSelection.rangeCount !== 1) {
-      onSelectionChange(null)
-      return
-    }
-    const range = browserSelection.getRangeAt(0)
-    const textNode = surface.firstChild
-    if (!textNode || range.startContainer !== textNode || range.endContainer !== textNode) {
-      onSelectionChange(null)
-      return
-    }
-    const selection = buildTextSelection(source, range.startOffset, range.endOffset)
-    if (!selection) {
-      onSelectionChange(null)
-      return
-    }
-    const rangeBounds = range.getBoundingClientRect()
-    const surfaceBounds = surface.getBoundingClientRect()
-    onSelectionChange({
-      selection,
-      anchor: {
-        left: rangeBounds.width > 0 ? rangeBounds.left + rangeBounds.width / 2 : surfaceBounds.left + 16,
-        top: rangeBounds.height > 0 ? rangeBounds.bottom + 8 : surfaceBounds.top + 16,
-      },
-    })
-  }
-
-  return (
-    <pre
-      ref={surfaceRef}
-      className="artifact-canonical-manuscript"
-      tabIndex={0}
-      role="document"
-      aria-label="可划选的原稿"
-      onMouseUp={captureSelection}
-      onKeyUp={captureSelection}
-    >{source}</pre>
-  )
-}
 
 export default function TextSelectionAssistant({
   draft,
