@@ -11,6 +11,8 @@ import {
 } from '../../services/api'
 import type { AuthUser } from '../../services/auth'
 import type { VideoProject } from '../../utils/types'
+import DiagnosticsSummary, { DiagnosticsProjectSelector } from './components/DiagnosticsSummary'
+import DiagnosticsTimeline from './components/DiagnosticsTimeline'
 import {
   isTerminalAgentRunStatus,
   loadProjectDiagnostics,
@@ -195,7 +197,7 @@ export default function DeveloperConsolePage({
   const partialSections = diagnostics?.errors ?? []
 
   return (
-    <div className="min-h-screen bg-background text-ink">
+    <div className="developer-diagnostics-page min-h-screen bg-background text-ink">
       <header className="border-b border-line bg-background-card">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="min-w-0">
@@ -238,9 +240,9 @@ export default function DeveloperConsolePage({
         </nav>
       </header>
 
-      <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <ProjectSelector projects={projects} selectedProjectId={selectedProjectId} onSelect={handleProjectSelect} />
-        <section className="overflow-hidden rounded-xl border border-line bg-background-card shadow-sm" aria-labelledby="diagnostics-view-title">
+      <main className="mx-auto min-w-0 w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <DiagnosticsProjectSelector projects={projects} selectedProjectId={selectedProjectId} onSelect={handleProjectSelect} />
+        <section className="min-w-0 overflow-hidden rounded-xl border border-line bg-background-card shadow-sm" aria-labelledby="diagnostics-view-title">
           <div className="border-b border-line px-5 py-4">
             <p className="m-0 text-xs font-bold uppercase tracking-[0.14em] text-ink-soft">当前视图</p>
             <h2 id="diagnostics-view-title" className="mb-0 mt-1 text-lg font-extrabold text-ink">{activeItem.label}</h2>
@@ -251,6 +253,8 @@ export default function DeveloperConsolePage({
             backendUnavailable={backendUnavailable}
             noProjects={noProjects}
             noRun={noRun}
+            currentView={currentView}
+            selectedProject={selectedProject}
             diagnostics={diagnostics}
             selectedRunFailed={selectedRunFailed}
             partialSections={partialSections}
@@ -261,49 +265,14 @@ export default function DeveloperConsolePage({
   )
 }
 
-function ProjectSelector({
-  projects,
-  selectedProjectId,
-  onSelect,
-}: {
-  projects: VideoProject[]
-  selectedProjectId: string
-  onSelect: (projectId: string) => void
-}) {
-  if (projects.length === 0) return null
-  const selectedProject = projects.find((project) => project.id === selectedProjectId)
-  return (
-    <div className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-line bg-background-card px-5 py-4">
-      <label className="min-w-0 flex-1 text-sm font-bold text-ink" htmlFor="diagnostics-project">
-        诊断项目
-        <select
-          id="diagnostics-project"
-          className="mt-2 block w-full rounded-md border border-line bg-background px-3 py-2 font-normal text-ink"
-          value={selectedProjectId}
-          onChange={(event) => onSelect(event.target.value)}
-        >
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}{project.currentRunId ? '' : '（无运行）'}
-            </option>
-          ))}
-        </select>
-      </label>
-      {selectedProject?.currentRunId ? (
-        <p className="m-0 max-w-full truncate text-xs text-ink-muted" title={selectedProject.currentRunId}>
-          Run: {selectedProject.currentRunId}
-        </p>
-      ) : null}
-    </div>
-  )
-}
-
 function DiagnosticsContent({
   projectLoading,
   diagnosticsLoading,
   backendUnavailable,
   noProjects,
   noRun,
+  currentView,
+  selectedProject,
   diagnostics,
   selectedRunFailed,
   partialSections,
@@ -313,6 +282,8 @@ function DiagnosticsContent({
   backendUnavailable: boolean
   noProjects: boolean
   noRun: boolean
+  currentView: DeveloperDiagnosticsView
+  selectedProject?: VideoProject
   diagnostics: ProjectDiagnosticsLoadResult | null
   selectedRunFailed: boolean
   partialSections: DiagnosticsDataSection[]
@@ -326,6 +297,21 @@ function DiagnosticsContent({
   if (noProjects) return <DiagnosticsNotice title="暂无项目" detail="当前账号还没有可供诊断的视频项目。" />
   if (noRun) return <DiagnosticsNotice title="项目暂无运行" detail="所选项目尚未关联运行，因而没有运行诊断数据。" />
   if (!diagnostics?.run) return <DiagnosticsNotice title="暂无诊断摘要" detail="所选运行尚未返回可显示的数据。" />
+
+  const diagnosticsView = currentView === 'summary' && selectedProject
+    ? <DiagnosticsSummary project={selectedProject} diagnostics={diagnostics} />
+    : currentView === 'timeline'
+      ? <DiagnosticsTimeline nodes={diagnostics.nodes ?? []} />
+      : (
+          <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <DiagnosticsMetric label="运行状态" value={diagnostics.run.status} />
+            <DiagnosticsMetric label="任务" value={diagnostics.run.taskId ?? '未关联'} />
+            <DiagnosticsMetric label="轨迹节点" value={String(diagnostics.nodes?.length ?? 0)} />
+            <DiagnosticsMetric label="审核记录" value={String(diagnostics.reviews?.length ?? 0)} />
+            <DiagnosticsMetric label="项目产物" value={String(diagnostics.artifacts?.length ?? 0)} />
+            <DiagnosticsMetric label="上下文记录" value={String(diagnostics.context?.length ?? 0)} />
+          </dl>
+        )
 
   return (
     <div className="space-y-5 px-5 py-6">
@@ -343,14 +329,7 @@ function DiagnosticsContent({
           </p>
         </div>
       ) : null}
-      <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <DiagnosticsMetric label="运行状态" value={diagnostics.run.status} />
-        <DiagnosticsMetric label="任务" value={diagnostics.run.taskId ?? '未关联'} />
-        <DiagnosticsMetric label="轨迹节点" value={String(diagnostics.nodes?.length ?? 0)} />
-        <DiagnosticsMetric label="审核记录" value={String(diagnostics.reviews?.length ?? 0)} />
-        <DiagnosticsMetric label="项目产物" value={String(diagnostics.artifacts?.length ?? 0)} />
-        <DiagnosticsMetric label="上下文记录" value={String(diagnostics.context?.length ?? 0)} />
-      </dl>
+      {diagnosticsView}
     </div>
   )
 }
