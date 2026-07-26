@@ -1,4 +1,11 @@
-import type { AgentReviewItem, AgentRun, Artifact } from '../../utils/types'
+import type {
+  AgentReviewItem,
+  AgentReviewListResponse,
+  AgentRun,
+  Artifact,
+  ArtifactListResponse,
+  VideoProject,
+} from '../../utils/types'
 
 export interface DiagnosticsNode {
   id: string
@@ -23,6 +30,138 @@ export interface DeveloperDiagnosticsSnapshot {
   nodes: DiagnosticsNode[]
   reviews: AgentReviewItem[]
   artifacts: Artifact[]
+}
+
+export type DiagnosticsDataSection = 'run' | 'trace' | 'reviews' | 'artifacts' | 'task' | 'context'
+
+export interface ProjectDiagnosticsLoadResult {
+  projectId: string
+  runId: string
+  run?: AgentRun
+  task?: unknown
+  context?: unknown[]
+  trace?: unknown
+  nodes?: DiagnosticsNode[]
+  reviews?: AgentReviewItem[]
+  artifacts?: Artifact[]
+  errors: DiagnosticsDataSection[]
+}
+
+export interface ProjectDiagnosticsApi {
+  getRun: (runId: string, signal?: AbortSignal) => Promise<AgentRun>
+  getTrace: (runId: string, signal?: AbortSignal) => Promise<unknown>
+  getReviews: (runId: string, signal?: AbortSignal) => Promise<AgentReviewListResponse>
+  getArtifacts: (projectId: string, signal?: AbortSignal) => Promise<ArtifactListResponse>
+  getTask: (taskId: string, signal?: AbortSignal) => Promise<unknown>
+  getContext: (taskId: string, signal?: AbortSignal) => Promise<unknown[]>
+}
+
+function updatedAtTime(project: Pick<VideoProject, 'updatedAt'>): number {
+  const timestamp = Date.parse(project.updatedAt)
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+export function sortDiagnosticsProjects<T extends Pick<VideoProject, 'id' | 'updatedAt'>>(
+  projects: readonly T[],
+): T[] {
+  return projects
+    .map((project, index) => ({ project, index }))
+    .sort((left, right) => (
+      updatedAtTime(right.project) - updatedAtTime(left.project) ||
+      left.index - right.index
+    ))
+    .map(({ project }) => project)
+}
+
+export function selectDiagnosticsProject<
+  T extends Pick<VideoProject, 'id' | 'updatedAt' | 'currentRunId'>,
+>(projects: readonly T[]): T | undefined {
+  const sorted = sortDiagnosticsProjects(projects)
+  return sorted.find((project) => Boolean(project.currentRunId)) ?? sorted[0]
+}
+
+export function isTerminalAgentRunStatus(status: AgentRun['status'] | string): boolean {
+  return status === 'SUCCESS' || status === 'FAILED' || status === 'CANCELLED'
+}
+
+function throwIfDiagnosticsAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  const error = new Error('Diagnostics request aborted')
+  error.name = 'AbortError'
+  throw error
+}
+
+export async function loadProjectDiagnostics({
+  projectId,
+  runId,
+  signal,
+  api,
+}: {
+  projectId: string
+  runId: string
+  signal?: AbortSignal
+  api: ProjectDiagnosticsApi
+}): Promise<ProjectDiagnosticsLoadResult> {
+  throwIfDiagnosticsAborted(signal)
+
+  const [runResult, traceResult, reviewsResult, artifactsResult] = await Promise.allSettled([
+    api.getRun(runId, signal),
+    api.getTrace(runId, signal),
+    api.getReviews(runId, signal),
+    api.getArtifacts(projectId, signal),
+  ])
+  throwIfDiagnosticsAborted(signal)
+
+  const result: ProjectDiagnosticsLoadResult = { projectId, runId, errors: [] }
+  if (runResult.status === 'fulfilled') result.run = runResult.value
+  else result.errors.push('run')
+
+  if (traceResult.status === 'fulfilled') {
+    result.trace = traceResult.value
+    result.nodes = buildDiagnosticsNodes(traceResult.value)
+  } else {
+    result.errors.push('trace')
+  }
+  if (reviewsResult.status === 'fulfilled') result.reviews = reviewsResult.value.reviews ?? []
+  else result.errors.push('reviews')
+  if (artifactsResult.status === 'fulfilled') result.artifacts = artifactsResult.value.artifacts ?? []
+  else result.errors.push('artifacts')
+
+  const taskId = result.run?.taskId
+  if (!taskId) return result
+
+  const [taskResult, contextResult] = await Promise.allSettled([
+    api.getTask(taskId, signal),
+    api.getContext(taskId, signal),
+  ])
+  throwIfDiagnosticsAborted(signal)
+
+  if (taskResult.status === 'fulfilled') result.task = taskResult.value
+  else result.errors.push('task')
+  if (contextResult.status === 'fulfilled') result.context = contextResult.value
+  else result.errors.push('context')
+
+  return result
+}
+
+export function mergeProjectDiagnostics(
+  previous: ProjectDiagnosticsLoadResult | null,
+  next: ProjectDiagnosticsLoadResult,
+): ProjectDiagnosticsLoadResult {
+  if (!previous || previous.projectId !== next.projectId || previous.runId !== next.runId) return next
+
+  const failed = new Set(next.errors)
+  return {
+    ...previous,
+    ...next,
+    run: failed.has('run') ? previous.run : next.run,
+    trace: failed.has('trace') ? previous.trace : next.trace,
+    nodes: failed.has('trace') ? previous.nodes : next.nodes,
+    reviews: failed.has('reviews') ? previous.reviews : next.reviews,
+    artifacts: failed.has('artifacts') ? previous.artifacts : next.artifacts,
+    task: failed.has('task') ? previous.task : next.task,
+    context: failed.has('context') ? previous.context : next.context,
+  }
 }
 
 const REDACTED = '[REDACTED]'

@@ -125,8 +125,8 @@ export const instantiateWorkflow = async (
   return response.data.data
 }
 
-export const fetchVideoProjects = async (): Promise<VideoProjectListResponse> => {
-  const response = await api.get<ApiResponse<VideoProjectListResponse>>('/video-projects')
+export const fetchVideoProjects = async (signal?: AbortSignal): Promise<VideoProjectListResponse> => {
+  const response = await api.get<ApiResponse<VideoProjectListResponse>>('/video-projects', { signal })
   return response.data.data
 }
 
@@ -172,9 +172,10 @@ export const approveVideoStage = async (
 }
 
 export const fetchProjectArtifacts = async (
-  projectId: string
+  projectId: string,
+  signal?: AbortSignal,
 ): Promise<ArtifactListResponse> => {
-  const response = await api.get<ApiResponse<ArtifactListResponse>>(`/video-projects/${projectId}/artifacts`)
+  const response = await api.get<ApiResponse<ArtifactListResponse>>(`/video-projects/${projectId}/artifacts`, { signal })
   return response.data.data
 }
 
@@ -253,10 +254,21 @@ export const startAgentRun = async (
 }
 
 export const getAgentRun = async (
-  runId: string
+  runId: string,
+  signal?: AbortSignal,
 ): Promise<AgentRun> => {
-  const response = await api.get<ApiResponse<{ run: AgentRun; task: unknown }>>(`/agent/runs/${runId}`)
+  const response = await api.get<ApiResponse<{ run: AgentRun; task: unknown }>>(`/agent/runs/${runId}`, { signal })
   return response.data.data.run
+}
+
+export async function getTaskDetails(taskId: string, signal?: AbortSignal): Promise<unknown> {
+  const response = await api.get<ApiResponse<unknown>>(`/task/${encodeURIComponent(taskId)}`, { signal })
+  return response.data.data
+}
+
+export async function getTaskContext(taskId: string, signal?: AbortSignal): Promise<unknown[]> {
+  const response = await api.get<ApiResponse<unknown[]>>(`/task/${encodeURIComponent(taskId)}/context`, { signal })
+  return Array.isArray(response.data.data) ? response.data.data : []
 }
 
 export const retryLatestFailedAgentNode = async (taskId: string): Promise<string> => {
@@ -273,16 +285,18 @@ export const retryLatestFailedAgentNode = async (taskId: string): Promise<string
 }
 
 export const getAgentRunTrace = async (
-  runId: string
+  runId: string,
+  signal?: AbortSignal,
 ): Promise<unknown> => {
-  const response = await api.get<ApiResponse<unknown>>(`/agent/runs/${runId}/trace`)
+  const response = await api.get<ApiResponse<unknown>>(`/agent/runs/${runId}/trace`, { signal })
   return response.data.data
 }
 
 export const getAgentRunReviews = async (
-  runId: string
+  runId: string,
+  signal?: AbortSignal,
 ): Promise<AgentReviewListResponse> => {
-  const response = await api.get<ApiResponse<AgentReviewListResponse>>(`/agent/runs/${runId}/reviews`)
+  const response = await api.get<ApiResponse<AgentReviewListResponse>>(`/agent/runs/${runId}/reviews`, { signal })
   return response.data.data
 }
 

@@ -124,13 +124,18 @@ try {
     buildDiagnosticsNodes,
     classifyDiagnosticTransport,
     diagnosticDurationMs,
+    isTerminalAgentRunStatus,
+    loadProjectDiagnostics,
     redactDiagnosticValue,
+    selectDiagnosticsProject,
     serializeRedactedDiagnosticValue,
   } = await import(pathToFileURL(developerDiagnosticsOutfile))
+  const diagnosticsApiSource = await readFile(new URL('../src/services/api.ts', import.meta.url), 'utf8')
   const directorPageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
   const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
   const creatorShellSource = await readFile(new URL('../src/features/creator-studio/CreatorShell.tsx', import.meta.url), 'utf8')
   const developerConsoleSource = await readFile(new URL('../src/features/developer-console/DeveloperConsolePage.tsx', import.meta.url), 'utf8')
+  const developerDiagnosticsSource = await readFile(new URL('../src/features/developer-console/developerDiagnostics.ts', import.meta.url), 'utf8')
   assert.match(creatorShellSource, /开始创作/)
   assert.match(creatorShellSource, /我的视频/)
   for (const forbiddenCreatorTerm of ['追踪', '角色', '原始产物', 'Provider', 'Run']) {
@@ -181,6 +186,26 @@ try {
   assert.doesNotMatch(developerConsoleSource, /DirectorStudioPage/)
   assert.doesNotMatch(developerConsoleSource, /DirectorNavKey/)
   assert.match(developerConsoleSource, /DeveloperDiagnosticsView/)
+  for (const apiName of [
+    'fetchVideoProjects',
+    'getAgentRun',
+    'getAgentRunTrace',
+    'getAgentRunReviews',
+    'fetchProjectArtifacts',
+    'getTaskDetails',
+    'getTaskContext',
+  ]) {
+    assert.match(developerConsoleSource, new RegExp(`\\b${apiName}\\b`))
+  }
+  assert.match(diagnosticsApiSource, /export (?:const|async function) getTaskDetails/)
+  assert.match(diagnosticsApiSource, /`\/task\/\$\{encodeURIComponent\(taskId\)\}`/)
+  assert.match(diagnosticsApiSource, /export (?:const|async function) getTaskContext/)
+  assert.match(diagnosticsApiSource, /`\/task\/\$\{encodeURIComponent\(taskId\)\}\/context`/)
+  assert.match(developerConsoleSource, /new AbortController\(\)/)
+  assert.match(developerConsoleSource, /controller\.abort\(\)/)
+  assert.match(developerConsoleSource, /window\.setInterval/)
+  assert.match(developerConsoleSource, /window\.clearInterval/)
+  assert.match(developerDiagnosticsSource, /Promise\.allSettled/)
   assert.equal(replaceHashRoute('#/create'), '#/create')
   assert.equal(cycleFocusIndex(0, 2, false), 1)
   assert.equal(cycleFocusIndex(1, 2, false), 0)
@@ -394,6 +419,72 @@ try {
   )
   assert.deepEqual(buildDiagnosticsNodes({ nodes: 'not-an-array' }), [])
   assert.deepEqual(buildDiagnosticsNodes(null), [])
+
+  const projectFixtures = [
+    { id: 'newest-without-run', updatedAt: '2026-01-04T00:00:00.000Z' },
+    { id: 'older-with-run', currentRunId: 'run-old', updatedAt: '2026-01-02T00:00:00.000Z' },
+    { id: 'newest-with-run', currentRunId: 'run-new', updatedAt: '2026-01-03T00:00:00.000Z' },
+  ]
+  assert.equal(selectDiagnosticsProject(projectFixtures)?.id, 'newest-with-run')
+  assert.deepEqual(projectFixtures.map((project) => project.id), [
+    'newest-without-run', 'older-with-run', 'newest-with-run',
+  ])
+  assert.equal(selectDiagnosticsProject([
+    { id: 'older', updatedAt: '2026-01-02T00:00:00.000Z' },
+    { id: 'newer', updatedAt: '2026-01-03T00:00:00.000Z' },
+  ])?.id, 'newer')
+  assert.equal(selectDiagnosticsProject([]), undefined)
+  assert.equal(isTerminalAgentRunStatus('SUCCESS'), true)
+  assert.equal(isTerminalAgentRunStatus('FAILED'), true)
+  assert.equal(isTerminalAgentRunStatus('CANCELLED'), true)
+  assert.equal(isTerminalAgentRunStatus('RUNNING'), false)
+  assert.equal(isTerminalAgentRunStatus('CREATED'), false)
+
+  const scopedCalls = []
+  const scopedController = new AbortController()
+  const scopedResult = await loadProjectDiagnostics({
+    projectId: 'project-selected',
+    runId: 'run-selected',
+    signal: scopedController.signal,
+    api: {
+      getRun: async (runId, signal) => {
+        scopedCalls.push(['run', runId, signal])
+        return { id: runId, taskId: 'task-selected', message: 'diagnose', status: 'RUNNING', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:01.000Z' }
+      },
+      getTrace: async (runId, signal) => {
+        scopedCalls.push(['trace', runId, signal])
+        throw new Error('trace unavailable')
+      },
+      getReviews: async (runId, signal) => {
+        scopedCalls.push(['reviews', runId, signal])
+        return { runId, reviews: [{ id: 'review-1', nodeId: 'node-1', status: 'PENDING' }] }
+      },
+      getArtifacts: async (projectId, signal) => {
+        scopedCalls.push(['artifacts', projectId, signal])
+        return { artifacts: [{ id: 'artifact-1', projectId }] }
+      },
+      getTask: async (taskId, signal) => {
+        scopedCalls.push(['task', taskId, signal])
+        return { id: taskId }
+      },
+      getContext: async (taskId, signal) => {
+        scopedCalls.push(['context', taskId, signal])
+        return [{ taskId }]
+      },
+    },
+  })
+  assert.equal(scopedResult.projectId, 'project-selected')
+  assert.equal(scopedResult.runId, 'run-selected')
+  assert.equal(scopedResult.run?.id, 'run-selected')
+  assert.deepEqual(scopedResult.task, { id: 'task-selected' })
+  assert.deepEqual(scopedResult.context, [{ taskId: 'task-selected' }])
+  assert.deepEqual(scopedResult.reviews.map((review) => review.id), ['review-1'])
+  assert.deepEqual(scopedResult.artifacts.map((artifact) => artifact.id), ['artifact-1'])
+  assert.deepEqual(scopedResult.errors, ['trace'])
+  assert.equal(scopedCalls.find(([name]) => name === 'artifacts')?.[1], 'project-selected')
+  assert.equal(scopedCalls.find(([name]) => name === 'task')?.[1], 'task-selected')
+  assert.equal(scopedCalls.find(([name]) => name === 'context')?.[1], 'task-selected')
+  assert.equal(scopedCalls.every(([, , signal]) => signal === scopedController.signal), true)
 
   assert.match(directorPageSource, /放大播放/)
   assert.doesNotMatch(directorPageSource, /图片预览已就绪|照片预览已就绪|视频预览已就绪|参考图已登记|产物已登记/)
