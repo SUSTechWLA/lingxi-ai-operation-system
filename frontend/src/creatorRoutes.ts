@@ -1,6 +1,12 @@
-import type { DirectorNavKey } from './pages/directorStudioLogic'
-
 export const CREATOR_STEP_IDS = ['requirements', 'direction', 'script', 'shots', 'preview', 'delivery'] as const
+
+export type DeveloperDiagnosticsView =
+  | 'summary'
+  | 'timeline'
+  | 'tools'
+  | 'artifacts'
+  | 'gates'
+  | 'recovery'
 
 type CreatorPageRoute =
   | { kind: 'creator'; page: 'create'; shouldReplace?: true }
@@ -8,9 +14,9 @@ type CreatorPageRoute =
   | { kind: 'creator'; page: 'settings'; shouldReplace?: true }
   | { kind: 'creator'; page: 'step'; projectId: string; stepId: typeof CREATOR_STEP_IDS[number]; shouldReplace?: true }
 
-export type AppRoute = CreatorPageRoute | { kind: 'developer'; view: DirectorNavKey }
+export type AppRoute = CreatorPageRoute | { kind: 'developer'; view: DeveloperDiagnosticsView }
 
-const developerViews: readonly DirectorNavKey[] = ['overview', 'review', 'trace', 'assets', 'roles', 'export', 'system']
+const developerViews: readonly DeveloperDiagnosticsView[] = ['summary', 'timeline', 'tools', 'artifacts', 'gates', 'recovery']
 
 export function parseAppRoute(hash: string, developerConsoleEnabled: boolean): AppRoute {
   if (!hash) return { kind: 'creator', page: 'create' }
@@ -31,7 +37,7 @@ export function parseAppRoute(hash: string, developerConsoleEnabled: boolean): A
   }
   if (decoded[0] === 'developer') {
     if (!developerConsoleEnabled) return creatorFallback()
-    if (decoded.length === 1) return { kind: 'developer', view: 'overview' }
+    if (decoded.length === 1) return { kind: 'developer', view: 'summary' }
     if (decoded.length === 2 && isDeveloperView(decoded[1])) return { kind: 'developer', view: decoded[1] }
   }
   return creatorFallback()
@@ -54,8 +60,8 @@ function isCreatorStepId(value: string | undefined): value is typeof CREATOR_STE
   return Boolean(value && CREATOR_STEP_IDS.includes(value as typeof CREATOR_STEP_IDS[number]))
 }
 
-function isDeveloperView(value: string | undefined): value is DirectorNavKey {
-  return Boolean(value && developerViews.includes(value as DirectorNavKey))
+function isDeveloperView(value: string | undefined): value is DeveloperDiagnosticsView {
+  return Boolean(value && developerViews.includes(value as DeveloperDiagnosticsView))
 }
 
 function creatorFallback(): AppRoute {

@@ -3,7 +3,7 @@ import AuthScreen from './components/AuthScreen'
 import { fetchCurrentUser, getStoredAuthSession, isDefinitiveAuthFailure, logout, type AuthUser } from './services/auth'
 import { fetchLocalAgentHealth } from './services/localAgent'
 import CreatorShell from './features/creator-studio/CreatorShell'
-import { parseAppRoute, replaceHashRoute, type AppRoute } from './creatorRoutes'
+import { parseAppRoute, replaceHashRoute, type AppRoute, type DeveloperDiagnosticsView } from './creatorRoutes'
 
 const developerConsoleEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEVELOPER_CONSOLE === '1'
 const DeveloperConsolePage = developerConsoleEnabled ? lazy(() => import('./features/developer-console/DeveloperConsolePage')) : null
@@ -15,6 +15,10 @@ function currentRoute(): AppRoute {
 function replaceCreatorHash() {
   const nextHash = replaceHashRoute('#/create')
   if (window.location.hash !== nextHash) window.history.replaceState(null, '', nextHash)
+}
+
+function developerHash(view: DeveloperDiagnosticsView) {
+  return `#/developer/${view}`
 }
 
 function App() {
@@ -102,7 +106,7 @@ function App() {
           user={authUser}
           serviceStatus={serviceStatus}
           currentView={route.view}
-          onViewChange={(view) => { window.location.hash = `#/developer/${view}` }}
+          onViewChange={(view) => { window.location.hash = developerHash(view) }}
           onLogout={handleLogout}
         />
       </Suspense>

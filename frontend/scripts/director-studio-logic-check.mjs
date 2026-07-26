@@ -121,7 +121,6 @@ try {
     assert.doesNotMatch(creatorShellSource, new RegExp(forbiddenCreatorTerm))
   }
   assert.doesNotMatch(creatorShellSource, /developer-console|DeveloperConsolePage|DirectorStudioPage/)
-  assert.match(developerConsoleSource, /import DirectorStudioPage from ['"]\.\.\/\.\.\/pages\/DirectorStudioPage['"]/)
   assert.match(appSource, /hashchange/)
   assert.match(appSource, /removeEventListener\('hashchange', syncRoute\)/)
   assert.match(appSource, /history\.replaceState\(null, '', nextHash\)/)
@@ -154,11 +153,18 @@ try {
   assert.deepEqual(parseAppRoute('#/videos/project/steps/not-a-step', false), { kind: 'creator', page: 'create', shouldReplace: true })
   assert.deepEqual(parseAppRoute('#/videos/project/steps/script/extra', false), { kind: 'creator', page: 'create', shouldReplace: true })
   assert.deepEqual(parseAppRoute('#/videos/%E0%A4%A/steps/script', false), { kind: 'creator', page: 'create', shouldReplace: true })
-  assert.deepEqual(parseAppRoute('#/developer/review', false), { kind: 'creator', page: 'create', shouldReplace: true })
-  for (const view of ['overview', 'review', 'trace', 'assets', 'roles', 'export', 'system']) {
+  const diagnosticsViews = ['summary', 'timeline', 'tools', 'artifacts', 'gates', 'recovery']
+  for (const developerRoute of ['#/developer', ...diagnosticsViews.map((view) => `#/developer/${view}`), '#/developer/not-a-view']) {
+    assert.deepEqual(parseAppRoute(developerRoute, false), { kind: 'creator', page: 'create', shouldReplace: true })
+  }
+  assert.deepEqual(parseAppRoute('#/developer', true), { kind: 'developer', view: 'summary' })
+  for (const view of diagnosticsViews) {
     assert.deepEqual(parseAppRoute(`#/developer/${view}`, true), { kind: 'developer', view })
   }
   assert.deepEqual(parseAppRoute('#/developer/not-a-view', true), { kind: 'creator', page: 'create', shouldReplace: true })
+  assert.doesNotMatch(developerConsoleSource, /DirectorStudioPage/)
+  assert.doesNotMatch(developerConsoleSource, /DirectorNavKey/)
+  assert.match(developerConsoleSource, /DeveloperDiagnosticsView/)
   assert.equal(replaceHashRoute('#/create'), '#/create')
   assert.equal(cycleFocusIndex(0, 2, false), 1)
   assert.equal(cycleFocusIndex(1, 2, false), 0)
