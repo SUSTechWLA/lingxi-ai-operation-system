@@ -81,10 +81,53 @@ export function classifyCreatorReviewArtifact(
 }
 
 const reviewCategoryLabels: Record<CreatorReviewCategory, string> = {
-  text: '文字与提示词',
+  text: '文字内容',
   image: '参考图',
   video: '视频片段',
   audio: '语音',
+}
+
+const artifactTypeReviewLabels: Readonly<Record<string, string>> = {
+  shot_keyframe: '参考图',
+  reference_image: '参考图',
+  shot_reference: '参考图',
+  shot_video_clip: '视频片段',
+  composited_shot_video: '合成视频',
+  hyperframes_shot: '视频片段',
+  shot_audio: '语音',
+  narration_master: '旁白',
+  recorded_narration: '录制旁白',
+  uploaded_narration: '录制旁白',
+  voice_reference: '参考语音',
+  publish_copy: '发布文案',
+  video_script: '视频脚本',
+  video_prompts: '视频提示词',
+  keyframe_prompts: '关键帧提示词',
+}
+
+const generationRequestLabels: Readonly<Record<string, string>> = {
+  image: '图片提示词',
+  video: '视频提示词',
+  audio: '语音提示词',
+}
+
+function creatorReviewLabel(
+  artifactType: string | undefined,
+  generationKind: string | undefined,
+  reviewCategory: CreatorReviewCategory,
+): string {
+  const safeArtifactType = normalized(artifactType)
+  const safeGenerationKind = normalized(generationKind)
+  if (safeArtifactType === 'external_generation_request') {
+    return generationRequestLabels[safeGenerationKind] || reviewCategoryLabels.text
+  }
+  return artifactTypeReviewLabels[safeArtifactType] || reviewCategoryLabels[reviewCategory]
+}
+
+function creatorShotLabel(value: string | undefined): string | undefined {
+  const shotId = value?.trim()
+  if (!shotId || !/^(?:shot[-_ ]?)?\d{1,4}$/iu.test(shotId)) return undefined
+  return shotId
 }
 
 export function projectCreatorReviewArtifacts(
@@ -94,11 +137,11 @@ export function projectCreatorReviewArtifacts(
     .flatMap((artifact) => {
       const reviewCategory = classifyCreatorReviewArtifact(artifact)
       if (!reviewCategory) return []
-      const shotLabel = artifact.relatedShotId?.trim() || undefined
+      const shotLabel = creatorShotLabel(artifact.relatedShotId)
       return [{
         ...artifact,
         reviewCategory,
-        reviewLabel: artifact.name.trim() || reviewCategoryLabels[reviewCategory],
+        reviewLabel: creatorReviewLabel(artifact.artifactType, artifact.generationKind, reviewCategory),
         ...(shotLabel ? { shotLabel } : {}),
       }]
     })

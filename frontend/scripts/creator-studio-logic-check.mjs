@@ -278,7 +278,47 @@ try {
   ])
   assert.deepEqual(projectedReviewArtifacts.map(item => item.artifactId), ['current-script', 'older-script'], 'projection filters hidden artifacts and sorts current versions first')
   assert.equal(projectedReviewArtifacts[0].reviewCategory, 'text')
+  assert.equal(projectedReviewArtifacts[0].reviewLabel, '文字内容', 'kind-only text artifacts use the closed generic label')
   assert.equal(projectedReviewArtifacts[0].shotLabel, 'SHOT_02')
+  const maliciousNamedArtifacts = reviewArtifacts.projectCreatorReviewArtifacts([
+    {
+      artifactId: 'path-image', kind: 'IMAGE', mimeType: 'image/png', name: '/private/tmp/foo.png',
+      artifactType: 'shot_keyframe', relatedShotId: '/private/tmp/SHOT_02', version: 1, isCurrent: true, isStale: false,
+    },
+    {
+      artifactId: 'hash-video', kind: 'VIDEO', mimeType: 'video/mp4', name: 'sha256:deadbeef.mp4',
+      version: 1, isCurrent: true, isStale: false,
+    },
+    {
+      artifactId: 'storage-audio', kind: 'AUDIO', mimeType: 'audio/wav', name: 'local://projects/demo/audio.wav',
+      version: 1, isCurrent: true, isStale: false,
+    },
+    {
+      artifactId: 'technical-text', kind: 'VIDEO_SCRIPT', mimeType: 'application/json', name: 'technical-json-name.json',
+      version: 1, isCurrent: true, isStale: false,
+    },
+    {
+      artifactId: 'request-text', kind: 'JSON', mimeType: 'application/json', name: '/private/tmp/provider-model-request.json',
+      artifactType: 'external_generation_request', generationKind: 'image', version: 1, isCurrent: true, isStale: false,
+    },
+  ])
+  assert.deepEqual(
+    Object.fromEntries(maliciousNamedArtifacts.map(item => [item.artifactId, item.reviewLabel])),
+    {
+      'hash-video': '视频片段',
+      'path-image': '参考图',
+      'request-text': '图片提示词',
+      'storage-audio': '语音',
+      'technical-text': '文字内容',
+    },
+    'creator labels derive only from allow-listed semantics and never from artifact names',
+  )
+  assert.doesNotMatch(
+    maliciousNamedArtifacts.map(item => `${item.reviewLabel} ${item.shotLabel || ''}`).join(' '),
+    /private|tmp|foo\.png|sha256|deadbeef|local:\/\/|technical-json|provider|model/i,
+    'malicious paths, hashes, storage references, and technical names never reach visible labels',
+  )
+  assert.equal(maliciousNamedArtifacts.find(item => item.artifactId === 'path-image')?.shotLabel, undefined, 'unsafe shot identifiers are not exposed')
   assert.equal(reviewArtifacts.selectCreatorReviewArtifact(projectedReviewArtifacts, 'older-script').artifactId, 'older-script')
   assert.equal(reviewArtifacts.selectCreatorReviewArtifact(projectedReviewArtifacts).artifactId, 'current-script')
   assert.equal(
@@ -921,6 +961,7 @@ try {
   }
   const proofingSource = readFileSync(new URL('../src/features/creator-studio/components/ArtifactProofingCanvas.tsx', import.meta.url), 'utf8')
   const timelineSource = readFileSync(new URL('../src/features/creator-studio/components/CreatorProcessTimeline.tsx', import.meta.url), 'utf8')
+  const reviewArtifactsSource = readFileSync(new URL('../src/features/creator-studio/creatorReviewArtifacts.ts', import.meta.url), 'utf8')
   const contentLibraryUrl = new URL('../src/features/creator-studio/components/CreatorContentLibrary.tsx', import.meta.url)
   const contentLibrarySource = existsSync(contentLibraryUrl) ? readFileSync(contentLibraryUrl, 'utf8') : ''
   const projectBriefUrl = new URL('../src/features/creator-studio/components/ProjectBriefPanel.tsx', import.meta.url)
@@ -1217,6 +1258,22 @@ try {
   assert.match(contentLibrarySource, /id=\{tabPanelId\(tab\.category\)\}/)
   assert.match(contentLibrarySource, /aria-labelledby=\{tabId\(tab\.category\)\}/)
   assert.match(contentLibrarySource, /role="tab"[\s\S]*aria-selected=\{activeCategory === tab\.category\}/, 'content categories expose tab semantics and selected state')
+  assert.doesNotMatch(reviewArtifactsSource, /reviewLabel:\s*artifact\.name/, 'review labels never alias raw artifact names')
+  assert.match(reviewArtifactsSource, /text:\s*'文字内容'/, 'unknown text artifacts have a semantic generic label')
+  for (const [surfaceName, surfaceSource] of [
+    ['ArtifactReviewPanel', reviewSource],
+    ['ArtifactProofingCanvas', proofingSource],
+    ['CreatorContentLibrary', contentLibrarySource],
+    ['ImageReviewDialog', imageReviewDialogSource],
+    ['SimpleVideoPlayer', playerSource],
+    ['SimpleAudioPlayer', audioPlayerSource],
+  ]) {
+    assert.doesNotMatch(
+      surfaceSource,
+      /(?:reviewLabel|title|alt|downloadName)=\{[^}]*content\??\.artifact\.name|(?:title|alt|downloadName)=\{[^}]*artifact\.name/,
+      `${surfaceName} never falls back from semantic labels to raw artifact names`,
+    )
+  }
   assert.match(contentLibrarySource, /关键内容仍在准备中，生成完成后会显示在这里。/)
   assert.match(contentLibrarySource, /<img[\s\S]*loading="lazy"/, 'every image card uses a lazy real thumbnail')
   assert.doesNotMatch(
