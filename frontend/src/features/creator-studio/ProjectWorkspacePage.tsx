@@ -11,8 +11,10 @@ import {
   didSelectedShotTaskChange,
   isCurrentWorkspaceArtifact,
   isLatestWorkspaceRequest,
+  canApplyShotListRequestState,
   DEFAULT_SHOT_QUEUE_FILTER,
   initialShotFilters,
+  isUnfilteredShotPageReset,
   adoptCreatorShotTask,
   selectedShotAfterAppend,
   selectedShotAfterReplacement,
@@ -211,8 +213,8 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
     setShotQueueLoading(true)
     try {
       const page = await listShots(projectId, { ...shotFilters, ...(reset ? {} : { cursor: shotNextCursorRef.current }), limit: 24 }, signal)
-      if (signal?.aborted || !isLatestWorkspaceRequest(requestToken, shotListRequestTokenRef.current)) return
-      if (reset && (!shotFilters.status || shotFilters.status === 'all')) setDurableShotsKnownEmpty(page.total === 0)
+      if (!canApplyShotListRequestState(requestToken, shotListRequestTokenRef.current, Boolean(signal?.aborted))) return
+      if (isUnfilteredShotPageReset(shotFilters, reset)) setDurableShotsKnownEmpty(page.total === 0)
       setFilteredShotTotal(page.total)
       shotNextCursorRef.current = page.nextCursor
       setShotNextCursor(page.nextCursor)
@@ -223,9 +225,11 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       if (reset) setSelectedQueueShotId(selectedShotAfterReplacement(selectedShotId ?? selectedQueueShotIdRef.current, merged))
       else setSelectedQueueShotId(selected => selectedShotAfterAppend(selected, current, page.shots))
     } catch {
-      if (!signal?.aborted) setError('暂时无法读取 Shot 队列，请稍后重试。')
+      if (canApplyShotListRequestState(requestToken, shotListRequestTokenRef.current, Boolean(signal?.aborted))) {
+        setError('暂时无法读取 Shot 队列，请稍后重试。')
+      }
     } finally {
-      if (!signal?.aborted && isLatestWorkspaceRequest(requestToken, shotListRequestTokenRef.current)) {
+      if (canApplyShotListRequestState(requestToken, shotListRequestTokenRef.current, Boolean(signal?.aborted))) {
         shotQueueLoadingRef.current = false
         setShotQueueLoading(false)
       }

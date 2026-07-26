@@ -799,6 +799,13 @@ try {
   assert.equal(logic.DEFAULT_SHOT_QUEUE_FILTER.status, 'needs_attention', 'the review queue starts with actionable Shots')
   assert.deepEqual(logic.initialShotFilters('completed'), { status: 'all' }, 'completed projects begin with every durable Shot visible')
   assert.deepEqual(logic.initialShotFilters('active'), { status: 'needs_attention' }, 'active projects begin with actionable Shots')
+  assert.equal(logic.isUnfilteredShotPageReset({ status: 'all' }, true), true, 'only a pristine first all-Shots page may establish durable zero state')
+  assert.equal(logic.isUnfilteredShotPageReset({ status: 'all', query: 'no match' }, true), false, 'an all-Shots search cannot establish durable zero state')
+  assert.equal(logic.isUnfilteredShotPageReset({ status: 'all', chapter: '第一章' }, true), false, 'an all-Shots chapter filter cannot establish durable zero state')
+  assert.equal(logic.isUnfilteredShotPageReset({ status: 'all' }, false), false, 'a later durable page cannot establish durable zero state')
+  assert.equal(logic.canApplyShotListRequestState(4, 5, false), false, 'a stale Shot-list rejection cannot overwrite a newer request state')
+  assert.equal(logic.canApplyShotListRequestState(5, 5, false), true, 'the current Shot-list request may update state')
+  assert.equal(logic.canApplyShotListRequestState(5, 5, true), false, 'an aborted Shot-list request cannot update state')
   assert.deepEqual(completedShots.projectHistoricalShots([
     { artifactId: 'a', relatedShotId: 'shot-01', reviewCategory: 'text', reviewLabel: '视频提示词' },
     { artifactId: 'b', relatedShotId: 'shot-01', reviewCategory: 'video', reviewLabel: '合成视频' },

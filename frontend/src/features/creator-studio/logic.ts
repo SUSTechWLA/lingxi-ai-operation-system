@@ -25,6 +25,15 @@ export function initialShotFilters(projectStatus: string): Readonly<{ status: Sh
   const normalizedStatus = projectStatus.trim().toLocaleUpperCase()
   return { status: normalizedStatus === 'COMPLETED' || normalizedStatus === 'ARCHIVED' ? 'all' : 'needs_attention' }
 }
+
+export function isUnfilteredShotPageReset(filters: ShotListFilters, reset: boolean): boolean {
+  return reset && filters.status === 'all' && !filters.query?.trim() && !filters.chapter?.trim()
+}
+
+export function canApplyShotListRequestState(requestToken: number, latestRequestToken: number, aborted: boolean): boolean {
+  return !aborted && isLatestWorkspaceRequest(requestToken, latestRequestToken)
+}
+
 export const CREATOR_WORKSPACE_STEP_IDS: readonly CreatorStepId[] = [
   'requirements', 'direction', 'script', 'shots', 'preview', 'delivery',
 ]
