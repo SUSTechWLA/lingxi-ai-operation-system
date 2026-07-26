@@ -4,7 +4,7 @@ Date: 2026-07-27 (Asia/Shanghai)
 
 ## Outcome
 
-The creator-review changes compile, lint, and pass every frontend contract suite. The newest matching completed demo that is already persisted on this machine is a valid 30-second MP4 with both video and audio streams. The rebuilt macOS application is version 0.2.1, contains the current local-agent binary, passes strict code-signature verification, and is byte-identical to the application copied into the normal delivery directory.
+The creator-review changes compile, lint, and pass all specified creator, settings, and diagnostics contract suites. The newest matching completed demo that is already persisted on this machine is a valid 30-second MP4 with both video and audio streams. The rebuilt macOS application is version 0.2.1, contains the current local-agent binary, passes strict code-signature verification, and is byte-identical to the application copied into the normal delivery directory.
 
 End-to-end regeneration and interactive playback could not be executed in this run because this managed environment denies both loopback listeners and Computer Use access to the packaged application. Those are environment-level blockers: the Go packages compile successfully, while representative runtime tests fail before their first assertion when `httptest` attempts to bind `[::1]:0`.
 
@@ -63,10 +63,12 @@ The cloud delivery version and a version increment could not be read offline. No
 | Strict deep code-signature check | PASS |
 | Application directory package | PASS |
 | Copy in normal delivery directory | PASS; Info.plist, app.asar, and local-agent binary match the verified build |
+| Delivered `app.asar` SHA-256 | `99371963db00a44046b6f73f47d9aa517ac51c98d0964154521415950307ddab` |
 | DMG | BLOCKED; the managed sandbox denied DNS access needed by the packaging dependency |
-| Computer Use | BLOCKED; host returned `Computer Use was not approved to use Tangying AI Video Creation Assistant` on the single allowed attempt |
+| LaunchServices | BLOCKED; this managed host returned `kLSNoExecutableErr` even though the signed arm64 executable is present and independently validated |
+| Computer Use | BLOCKED; bundle discovery succeeded, but the host denied control of the exact delivered application path |
 
-The previous delivered application was retained in `.workspace-archive/task6-preupdate/`. An intermediate package built with the wrong Electron generation was retained separately in `.workspace-archive/task6-intermediate-electron33/` and was not delivered.
+The previous delivered application was retained in `.workspace-archive/task6-preupdate/`. An intermediate package built with the wrong Electron generation was retained separately in `.workspace-archive/task6-intermediate-electron33/` and was not delivered. The last pre-hardening 0.2.1 package was retained in `.workspace-archive/task6-pre-final-hardening/` before the final reviewed application replaced it.
 
 ## Defects fixed during verification
 
@@ -98,7 +100,8 @@ The previous delivered application was retained in `.workspace-archive/task6-pre
 | In-client playback, seek, rate, volume, fullscreen, and download | BLOCKED | Computer Use host approval denied |
 | Regenerate broken delivery and verify version increment | BLOCKED | Cloud/local services cannot bind loopback ports in this sandbox |
 | Developer Diagnostics retains technical payloads | PASS (automated) | Diagnostics build checks for disabled, unset, and enabled modes |
-| Installable `.app` delivery | PASS | Signed arm64 app version 0.2.1 copied to the delivery directory |
+| Packaged `.app` delivery | PASS | Signed arm64 app version 0.2.1 copied to the delivery directory with matching app.asar hash |
+| Launch and interactive packaged-app review | BLOCKED | LaunchServices and Computer Use host restrictions described above |
 | DMG delivery | BLOCKED | Sandbox DNS restriction during packaging dependency resolution |
 
 ## Remaining action outside this sandbox
