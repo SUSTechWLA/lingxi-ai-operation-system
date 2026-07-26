@@ -3,7 +3,7 @@ import { fetchVideoProjects } from '../../services/api'
 import { getCreationView } from '../../services/creatorApi'
 import type { CreationView } from './types'
 import type { VideoProject } from '../../utils/types'
-import { creatorProjectEntryStep, creatorProjectProgress, mapWithConcurrency, prioritizeCreationViewProjects } from './logic'
+import { completedTaskLandingStep, creatorProjectEntryStep, creatorProjectProgress, mapWithConcurrency, prioritizeCreationViewProjects } from './logic'
 
 interface VideoLibraryPageProps {
   onContinueProject: (projectId: string, stepId: string) => void
@@ -87,8 +87,10 @@ function ProjectGroup({ title, projects, onContinueProject }: { title: string; p
       <div className="creator-project-grid">
         {projects.map(({ project, view }) => {
           const progress = creatorProjectProgress(project.status, view)
-          const stepId = creatorProjectEntryStep(project.status, view?.activeStep)
           const historyProject = isHistoryProject(project)
+          const stepId = historyProject
+            ? completedTaskLandingStep({ project, activeStep: view?.activeStep }, { delivery: 'loading' })
+            : creatorProjectEntryStep(project.status, view?.activeStep)
           return (
             <article key={project.id} className="creator-project-card">
               <div className="creator-project-card-top">

@@ -57,6 +57,41 @@ export function creatorProjectEntryStep(projectStatus: string, activeStep?: Crea
   return activeStep ?? 'requirements'
 }
 
+export interface CompletedTaskView {
+  project: Pick<CreatorProject, 'status'>
+  activeStep?: CreatorStepId
+}
+
+export interface CompletedTaskMediaAvailability {
+  preview?: CreatorMediaState
+  delivery?: CreatorMediaState
+}
+
+export interface CompletedTaskRepairScope {
+  stepId: 'delivery'
+  preserveUpstream: true
+}
+
+export function completedTaskLandingStep(
+  view: CompletedTaskView,
+  availability: CompletedTaskMediaAvailability,
+): CreatorStepId {
+  // A completed task always opens its delivery workspace, including when the
+  // media probe reports a recoverable delivery failure.
+  void availability
+  if (view.project.status === 'COMPLETED' || view.project.status === 'ARCHIVED') return 'delivery'
+  return creatorProjectEntryStep(view.project.status, view.activeStep)
+}
+
+export function completedRepairScope(
+  view: CompletedTaskView,
+  availability: CompletedTaskMediaAvailability,
+): CompletedTaskRepairScope | undefined {
+  const completed = view.project.status === 'COMPLETED' || view.project.status === 'ARCHIVED'
+  if (!completed || (availability.delivery !== 'missing' && availability.delivery !== 'unsupported')) return undefined
+  return { stepId: 'delivery', preserveUpstream: true }
+}
+
 export function withCreatorProjectRecord(
   steps: readonly CreatorStep[],
   project: Pick<CreatorProject, 'name' | 'description'>,

@@ -96,6 +96,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const shotFiltersUserChangedRef = useRef(false)
   const isShotsStep = stepId === 'shots'
   const isPreviewDeliveryStep = stepId === 'preview' || stepId === 'delivery'
+  const completedDeliveryStep = stepId === 'delivery' && (view?.project.status === 'COMPLETED' || view?.project.status === 'ARCHIVED')
   const historicalShots = useMemo(
     () => projectHistoricalShots(projectCreatorReviewArtifacts(view?.stepArtifacts?.shots ?? [])),
     [view?.stepArtifacts],
@@ -425,7 +426,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
           <strong>{creatorStepLabel(stepId)}</strong>
           <span>{visibleArtifacts.length > 0 ? `${visibleArtifacts.length} 项可审阅内容` : '尚无可审阅内容'}{selectedStep.isStale ? ' · 下游已过期' : ''}</span>
         </div>
-        <StepRegenerationDialog
+        {!completedDeliveryStep && <StepRegenerationDialog
           projectId={projectId}
           step={selectedStep}
           onViewChanged={nextView => {
@@ -433,7 +434,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
             activeTasksRef.current = nextView.activeTasks
             setView(nextView)
           }}
-        />
+        />}
       </div>
       <div className="creator-content-workspace">
         {!historicalShotMode && <CreatorContentLibrary
@@ -508,6 +509,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
         step={selectedStep}
         content={content}
         assemblyDirty={view.assemblyDirty}
+        completedProject={view.project.status === 'COMPLETED' || view.project.status === 'ARCHIVED'}
         viewingHistorical={viewingHistorical}
         onAssemblyUpdated={async () => { await refreshView() }}
       /> : artifactLoadState === 'error' ? <section className="artifact-review-panel artifact-load-error" role="alert">

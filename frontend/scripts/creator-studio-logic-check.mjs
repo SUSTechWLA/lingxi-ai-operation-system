@@ -749,6 +749,18 @@ try {
   assert.equal(logic.creatorProjectEntryStep('ARCHIVED', 'requirements'), 'preview')
   assert.equal(logic.creatorProjectEntryStep('RUNNING', 'shots'), 'shots')
   assert.equal(logic.creatorProjectEntryStep('RUNNING'), 'requirements')
+  const completedView = { project: { status: 'COMPLETED' }, activeStep: 'preview' }
+  assert.equal(logic.completedTaskLandingStep(completedView, { delivery: 'playable' }), 'delivery')
+  assert.equal(logic.completedTaskLandingStep(completedView, { delivery: 'missing', preview: 'playable' }), 'delivery')
+  assert.deepEqual(
+    logic.completedRepairScope(completedView, { delivery: 'missing' }),
+    { stepId: 'delivery', preserveUpstream: true },
+  )
+  assert.deepEqual(
+    logic.completedRepairScope(completedView, { delivery: 'unsupported' }),
+    { stepId: 'delivery', preserveUpstream: true },
+  )
+  assert.equal(logic.completedRepairScope(completedView, { delivery: 'playable' }), undefined)
   assert.notEqual(
     logic.creatorMutationIdempotencyKey('project-1', 'script', instructionMutation),
     logic.creatorMutationIdempotencyKey('project-1', 'script', { ...instructionMutation, confirmedAffectedShotIds: ['shot-03'] }),
@@ -1281,7 +1293,7 @@ try {
   assert.match(runtimeApiSource, /export const retryLatestFailedAgentNode/)
   assert.match(runtimeApiSource, /\/node\/\$\{encodeURIComponent\(failedNode\.id\)\}\/retry/)
   assert.match(librarySource, /prioritizeCreationViewProjects/)
-  assert.match(librarySource, /creatorProjectEntryStep/)
+  assert.match(librarySource, /completedTaskLandingStep/)
   assert.match(librarySource, /观看成片/)
   assert.match(workspaceSource, /getCreationView\(projectId/)
   assert.match(workspaceSource, /document\.visibilityState !== 'visible'/)
@@ -1618,6 +1630,16 @@ try {
   assert.match(previewSource, /rebuildFinalAssembly/, 'assembly retry is a dedicated action')
   assert.doesNotMatch(previewSource, /regenerateShot\(/, 'assembly retry must never regenerate a Shot')
   assert.match(previewSource, /assemblyDirty/)
+  assert.match(previewSource, /completedRepairScope/, 'delivery recovery is limited to completed delivery output')
+  assert.match(previewSource, /previewStepRegeneration/, 'delivery recovery previews its exact impact before queueing')
+  assert.match(previewSource, /regenerateStep/, 'delivery recovery uses the existing step regeneration API')
+  assert.equal(
+    (previewSource.match(/>\{working \? '正在核对成片…' : '重新生成成片'\}<\/button>/g) || []).length,
+    1,
+    'missing or unsupported delivery exposes one recovery action',
+  )
+  assert.match(previewSource, /baseArtifactId: step\.currentArtifactId/, 'delivery recovery uses the selected current delivery artifact as its base')
+  assert.match(previewSource, /confirmedAffectedStepIds: impact\.affectedStepIds/, 'delivery recovery confirms the server-projected impact')
 
   assert.match(previewSource, /deliveryArtifactPassesFinalReview/)
   assert.match(previewSource, /result\.status === 'queued'/)

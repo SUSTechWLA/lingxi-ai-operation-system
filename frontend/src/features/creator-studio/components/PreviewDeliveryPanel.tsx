@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ArtifactContentResponse } from '../../../utils/types'
-import { rebuildFinalAssembly } from '../../../services/creatorApi'
+import { previewStepRegeneration, rebuildFinalAssembly, regenerateStep } from '../../../services/creatorApi'
 import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import type { CreatorStep } from '../types'
 import {
   deliveryArtifactPassesFinalReview,
+  completedRepairScope,
+  creatorStepRegenerationIdempotencyKey,
   isCreatorConflict,
   resolveCreatorArtifactMediaUrl,
   type CreatorMediaState,
@@ -18,13 +20,14 @@ interface PreviewDeliveryPanelProps {
   step: CreatorStep
   content: ArtifactContentResponse | null
   assemblyDirty: boolean
+  completedProject?: boolean
   viewingHistorical?: boolean
   onAssemblyUpdated: () => Promise<void>
 }
 
 // The workspace owns artifact selection. This panel renders exactly that
 // selection and never replaces it with the step's default artifact.
-export default function PreviewDeliveryPanel({ projectId, step, content, assemblyDirty, viewingHistorical = false, onAssemblyUpdated }: PreviewDeliveryPanelProps) {
+export default function PreviewDeliveryPanel({ projectId, step, content, assemblyDirty, completedProject = false, viewingHistorical = false, onAssemblyUpdated }: PreviewDeliveryPanelProps) {
 	const currentContent = content
   const [notice, setNotice] = useState('')
   const [working, setWorking] = useState(false)
@@ -33,6 +36,7 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
   })
   const controllerRef = useRef<AbortController | null>(null)
   const assemblyKeyRef = useRef<string | null>(null)
+  const repairKeyRef = useRef<string | null>(null)
   const isDelivery = step.id === 'delivery'
   const isFinalReviewPassed = isDelivery && deliveryArtifactPassesFinalReview(currentContent)
 	const previewReady = step.state === 'confirmed' || step.state === 'needs_review'
@@ -46,6 +50,11 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
 		? { ...currentContent, mediaUrl }
 		: currentContent
   const mediaState = mediaStatus.url === mediaUrl ? mediaStatus.state : 'loading'
+  const deliveryMediaState: CreatorMediaState = isDelivery && (!mediaUrl || presentation !== 'video') ? 'missing' : mediaState
+  const repairScope = completedRepairScope(
+    { project: { status: completedProject ? 'COMPLETED' : 'RUNNING' }, activeStep: step.id },
+    { delivery: deliveryMediaState },
+  )
   const confirmedFinal = presentation === 'video'
     ? step.state === 'confirmed' && mediaState === 'playable'
     : step.state === 'confirmed'
@@ -90,6 +99,48 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
     }
   }
 
+  const repairDelivery = async () => {
+    if (!repairScope || working) return
+    controllerRef.current?.abort()
+    const controller = new AbortController()
+    controllerRef.current = controller
+    setWorking(true)
+    setNotice('')
+    try {
+      const impact = await previewStepRegeneration(projectId, repairScope.stepId, controller.signal)
+      if (controller.signal.aborted) return
+      if (impact.affectedStepIds.length > 0) {
+        repairKeyRef.current = null
+        setNotice('系统核对发现重新生成会影响前置内容，已停止操作以保留需求、创意、脚本和分镜。')
+        return
+      }
+      const idempotencyKey = repairKeyRef.current ?? creatorStepRegenerationIdempotencyKey(projectId, repairScope.stepId, crypto.randomUUID())
+      repairKeyRef.current = idempotencyKey
+      const result = await regenerateStep(projectId, repairScope.stepId, {
+        ...(step.currentArtifactId && step.currentVersion ? { baseArtifactId: step.currentArtifactId, baseVersion: step.currentVersion } : {}),
+        instruction: '仅重新生成当前成片交付文件，保留已确认的需求、创意、脚本和分镜。',
+        runId: step.runId,
+        reviewId: step.reviewId,
+        confirmedAffectedStepIds: impact.affectedStepIds,
+      }, idempotencyKey, controller.signal)
+      if (controller.signal.aborted) return
+      await onAssemblyUpdated()
+      repairKeyRef.current = null
+      setNotice(result.view.activeTasks.length > 0 ? '已开始重新生成成片，需求、创意、脚本和分镜会保留。' : '成片正在更新，请稍后查看。')
+    } catch (caught) {
+      if (!controller.signal.aborted) {
+        if (isCreatorConflict(caught) || (typeof caught === 'object' && caught !== null && 'response' in caught)) {
+          repairKeyRef.current = null
+          setNotice('成片状态已更新，请重新点击重新生成成片。')
+        } else {
+          setNotice('网络状态不确定；再次点击会沿用同一次请求，避免重复生成。')
+        }
+      }
+    } finally {
+      if (!controller.signal.aborted && controllerRef.current === controller) setWorking(false)
+    }
+  }
+
   return (
     <section className="preview-delivery-panel artifact-review-panel" aria-labelledby="preview-delivery-title">
       <header className="artifact-review-heading">
@@ -111,6 +162,11 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
 			{!assemblyDirty && previewReady && presentation === 'video' && mediaUrl && (viewingHistorical || !isDelivery || isFinalReviewPassed) && <SimpleVideoPlayer src={mediaUrl} title="当前成片" downloadName="当前成片" onMediaStateChange={state => setMediaStatus({ url: mediaUrl, state })} />}
 			{!assemblyDirty && previewReady && currentContent && presentation !== 'video' && <ArtifactProofingCanvas content={proofingContent} reviewLabel="当前成片" />}
 			{!assemblyDirty && (!previewReady || !currentContent || (presentation === 'video' && !mediaUrl)) && <p className="artifact-empty">系统正在准备当前产物；完成后会在这里显示可审阅内容。</p>}
+      {repairScope && !assemblyDirty && <section className="preview-delivery-warning" role="status">
+        <strong>{deliveryMediaState === 'unsupported' ? '当前成片编码暂不受客户端支持。' : '成片文件缺失。'}</strong>
+        <p>重新生成只会更新当前成片，已确认的需求、创意、脚本和分镜会保留。</p>
+        <button className="creator-primary-button" type="button" disabled={working} onClick={() => void repairDelivery()}>{working ? '正在核对成片…' : '重新生成成片'}</button>
+      </section>}
 
       <section className="preview-delivery-checklist" aria-label="成片检查">
         <h3>成片检查</h3>
