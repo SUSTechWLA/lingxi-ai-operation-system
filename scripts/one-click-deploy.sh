@@ -16,6 +16,8 @@ dry_run="false"
 skip_install="false"
 skip_package="false"
 open_app="false"
+observability_source_migration_from=""
+observability_source_migration_option_seen="false"
 
 usage() {
   cat <<'USAGE'
@@ -32,10 +34,14 @@ Options:
   --skip-install     Reuse existing Node dependencies.
   --skip-package     Start services without packaging the desktop client.
   --open             Open the packaged app after a successful build (macOS only).
+  --migrate-observability-source-from development
+                     Explicitly approve the authenticated development-to-production
+                     terminal-envelope migration. No source is inferred.
   -h, --help         Show this help.
 
 Examples:
   bash scripts/one-click-deploy.sh up
+  bash scripts/one-click-deploy.sh up --migrate-observability-source-from development
   bash scripts/one-click-deploy.sh up --open
   bash scripts/one-click-deploy.sh status
   bash scripts/one-click-deploy.sh down
@@ -75,53 +81,16 @@ runtime_env_mode() {
   fi
 }
 
-secure_runtime_env_permissions() {
-  [[ -f "$runtime_env" && ! -L "$runtime_env" ]] || die "runtime environment must be a regular non-symlink file"
-  [[ "$(runtime_env_owner "$runtime_env")" == "$(id -u)" ]] || die "runtime environment must be owned by the current user"
-  chmod 600 "$runtime_env"
-  [[ "$(runtime_env_owner "$runtime_env")" == "$(id -u)" ]] || die "runtime environment owner verification failed"
-  [[ "$(runtime_env_mode "$runtime_env")" == "600" ]] || die "runtime environment mode verification failed; expected 0600"
-}
-
-normalize_runtime_env_line_endings() {
-  LC_ALL=C grep -q $'\r' "$runtime_env" || return 0
-  local normalized
-  normalized="$(mktemp "${runtime_env}.normalize.XXXXXX")"
-  chmod 600 "$normalized"
-  if ! LC_ALL=C awk '
-    {
-      sub(/\r$/, "")
-      if (index($0, "\r") != 0) exit 2
-      print
-    }
-  ' "$runtime_env" >"$normalized"; then
-    rm -f -- "$normalized"
-    die "runtime environment contains unsupported carriage returns; use LF or CRLF line endings only"
+runtime_env_group() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    stat -f '%g' "$1"
+  else
+    stat -c '%g' "$1"
   fi
-  mv -f -- "$normalized" "$runtime_env"
-  secure_runtime_env_permissions
-}
-
-valid_observability_source_environment() {
-  local environment="$1"
-  [[ -n "$environment" && "${#environment}" -le 64 && "$environment" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
 }
 
 valid_previous_observability_source_environments() {
-  local value="$1" environment seen="," count=0
-  [[ -n "$value" ]] || return 0
-  [[ "$value" != ,* && "$value" != *, && "$value" != *,,* ]] || return 1
-  local environments=()
-  IFS=',' read -r -a environments <<<"$value"
-  [[ "${#environments[@]}" -le 8 ]] || return 1
-  for environment in "${environments[@]}"; do
-    valid_observability_source_environment "$environment" || return 1
-    [[ "$environment" != "production" ]] || return 1
-    [[ "$seen" != *",${environment},"* ]] || return 1
-    seen+="${environment},"
-    count=$((count + 1))
-  done
-  [[ "$count" -gt 0 ]]
+  [[ "$1" == "" || "$1" == "development" ]]
 }
 
 valid_observability_sealing_key() {
@@ -162,6 +131,55 @@ valid_observability_sealing_key() {
   return 0
 }
 
+validate_existing_runtime_env_metadata() {
+  [[ -f "$runtime_env" && ! -L "$runtime_env" ]] || die "runtime environment must be a regular non-symlink file"
+  local owner group mode
+  owner="$(runtime_env_owner "$runtime_env")" || die "runtime environment owner inspection failed"
+  group="$(runtime_env_group "$runtime_env")" || die "runtime environment group inspection failed"
+  mode="$(runtime_env_mode "$runtime_env")" || die "runtime environment mode inspection failed"
+  [[ "$owner" =~ ^[0-9]+$ && "$owner" == "$(id -u)" ]] || die "runtime environment must be owned by the current user"
+  [[ "$group" =~ ^[0-9]+$ ]] || die "runtime environment group is invalid"
+  [[ "$mode" =~ ^[0-7]{3}$ ]] || die "runtime environment mode is invalid"
+}
+
+secure_runtime_env_replacement() {
+  local replacement="$1"
+  if ! chmod 600 "$replacement"; then
+    rm -f -- "$replacement"
+    die "runtime environment replacement chmod failed"
+  fi
+  if ! chown "$(id -u):$(id -g)" "$replacement"; then
+    rm -f -- "$replacement"
+    die "runtime environment replacement chown failed"
+  fi
+  if [[ "$(runtime_env_owner "$replacement")" != "$(id -u)" ||
+        "$(runtime_env_group "$replacement")" != "$(id -g)" ||
+        "$(runtime_env_mode "$replacement")" != "600" ]]; then
+    rm -f -- "$replacement"
+    die "runtime environment replacement permission verification failed"
+  fi
+}
+
+replace_runtime_env_atomically() {
+  local replacement="$1"
+  local expected_existing="$2"
+  secure_runtime_env_replacement "$replacement"
+  if [[ "${TANGYING_DEPLOY_TEST:-}" == "1" &&
+        "${TANGYING_DEPLOY_TEST_ATOMIC_RENAME_FAIL:-}" == "1" ]]; then
+    rm -f -- "$replacement"
+    die "atomic runtime environment replacement failed"
+  fi
+  if [[ "$expected_existing" == "false" &&
+        ( -e "$runtime_env" || -L "$runtime_env" ) ]]; then
+    rm -f -- "$replacement"
+    die "refusing to overwrite runtime environment"
+  fi
+  if ! mv -f -- "$replacement" "$runtime_env"; then
+    rm -f -- "$replacement"
+    die "atomic runtime environment replacement failed"
+  fi
+}
+
 write_runtime_env() {
   local xtrace_was_set="false"
   if [[ "$-" == *x* ]]; then
@@ -169,57 +187,190 @@ write_runtime_env() {
     set +x
   fi
   umask 077
+  case "$observability_source_migration_from" in
+    "") ;;
+    development) ;;
+    *) die "only supported observability source migration is development" ;;
+  esac
   if [[ -e "$runtime_env" || -L "$runtime_env" ]]; then
-    secure_runtime_env_permissions
-    normalize_runtime_env_line_endings
-    local observability_key_count observability_domain_count observability_source_count observability_previous_count
-    local observability_sealing_key observability_source_environment observability_previous_environments upgraded="false"
-    observability_key_count="$(grep -c '^OBSERVABILITY_SEALING_KEY=' "$runtime_env" || true)"
+    validate_existing_runtime_env_metadata
+    local observability_key_count=0 observability_domain_count=0 observability_source_count=0
+    local observability_previous_count=0 observability_approval_count=0 tool_registration_token_count=0
+    local observability_sealing_key="" observability_sealing_domain=""
+    local observability_source_environment="" observability_previous_environments=""
+    local observability_source_migration_approved="" line normalized_line
+    local had_crlf="false" upgraded="false"
+    local existing_mode existing_group
+    local runtime_env_lines=()
+    existing_mode="$(runtime_env_mode "$runtime_env")"
+    existing_group="$(runtime_env_group "$runtime_env")"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      normalized_line="$line"
+      if [[ "$normalized_line" == *$'\r'* ]]; then
+        if [[ "$normalized_line" != *$'\r' ]]; then
+          die "runtime environment contains unsupported carriage returns; use LF or CRLF line endings only"
+        fi
+        normalized_line="${normalized_line%$'\r'}"
+        if [[ "$normalized_line" == *$'\r'* ]]; then
+          die "runtime environment contains unsupported carriage returns; use LF or CRLF line endings only"
+        fi
+        had_crlf="true"
+      fi
+      runtime_env_lines+=("$normalized_line")
+      case "$normalized_line" in
+        OBSERVABILITY_SEALING_KEY=*)
+          observability_key_count=$((observability_key_count + 1))
+          observability_sealing_key="${normalized_line#OBSERVABILITY_SEALING_KEY=}"
+          ;;
+        OBSERVABILITY_SEALING_DOMAIN=*)
+          observability_domain_count=$((observability_domain_count + 1))
+          observability_sealing_domain="${normalized_line#OBSERVABILITY_SEALING_DOMAIN=}"
+          ;;
+        OBSERVABILITY_SOURCE_ENVIRONMENT=*)
+          observability_source_count=$((observability_source_count + 1))
+          observability_source_environment="${normalized_line#OBSERVABILITY_SOURCE_ENVIRONMENT=}"
+          ;;
+        OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=*)
+          observability_previous_count=$((observability_previous_count + 1))
+          observability_previous_environments="${normalized_line#OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=}"
+          ;;
+        OBSERVABILITY_SOURCE_MIGRATION_APPROVED=*)
+          observability_approval_count=$((observability_approval_count + 1))
+          observability_source_migration_approved="${normalized_line#OBSERVABILITY_SOURCE_MIGRATION_APPROVED=}"
+          ;;
+        TOOL_REGISTRATION_INTERNAL_TOKEN=*)
+          tool_registration_token_count=$((tool_registration_token_count + 1))
+          ;;
+      esac
+    done <"$runtime_env"
+
     if [[ "$observability_key_count" != "1" ]]; then
       die "existing OBSERVABILITY_SEALING_KEY is missing or duplicated; do not auto-rotate: restore the prior key, or drain pending terminal events before rotation"
     fi
-    observability_domain_count="$(grep -c '^OBSERVABILITY_SEALING_DOMAIN=' "$runtime_env" || true)"
-    observability_source_count="$(grep -c '^OBSERVABILITY_SOURCE_ENVIRONMENT=' "$runtime_env" || true)"
-    observability_previous_count="$(grep -c '^OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=' "$runtime_env" || true)"
     [[ "$observability_domain_count" -le 1 ]] || die "existing OBSERVABILITY_SEALING_DOMAIN is duplicated"
     [[ "$observability_source_count" -le 1 ]] || die "existing OBSERVABILITY_SOURCE_ENVIRONMENT is duplicated"
     [[ "$observability_previous_count" -le 1 ]] || die "existing OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS is duplicated"
-    IFS= read -r observability_sealing_key < <(sed -n 's/^OBSERVABILITY_SEALING_KEY=//p' "$runtime_env")
+    [[ "$observability_approval_count" -le 1 ]] || die "existing OBSERVABILITY_SOURCE_MIGRATION_APPROVED is duplicated"
+    [[ "$tool_registration_token_count" -le 1 ]] || die "existing TOOL_REGISTRATION_INTERNAL_TOKEN is duplicated"
     if ! valid_observability_sealing_key "$observability_sealing_key"; then
       die "existing OBSERVABILITY_SEALING_KEY is invalid; do not auto-rotate: re-encode the exact prior key bytes as base64:, or drain pending terminal events before rotation"
     fi
-    if [[ "$observability_source_count" == "1" ]]; then
-      IFS= read -r observability_source_environment < <(sed -n 's/^OBSERVABILITY_SOURCE_ENVIRONMENT=//p' "$runtime_env")
-      if [[ "$observability_source_environment" != "production" ]]; then
-        die "existing OBSERVABILITY_SOURCE_ENVIRONMENT is invalid for one-click; expected production"
-      fi
+    if [[ "$observability_domain_count" == "1" &&
+          "$observability_sealing_domain" != "cloud-agent-terminal-v1" ]]; then
+      die "existing OBSERVABILITY_SEALING_DOMAIN is invalid for one-click; expected cloud-agent-terminal-v1"
     fi
-    if [[ "$observability_previous_count" == "1" ]]; then
-      IFS= read -r observability_previous_environments < <(sed -n 's/^OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=//p' "$runtime_env")
-      if ! valid_previous_observability_source_environments "$observability_previous_environments"; then
-        die "existing OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS is invalid or ambiguous"
-      fi
+    if [[ "$observability_source_count" == "1" &&
+          "$observability_source_environment" != "production" ]]; then
+      die "existing OBSERVABILITY_SOURCE_ENVIRONMENT is invalid for one-click; expected production"
     fi
+    if ! valid_previous_observability_source_environments "$observability_previous_environments"; then
+      die "existing OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS is invalid for one-click"
+    fi
+    local desired_previous_environment desired_migration_approval
+    if [[ "$observability_approval_count" == "1" ]]; then
+      case "$observability_source_migration_approved" in
+        none)
+          if [[ "$observability_previous_count" == "1" &&
+                -n "$observability_previous_environments" ]]; then
+            die "observability source migration marker none requires an empty previous source"
+          fi
+          desired_previous_environment=""
+          desired_migration_approval="none"
+          ;;
+        development-\>production)
+          if [[ "$observability_previous_count" != "1" ||
+                "$observability_previous_environments" != "development" ]]; then
+            die "observability source migration approved marker requires previous source development"
+          fi
+          desired_previous_environment="development"
+          desired_migration_approval="development->production"
+          ;;
+        *)
+          die "observability source migration approval marker is invalid"
+          ;;
+      esac
+    elif [[ "$observability_previous_environments" == "development" ]]; then
+      if [[ "$observability_source_migration_from" != "development" ]]; then
+        die "unapproved development observability lineage; rerun with --migrate-observability-source-from development"
+      fi
+      desired_previous_environment="development"
+      desired_migration_approval="development->production"
+    else
+      desired_previous_environment=""
+      desired_migration_approval="none"
+    fi
+
+    if [[ "$observability_source_migration_from" == "development" ]]; then
+      desired_previous_environment="development"
+      desired_migration_approval="development->production"
+    fi
+
+    local output_lines=() output_line
+    for line in "${runtime_env_lines[@]}"; do
+      output_line="$line"
+      case "$line" in
+        OBSERVABILITY_SEALING_DOMAIN=*)
+          output_line="OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1"
+          ;;
+        OBSERVABILITY_SOURCE_ENVIRONMENT=*)
+          output_line="OBSERVABILITY_SOURCE_ENVIRONMENT=production"
+          ;;
+        OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=*)
+          output_line="OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=${desired_previous_environment}"
+          ;;
+        OBSERVABILITY_SOURCE_MIGRATION_APPROVED=*)
+          output_line="OBSERVABILITY_SOURCE_MIGRATION_APPROVED=${desired_migration_approval}"
+          ;;
+      esac
+      output_lines+=("$output_line")
+      [[ "$output_line" == "$line" ]] || upgraded="true"
+    done
     if [[ "$observability_domain_count" == "0" ]]; then
-      printf 'OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1\n' >>"$runtime_env"
+      output_lines+=("OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1")
       upgraded="true"
     fi
     if [[ "$observability_source_count" == "0" ]]; then
-      printf 'OBSERVABILITY_SOURCE_ENVIRONMENT=production\n' >>"$runtime_env"
+      output_lines+=("OBSERVABILITY_SOURCE_ENVIRONMENT=production")
       upgraded="true"
     fi
     if [[ "$observability_previous_count" == "0" ]]; then
-      printf 'OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development\n' >>"$runtime_env"
+      output_lines+=("OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=${desired_previous_environment}")
       upgraded="true"
     fi
-    if ! grep -q '^TOOL_REGISTRATION_INTERNAL_TOKEN=' "$runtime_env"; then
-      printf 'TOOL_REGISTRATION_INTERNAL_TOKEN=%s\n' "$(openssl rand -hex 32)" >>"$runtime_env"
+    if [[ "$observability_approval_count" == "0" ]]; then
+      output_lines+=("OBSERVABILITY_SOURCE_MIGRATION_APPROVED=${desired_migration_approval}")
       upgraded="true"
     fi
+    if [[ "$tool_registration_token_count" == "0" ]]; then
+      output_lines+=("TOOL_REGISTRATION_INTERNAL_TOKEN=$(openssl rand -hex 32)")
+      upgraded="true"
+    fi
+    if [[ "$had_crlf" == "true" || "$existing_mode" != "600" ||
+          "$existing_group" != "$(id -g)" ]]; then
+      upgraded="true"
+    fi
+
     if [[ "$upgraded" == "true" ]]; then
-      log "upgraded private runtime environment defaults without rotating durable observability sealing"
+      local replacement
+      replacement="$(mktemp "${runtime_env}.tmp.XXXXXX")"
+      : >"$replacement"
+      for line in "${output_lines[@]}"; do
+        if ! printf '%s\n' "$line" >>"$replacement"; then
+          rm -f -- "$replacement"
+          die "runtime environment replacement write failed"
+        fi
+      done
+      replace_runtime_env_atomically "$replacement" "true"
+      log "upgraded private runtime environment after complete validation without rotating durable observability sealing"
+    fi
+    if [[ "$desired_migration_approval" == "development->production" &&
+          "$observability_source_migration_from" == "development" ]]; then
+      log "approved observability source migration: development->production (sealing key unchanged)"
     fi
   else
+    if [[ -n "$observability_source_migration_from" ]]; then
+      die "observability source migration requires the prior sealing identity; restore the existing environment and sealing key before retrying"
+    fi
     local auth_secret observability_sealing_key tool_registration_token postgres_password minio_access_key minio_secret_key desktop_data_root
     auth_secret="$(openssl rand -hex 32)"
     while :; do
@@ -236,9 +387,9 @@ write_runtime_env() {
       desktop_data_root="${TANGYING_DESKTOP_DATA_ROOT:-${XDG_DATA_HOME:-${HOME:?}/.local/share}/tangying-frontend/local-agent}"
     fi
     mkdir -p "$desktop_data_root"
-    (set -o noclobber; umask 077; : >"$runtime_env") || die "refusing to overwrite runtime environment"
-    secure_runtime_env_permissions
-    {
+    local replacement
+    replacement="$(mktemp "${runtime_env}.tmp.XXXXXX")"
+    if ! {
       printf 'POSTGRES_DB=tangying_db\n'
       printf 'POSTGRES_USER=postgres\n'
       printf 'POSTGRES_PASSWORD=%s\n' "$postgres_password"
@@ -250,10 +401,14 @@ write_runtime_env() {
       printf 'OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1\n'
       printf 'OBSERVABILITY_SOURCE_ENVIRONMENT=production\n'
       printf 'OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=\n'
+      printf 'OBSERVABILITY_SOURCE_MIGRATION_APPROVED=none\n'
       printf 'CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,null\n'
       printf 'TANGYING_DESKTOP_DATA_ROOT=%s\n' "$desktop_data_root"
-    } >"$runtime_env"
-    secure_runtime_env_permissions
+    } >"$replacement"; then
+      rm -f -- "$replacement"
+      die "runtime environment replacement write failed"
+    fi
+    replace_runtime_env_atomically "$replacement" "false"
     log "created private runtime environment: cloud-backend/.env.one-click"
   fi
   if [[ "$xtrace_was_set" == "true" ]]; then
@@ -513,11 +668,23 @@ while [[ $# -gt 0 ]]; do
     --skip-install) skip_install="true" ;;
     --skip-package) skip_package="true" ;;
     --open) open_app="true" ;;
+    --migrate-observability-source-from)
+      [[ "$observability_source_migration_option_seen" == "false" ]] || die "--migrate-observability-source-from was specified more than once"
+      [[ $# -ge 2 && "$2" != -* ]] || die "--migrate-observability-source-from requires a source"
+      observability_source_migration_option_seen="true"
+      observability_source_migration_from="$2"
+      [[ "$observability_source_migration_from" == "development" ]] || die "only supported source is development"
+      shift
+      ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
   shift
 done
+
+if [[ -n "$observability_source_migration_from" && "$command_name" != "up" ]]; then
+  die "--migrate-observability-source-from is supported only with the up command"
+fi
 
 case "$command_name" in
   up) run_up ;;

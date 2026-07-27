@@ -165,6 +165,160 @@ $ git diff --check
 (no output, exit 0)
 ```
 
+## Fix Round 5 — explicit one-click lineage and atomic environment replacement
+
+This final Task 1 round starts from
+`db336d300907500c57e70769337a7fe58d645f5f`. It addresses only the remaining
+one-click signed-source lineage finding and its atomic-write residuals. No
+Workflow snapshot, worker execution, or other Task 2 production file changed.
+
+### Fail-closed lineage
+
+- The root cause was `write_runtime_env` treating the existence of
+  `.env.one-click` as proof that durable envelopes had been signed as
+  `development`. Any existing environment without a previous-source variable
+  therefore received the bridge automatically.
+- Fresh and unmarked existing environments now persist the exact safe state:
+  current `production`, an empty previous-source value, and
+  `OBSERVABILITY_SOURCE_MIGRATION_APPROVED=none`. File existence, key shape,
+  permissions, and timestamps do not grant migration capability.
+- A real historical development deployment must use the copyable explicit
+  command
+  `bash scripts/one-click-deploy.sh up --migrate-observability-source-from development`.
+  The CLI accepts only the exact `development` source; missing, unknown, and
+  duplicate options stop. Approval persists the exact
+  `development` allowlist plus
+  `OBSERVABILITY_SOURCE_MIGRATION_APPROVED=development->production`, emits only
+  a non-secret audit message, and remains byte-stable on a normal rerun.
+- A missing environment cannot use the migration flag because generating a new
+  sealing key could not authenticate pending historical envelopes. The user
+  must restore the existing environment and exact key first.
+- An old automatically written `previous=development` without the approval
+  marker stops without mutation and requests the explicit command. Marker
+  `none` pairs only with an empty previous source; the approved marker pairs
+  only with exact `development`. Unknown sources, marker mismatches, and
+  duplicates stop.
+- Compose carries the audit marker, beta smoke enforces the exact marker/value
+  pair, `.env.example` documents the safe state, and the runbook documents
+  explicit migration, drain, pair removal, and rollback. The authenticated Go
+  v1/v2 bridge remains restricted to the previously implemented exact
+  development-to-production path.
+
+### One atomic environment upgrade
+
+- Existing metadata, LF/CRLF structure, duplicate variables, sealing key,
+  domain, current source, previous source, approval marker, and tool-token
+  duplication are validated before the target is changed.
+- A successful upgrade builds the complete LF payload in one `mktemp` file in
+  the target directory, applies `0600`, applies the current uid/gid with
+  `chown`, verifies owner/group/mode through the Darwin or Linux `stat` branch,
+  and performs one same-directory rename.
+- Invalid CRLF input, any later validation failure, and injected atomic rename
+  failure leave the original bytes unchanged. Valid CRLF normalization and
+  permission repair happen only in the successful atomic replacement. The
+  sealing key is preserved byte-for-byte and is absent from stdout, stderr, and
+  xtrace.
+
+### Fix Round 5 TDD evidence
+
+The first one-click RED run preceded production changes:
+
+```text
+$ python3 scripts/test_one_click_deploy.py
+Ran 23 tests in 1.020s
+FAILED (failures=17)
+
+Observed failures included:
+- an existing 916-style environment received previous=development
+- explicit development approval had no persisted marker or audit
+- unmarked previous=development returned success
+- staging and marker mismatches were accepted
+- CRLF was normalized before a later invalid-key failure
+- injected atomic replacement failure was ignored
+- the CLI option and Compose marker were absent
+```
+
+The beta smoke pair test was then observed RED for all three invalid pairings,
+and a separate fresh-plus-migration test was observed RED because it generated
+a new key instead of stopping. Each became GREEN after its corresponding
+minimal production change.
+
+Final one-click and shell GREEN:
+
+```text
+$ PYTHONPYCACHEPREFIX=/tmp/tangying-r5-pycache \
+    python3 -m py_compile scripts/test_one_click_deploy.py
+(no output, exit 0)
+
+$ bash -n scripts/one-click-deploy.sh scripts/beta-smoke-check.sh
+(no output, exit 0)
+
+$ python3 scripts/test_one_click_deploy.py
+Ran 26 tests in 1.350s
+OK
+```
+
+The 26 cases include fresh and 916-style empty lineage, explicit 430-style
+approval, approved and safe rerun stability, unmarked legacy-value refusal,
+strict CLI and source values, marker pairing, key/domain/source/duplicate/CRLF
+failure without mutation, atomic failure injection, xtrace secrecy, owner/mode
+repair, and Darwin/Linux metadata branches.
+
+### Fix Round 5 repository gates
+
+Focused, race, config, main, and migration:
+
+```text
+$ go test -race ./internal/core/observability \
+    -run 'Test(Persistent|LegacyPreparedEvent)' -count=1
+ok github.com/tangying-ai/aios-core/internal/core/observability 1.671s
+
+$ go test -race ./internal/core/agentruntime \
+    -run 'Test(Runner.*(Terminal|Source|Round1)|RunTerminalEventJSON|RepositoryTerminalMigrationCAS)' \
+    -count=1
+ok github.com/tangying-ai/aios-core/internal/core/agentruntime 1.751s
+
+$ go test ./internal/core/config ./cmd/tangying-ai-os -count=1
+ok github.com/tangying-ai/aios-core/internal/core/config 0.446s
+ok github.com/tangying-ai/aios-core/cmd/tangying-ai-os 0.540s
+
+$ go test ./internal/core/database \
+    -run 'Test(AgentTerminal|NormalizeAgent|ValidAgent|EnsureAgent)' -count=1 -v
+all always-run cases PASS; live PostgreSQL migration harness explicitly SKIP
+because no test DSN is configured
+```
+
+Contract and listener-free foundation:
+
+```text
+$ npm run test:observability-contract
+PASS
+
+$ GOFLAGS='-skip=^TestClientProviderPlannerUsesRequestTextProvider$' \
+    npm run test:observability-foundation
+contract plus observability, agentruntime, workflow, localrunner, translator,
+and worker/service: PASS
+```
+
+Full cloud and static gates:
+
+```text
+$ go test ./... -skip '<exact 13 existing httptest.NewServer test names>' -count=1
+all cloud packages PASS, including agentruntime, config, database,
+observability, worker/tool/builtin, and workflow
+
+$ go vet ./...
+(no output, exit 0)
+
+$ git diff --check
+(no output, exit 0)
+```
+
+The exact listener exclusions are the same 13 pre-existing sandbox-bound tests
+inventoried in Round 4; no listener test or Go production file changed.
+`shellcheck` is not installed in this environment, so the available shell gate
+was `bash -n` plus the executable 26-case one-click suite.
+
 ## Fix Round 4 — forward-compatible terminal CAS and signed-source upgrade
 
 This round starts from `916145e74586322e930633bbe9646dc5363f45a0` and
