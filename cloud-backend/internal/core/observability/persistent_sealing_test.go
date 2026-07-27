@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"strings"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
@@ -13,7 +12,7 @@ import (
 
 const (
 	testPersistentDomain = "cloud-agent-terminal-test-v1"
-	testPersistentKey    = "0123456789abcdef0123456789abcdef-extra-key-material"
+	testPersistentKey    = "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY="
 )
 
 func TestPersistentPreparedEventRestoresAcrossRestartInSameSealingDomain(t *testing.T) {
@@ -86,7 +85,7 @@ func TestPersistentPreparedEventRejectsForeignSealingDomainsAndProducerIdentity(
 		domain    string
 		component Component
 	}{
-		{name: "wrong key", source: parentSource, runtime: producerRuntime, key: strings.Repeat("b", 48), domain: testPersistentDomain, component: ComponentAgentRuntime},
+		{name: "wrong key", source: parentSource, runtime: producerRuntime, key: "base64:RkVEQ0JBWnl4d3Z1dHNycXBvbm1sa2ppaGdmZWRjYmE=", domain: testPersistentDomain, component: ComponentAgentRuntime},
 		{name: "foreign domain", source: parentSource, runtime: producerRuntime, key: testPersistentKey, domain: "foreign-terminal-domain-v1", component: ComponentAgentRuntime},
 		{name: "foreign parent source", source: Source{Service: "other-service", Component: "http-server", Environment: "test"}, runtime: producerRuntime, key: testPersistentKey, domain: testPersistentDomain, component: ComponentAgentRuntime},
 		{name: "foreign component adapter", source: parentSource, runtime: producerRuntime, key: testPersistentKey, domain: testPersistentDomain, component: ComponentWorker},
@@ -94,7 +93,7 @@ func TestPersistentPreparedEventRejectsForeignSealingDomainsAndProducerIdentity(
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			emitter, err := NewPersistentEmitter(test.source, test.runtime, nil, 1, PersistentSealingConfig{
-				Domain: test.domain, Key: []byte(test.key),
+				Domain: test.domain, Key: test.key,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -217,7 +216,7 @@ func newPersistentTestComponent(
 ) (*Emitter, PersistentPreparedEventEmitter) {
 	t.Helper()
 	emitter, err := NewPersistentEmitter(source, runtime, sink, 4, PersistentSealingConfig{
-		Domain: domain, Key: []byte(key),
+		Domain: domain, Key: key,
 	})
 	if err != nil {
 		t.Fatal(err)

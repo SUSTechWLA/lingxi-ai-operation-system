@@ -63,9 +63,8 @@ import (
 )
 
 func main() {
-	mode := "development"
-	if os.Getenv("GIN_MODE") == "release" {
-		mode = "production"
+	mode := runtimeMode(os.Getenv("GIN_MODE"), os.Getenv("APP_ENV"))
+	if mode == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
@@ -91,7 +90,7 @@ func main() {
 		1024,
 		observability.PersistentSealingConfig{
 			Domain: cfg.Observability.SealingDomain,
-			Key:    []byte(cfg.Observability.SealingKey),
+			Key:    cfg.Observability.SealingKey,
 		},
 	)
 	if err != nil {
@@ -706,6 +705,16 @@ func main() {
 	}
 
 	zap.L().Info("Server exited")
+}
+
+func runtimeMode(ginMode, appEnv string) string {
+	for _, value := range []string{ginMode, appEnv} {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "release", "production", "prod":
+			return "production"
+		}
+	}
+	return "development"
 }
 
 var (

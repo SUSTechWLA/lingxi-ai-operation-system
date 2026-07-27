@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 compose_file="$repo_root/cloud-backend/docker-compose.yml"
 runtime_env="$repo_root/cloud-backend/.env.one-click"
 compose_project="cloud-backend"
@@ -59,49 +59,135 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1"
 }
 
+runtime_env_owner() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    stat -f '%u' "$1"
+  else
+    stat -c '%u' "$1"
+  fi
+}
+
+runtime_env_mode() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    stat -f '%Lp' "$1"
+  else
+    stat -c '%a' "$1"
+  fi
+}
+
+secure_runtime_env_permissions() {
+  [[ -f "$runtime_env" && ! -L "$runtime_env" ]] || die "runtime environment must be a regular non-symlink file"
+  [[ "$(runtime_env_owner "$runtime_env")" == "$(id -u)" ]] || die "runtime environment must be owned by the current user"
+  chmod 600 "$runtime_env"
+  [[ "$(runtime_env_owner "$runtime_env")" == "$(id -u)" ]] || die "runtime environment owner verification failed"
+  [[ "$(runtime_env_mode "$runtime_env")" == "600" ]] || die "runtime environment mode verification failed; expected 0600"
+}
+
+valid_observability_sealing_key() {
+  local key="$1" transport decoded_file canonical byte_count distinct_count key_hex key_hex_length
+  local block_chars position block repeated="false" decode_ok="true" placeholder="false"
+  [[ "$key" == base64:* ]] || return 1
+  transport="${key#base64:}"
+  [[ -n "$transport" && "$transport" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] || return 1
+  decoded_file="$(mktemp "${TMPDIR:-/tmp}/tangying-observability-key.XXXXXX")"
+  chmod 600 "$decoded_file"
+  if ! printf '%s' "$transport" | openssl base64 -d -A >"$decoded_file" 2>/dev/null; then
+    decode_ok="false"
+  fi
+  canonical="$(openssl base64 -A -in "$decoded_file" 2>/dev/null || true)"
+  byte_count="$(wc -c <"$decoded_file" | tr -d ' ')"
+  distinct_count="$(od -An -tu1 "$decoded_file" | tr -s '[:space:]' '\n' | sed '/^$/d' | sort -u | wc -l | tr -d ' ')"
+  key_hex="$(od -An -tx1 "$decoded_file" | tr -d '[:space:]')"
+  if LC_ALL=C grep -Eiq 'replace-with|placeholder|changeme|development-only' "$decoded_file"; then
+    placeholder="true"
+  fi
+  rm -f -- "$decoded_file"
+  if [[ "$decode_ok" != "true" || "$canonical" != "$transport" || "$byte_count" -lt 32 || "$byte_count" -gt 64 || "$distinct_count" -lt 16 || "$placeholder" == "true" ]]; then
+    return 1
+  fi
+  key_hex_length="${#key_hex}"
+  for ((block_chars = 2; block_chars <= key_hex_length / 2; block_chars += 2)); do
+    ((key_hex_length % block_chars == 0)) || continue
+    block="${key_hex:0:block_chars}"
+    repeated="true"
+    for ((position = block_chars; position < key_hex_length; position += block_chars)); do
+      if [[ "${key_hex:position:block_chars}" != "$block" ]]; then
+        repeated="false"
+        break
+      fi
+    done
+    [[ "$repeated" != "true" ]] || return 1
+  done
+  return 0
+}
+
 write_runtime_env() {
-  if [[ -f "$runtime_env" ]]; then
-    local upgraded="false"
-    umask 077
-    if ! grep -q '^OBSERVABILITY_SEALING_KEY=' "$runtime_env"; then
-      printf 'OBSERVABILITY_SEALING_KEY=%s\n' "$(openssl rand -hex 32)" >>"$runtime_env"
-      upgraded="true"
+  local xtrace_was_set="false"
+  if [[ "$-" == *x* ]]; then
+    xtrace_was_set="true"
+    set +x
+  fi
+  umask 077
+  if [[ -e "$runtime_env" || -L "$runtime_env" ]]; then
+    secure_runtime_env_permissions
+    local observability_key_count observability_sealing_key upgraded="false"
+    observability_key_count="$(grep -c '^OBSERVABILITY_SEALING_KEY=' "$runtime_env" || true)"
+    if [[ "$observability_key_count" != "1" ]]; then
+      die "existing OBSERVABILITY_SEALING_KEY is missing or duplicated; do not auto-rotate: restore the prior key, or drain pending terminal events before rotation"
+    fi
+    IFS= read -r observability_sealing_key < <(sed -n 's/^OBSERVABILITY_SEALING_KEY=//p' "$runtime_env")
+    if ! valid_observability_sealing_key "$observability_sealing_key"; then
+      die "existing OBSERVABILITY_SEALING_KEY is invalid; do not auto-rotate: re-encode the exact prior key bytes as base64:, or drain pending terminal events before rotation"
     fi
     if ! grep -q '^OBSERVABILITY_SEALING_DOMAIN=' "$runtime_env"; then
       printf 'OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1\n' >>"$runtime_env"
       upgraded="true"
     fi
-    if [[ "$upgraded" == "true" ]]; then
-      log "upgraded private runtime environment with durable observability sealing"
+    if ! grep -q '^TOOL_REGISTRATION_INTERNAL_TOKEN=' "$runtime_env"; then
+      printf 'TOOL_REGISTRATION_INTERNAL_TOKEN=%s\n' "$(openssl rand -hex 32)" >>"$runtime_env"
+      upgraded="true"
     fi
-    return
-  fi
-  local auth_secret observability_sealing_key postgres_password minio_access_key minio_secret_key desktop_data_root
-  auth_secret="$(openssl rand -hex 32)"
-  observability_sealing_key="$(openssl rand -hex 32)"
-  postgres_password="$(openssl rand -hex 24)"
-  minio_access_key="$(openssl rand -hex 12)"
-  minio_secret_key="$(openssl rand -hex 24)"
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    desktop_data_root="${TANGYING_DESKTOP_DATA_ROOT:-${HOME:?}/Library/Application Support/tangying-frontend/local-agent}"
+    if [[ "$upgraded" == "true" ]]; then
+      log "upgraded private runtime environment defaults without rotating durable observability sealing"
+    fi
   else
-    desktop_data_root="${TANGYING_DESKTOP_DATA_ROOT:-${XDG_DATA_HOME:-${HOME:?}/.local/share}/tangying-frontend/local-agent}"
+    local auth_secret observability_sealing_key tool_registration_token postgres_password minio_access_key minio_secret_key desktop_data_root
+    auth_secret="$(openssl rand -hex 32)"
+    while :; do
+      observability_sealing_key="base64:$(openssl rand -base64 32 | tr -d '\r\n')"
+      valid_observability_sealing_key "$observability_sealing_key" && break
+    done
+    tool_registration_token="$(openssl rand -hex 32)"
+    postgres_password="$(openssl rand -hex 24)"
+    minio_access_key="$(openssl rand -hex 12)"
+    minio_secret_key="$(openssl rand -hex 24)"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      desktop_data_root="${TANGYING_DESKTOP_DATA_ROOT:-${HOME:?}/Library/Application Support/tangying-frontend/local-agent}"
+    else
+      desktop_data_root="${TANGYING_DESKTOP_DATA_ROOT:-${XDG_DATA_HOME:-${HOME:?}/.local/share}/tangying-frontend/local-agent}"
+    fi
+    mkdir -p "$desktop_data_root"
+    (set -o noclobber; umask 077; : >"$runtime_env") || die "refusing to overwrite runtime environment"
+    secure_runtime_env_permissions
+    {
+      printf 'POSTGRES_DB=tangying_db\n'
+      printf 'POSTGRES_USER=postgres\n'
+      printf 'POSTGRES_PASSWORD=%s\n' "$postgres_password"
+      printf 'MINIO_ACCESS_KEY=%s\n' "$minio_access_key"
+      printf 'MINIO_SECRET_KEY=%s\n' "$minio_secret_key"
+      printf 'AUTH_TOKEN_SECRET=%s\n' "$auth_secret"
+      printf 'TOOL_REGISTRATION_INTERNAL_TOKEN=%s\n' "$tool_registration_token"
+      printf 'OBSERVABILITY_SEALING_KEY=%s\n' "$observability_sealing_key"
+      printf 'OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1\n'
+      printf 'CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,null\n'
+      printf 'TANGYING_DESKTOP_DATA_ROOT=%s\n' "$desktop_data_root"
+    } >"$runtime_env"
+    secure_runtime_env_permissions
+    log "created private runtime environment: cloud-backend/.env.one-click"
   fi
-  mkdir -p "$desktop_data_root"
-  umask 077
-  {
-    printf 'POSTGRES_DB=tangying_db\n'
-    printf 'POSTGRES_USER=postgres\n'
-    printf 'POSTGRES_PASSWORD=%s\n' "$postgres_password"
-    printf 'MINIO_ACCESS_KEY=%s\n' "$minio_access_key"
-    printf 'MINIO_SECRET_KEY=%s\n' "$minio_secret_key"
-    printf 'AUTH_TOKEN_SECRET=%s\n' "$auth_secret"
-    printf 'OBSERVABILITY_SEALING_KEY=%s\n' "$observability_sealing_key"
-    printf 'OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1\n'
-    printf 'CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,null\n'
-    printf 'TANGYING_DESKTOP_DATA_ROOT=%s\n' "$desktop_data_root"
-  } >"$runtime_env"
-  log "created private runtime environment: cloud-backend/.env.one-click"
+  if [[ "$xtrace_was_set" == "true" ]]; then
+    set -x
+  fi
 }
 
 compose_service_is_running() {
@@ -340,6 +426,10 @@ run_down() {
   stop_hyperframes
   log "services stopped; named data volumes were preserved"
 }
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
 
 if [[ $# -gt 0 && "$1" != -* ]]; then
   command_name="$1"

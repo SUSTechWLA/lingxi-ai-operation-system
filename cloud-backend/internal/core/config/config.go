@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"go.uber.org/zap"
 )
 
@@ -185,12 +186,8 @@ func (cfg *Config) ValidateForMode(mode string) error {
 	if isWeakSecret(cfg.Agent.ToolRegistrationInternalToken, "replace-with-a-long-random-internal-token") {
 		problems = append(problems, "TOOL_REGISTRATION_INTERNAL_TOKEN must be set to a long random value in production")
 	}
-	if isWeakSecret(
-		cfg.Observability.SealingKey,
-		"replace-with-a-long-random-observability-sealing-key",
-		"development-only-observability-sealing-key",
-	) {
-		problems = append(problems, "OBSERVABILITY_SEALING_KEY must be set to a long random value in production")
+	if _, err := observability.ParsePersistentSealingKey(cfg.Observability.SealingKey); err != nil {
+		problems = append(problems, "OBSERVABILITY_SEALING_KEY must use base64: followed by 32-64 non-repeating random bytes")
 	}
 	if strings.TrimSpace(cfg.Observability.SealingDomain) == "" {
 		problems = append(problems, "OBSERVABILITY_SEALING_DOMAIN must be set in production")

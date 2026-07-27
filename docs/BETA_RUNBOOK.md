@@ -57,7 +57,7 @@ Important beta variables:
 | Variable | Purpose |
 |---|---|
 | `AUTH_TOKEN_SECRET` | Long random auth/encryption secret. Required to be strong in `GIN_MODE=release`. |
-| `OBSERVABILITY_SEALING_KEY` | Separate long random HMAC key for durable agent terminal events. Generate it once and keep it stable across process restarts. |
+| `OBSERVABILITY_SEALING_KEY` | Canonical `base64:` transport of 32-64 random HMAC key bytes for durable agent terminal events. Generate it once and keep it stable across process restarts. |
 | `OBSERVABILITY_SEALING_DOMAIN` | Stable sealing-domain identifier. Default: `cloud-agent-terminal-v1`. |
 | `POSTGRES_PASSWORD` | Database password. Do not use defaults in release/production. |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | Object storage credentials. Do not use defaults in release/production. |
@@ -73,10 +73,45 @@ Important beta variables:
 Do not put real secrets in docs, tests, screenshots, or issue comments.
 
 Generate `OBSERVABILITY_SEALING_KEY` independently from the auth and storage
-credentials (for example, with `openssl rand -hex 32`). Missing or weak keys
-stop release-mode startup. Rotating the key or domain makes already-pending
-terminal outbox envelopes unverifiable, so drain the outbox before rotation or
-keep the previous deployment key available until all pending rows are delivered.
+credentials. Production accepts only strict, canonical `base64:` transport of
+32-64 non-repeating random bytes:
+
+```bash
+(printf 'base64:'; openssl rand -base64 32 | tr -d '\n'; printf '\n')
+```
+
+Plain text, hex text, repeated blocks, placeholders, whitespace, malformed
+base64, and out-of-range decoded lengths stop startup. The one-click installer
+creates `.env.one-click` as an owner-only `0600` file and verifies its owner and
+mode before reading or writing secrets. It preserves a valid existing sealing
+key byte-for-byte. An invalid or missing key in an existing file stops the
+installer; it is never silently rotated.
+
+For an upgrade from the prior plain/hex transport, re-encode the exact previous
+key text as bytes without changing those HMAC bytes:
+
+```bash
+old_key='<exact previous OBSERVABILITY_SEALING_KEY value>'
+printf 'base64:'
+printf '%s' "$old_key" | openssl base64 -A
+printf '\n'
+```
+
+Before an intentional key/domain rotation, stop producers and drain pending
+terminal rows. Confirm the drain with:
+
+```sql
+SELECT count(*)
+FROM agent_runs
+WHERE terminal_event_json IS NOT NULL
+  AND terminal_event_delivered_at IS NULL;
+```
+
+Rotate only when the count is zero, then restart all backend instances with the
+same new value. If pending delivery reports a signature mismatch, stop the new
+deployment and restore the exact previous key/domain. For a binary rollback to
+the prior release, also restore that release's exact prior textual key value;
+keep both binary and secret rollback material until the outbox is fully drained.
 
 ## Start Cloud Backend
 
@@ -93,7 +128,7 @@ cd cloud-backend
 GIN_MODE=release go run ./cmd/tangying-ai-os
 ```
 
-Release mode will reject weak auth/database/MinIO secrets, wildcard CORS, disabled sandbox, and sandbox fallback.
+Release mode will reject weak auth/database/MinIO/sealing secrets, wildcard CORS, disabled sandbox, and sandbox fallback. The Compose one-click backend sets `GIN_MODE=release` and `APP_ENV=production` explicitly, so omitting one variable cannot bypass production validation.
 
 ## Start Local Backend / Local Agent
 

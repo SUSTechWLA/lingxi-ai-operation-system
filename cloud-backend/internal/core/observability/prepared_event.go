@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,10 +21,11 @@ import (
 )
 
 const (
+	legacyPreparedEventVersion      = "observability.prepared.v1"
 	persistentPreparedEventVersion  = "observability.prepared.v2"
 	maxSealedPreparedEventBytes     = 64 * 1024
 	minPersistentSealingKeyBytes    = 32
-	maxPersistentSealingKeyBytes    = 4 * 1024
+	maxPersistentSealingKeyBytes    = 64
 	maxPersistentSealingDomainBytes = 128
 )
 
@@ -33,7 +35,7 @@ var persistentSealingDomainPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.
 // stable across process restarts and is copied into private emitter state.
 type PersistentSealingConfig struct {
 	Domain string
-	Key    []byte
+	Key    string
 }
 
 // PreparedEvent is an opaque replay capability. Only a persistent component
@@ -109,6 +111,19 @@ type persistentPreparedBody struct {
 	Event           Event     `json:"event"`
 }
 
+type legacyPreparedEnvelope struct {
+	Version     string `json:"version"`
+	OwnerUserID string `json:"ownerUserId"`
+	Event       Event  `json:"event"`
+	SHA256      string `json:"sha256"`
+}
+
+type legacyPreparedBody struct {
+	Version     string `json:"version"`
+	OwnerUserID string `json:"ownerUserId"`
+	Event       Event  `json:"event"`
+}
+
 type persistentComponentEmitter struct {
 	emitter   *Emitter
 	component Component
@@ -120,10 +135,65 @@ func newPersistentSealer(config PersistentSealingConfig) (*persistentSealer, err
 		!persistentSealingDomainPattern.MatchString(domain) {
 		return nil, errors.New("persistent observability sealing domain is invalid")
 	}
-	if len(config.Key) < minPersistentSealingKeyBytes || len(config.Key) > maxPersistentSealingKeyBytes {
-		return nil, fmt.Errorf("persistent observability sealing key must be %d-%d bytes", minPersistentSealingKeyBytes, maxPersistentSealingKeyBytes)
+	key, err := ParsePersistentSealingKey(config.Key)
+	if err != nil {
+		return nil, err
 	}
-	return &persistentSealer{domain: domain, key: append([]byte(nil), config.Key...)}, nil
+	return &persistentSealer{domain: domain, key: key}, nil
+}
+
+// ParsePersistentSealingKey is the single production parser for durable
+// observability keys. The textual transport is deliberately explicit so a
+// human-looking password cannot be mistaken for random key material.
+func ParsePersistentSealingKey(encoded string) ([]byte, error) {
+	const prefix = "base64:"
+	if encoded == "" || strings.TrimSpace(encoded) != encoded || !strings.HasPrefix(encoded, prefix) {
+		return nil, errors.New("persistent observability sealing key must use canonical base64: format")
+	}
+	transport := strings.TrimPrefix(encoded, prefix)
+	if transport == "" || strings.IndexFunc(transport, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\n' }) >= 0 {
+		return nil, errors.New("persistent observability sealing key has invalid base64 transport")
+	}
+	key, err := base64.StdEncoding.Strict().DecodeString(transport)
+	if err != nil || base64.StdEncoding.EncodeToString(key) != transport {
+		return nil, errors.New("persistent observability sealing key has invalid base64 transport")
+	}
+	if len(key) < minPersistentSealingKeyBytes || len(key) > maxPersistentSealingKeyBytes {
+		return nil, fmt.Errorf("persistent observability sealing key must decode to %d-%d bytes", minPersistentSealingKeyBytes, maxPersistentSealingKeyBytes)
+	}
+	seen := make(map[byte]struct{}, len(key))
+	for _, value := range key {
+		seen[value] = struct{}{}
+	}
+	if len(seen) < 16 || isRepeatedBytePattern(key) {
+		return nil, errors.New("persistent observability sealing key must contain non-repeating random bytes")
+	}
+	lowerKeyText := strings.ToLower(string(key))
+	for _, marker := range []string{"replace-with", "placeholder", "changeme", "development-only"} {
+		if strings.Contains(lowerKeyText, marker) {
+			return nil, errors.New("persistent observability sealing key must not contain placeholder text")
+		}
+	}
+	return append([]byte(nil), key...), nil
+}
+
+func isRepeatedBytePattern(key []byte) bool {
+	for blockSize := 1; blockSize <= len(key)/2; blockSize++ {
+		if len(key)%blockSize != 0 {
+			continue
+		}
+		repeated := true
+		for index := blockSize; index < len(key); index++ {
+			if key[index] != key[index%blockSize] {
+				repeated = false
+				break
+			}
+		}
+		if repeated {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Emitter) ForPersistentComponent(component Component) (PersistentPreparedEventEmitter, error) {
@@ -197,6 +267,126 @@ func (e *persistentComponentEmitter) FreezeAndSeal(ctx context.Context, event Ev
 	}
 	sealed := SealedPreparedEvent{Payload: payload, Binding: preparedEventBinding(ownerUserID, prepared)}
 	return sealed.Clone(), nil
+}
+
+// MigrateClaimedLegacyPreparedEvent is a narrow compatibility bridge for a
+// trusted, already-claimed durable row. It never returns the legacy Event or a
+// replay capability; successful validation only yields a current HMAC seal.
+func (e *persistentComponentEmitter) MigrateClaimedLegacyPreparedEvent(
+	ctx context.Context,
+	payload []byte,
+	expected Event,
+) (SealedPreparedEvent, error) {
+	if err := e.ValidatePersistentConfiguration(); err != nil {
+		return SealedPreparedEvent{}, err
+	}
+	envelope, err := decodeLegacyPreparedEnvelope(payload)
+	if err != nil {
+		return SealedPreparedEvent{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ownerUserID, _ := trustedcontext.UserID(ctx)
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	if ownerUserID == "" || envelope.OwnerUserID != ownerUserID {
+		return SealedPreparedEvent{}, errors.New("legacy prepared observability owner binding mismatch")
+	}
+	wantSource := e.emitter.source
+	wantSource.Component = string(e.component)
+	if envelope.Event.Source != wantSource {
+		return SealedPreparedEvent{}, errors.New("legacy prepared observability source binding mismatch")
+	}
+	if expected.Runtime.ToolRegistrySnapshotID != envelope.Event.Runtime.ToolRegistrySnapshotID {
+		return SealedPreparedEvent{}, errors.New("legacy prepared observability tool registry binding mismatch")
+	}
+	// Ingest time, sequence, and producer runtime are authenticated historical
+	// evidence. Every terminal-owned field is rebuilt from the claimed row and
+	// compared as one complete Event value.
+	expected.SchemaVersion = "1.0"
+	expected.IngestedAt = envelope.Event.IngestedAt
+	expected.ProducerSequence = envelope.Event.ProducerSequence
+	expected.Source = wantSource
+	expected.Runtime = envelope.Event.Runtime
+	expected.Correlation = sanitizeCorrelation(expected.Correlation)
+	if expected.Execution.Attempt == 0 {
+		expected.Execution.Attempt = 1
+	}
+	if expected.Privacy.Classification == "" {
+		expected.Privacy.Classification = PrivacyInternal
+	}
+	if expected.Privacy.RedactedFields == nil {
+		expected.Privacy.RedactedFields = []string{}
+	}
+	expected = Redact(expected)
+	if err := validatePreparedEventValue(expected); err != nil {
+		return SealedPreparedEvent{}, fmt.Errorf("validate expected legacy observability event: %w", err)
+	}
+	if !reflect.DeepEqual(envelope.Event, expected) {
+		return SealedPreparedEvent{}, errors.New("legacy prepared observability terminal binding mismatch")
+	}
+	body := persistentPreparedBody{
+		Version: persistentPreparedEventVersion, Domain: e.emitter.persistentSealer.domain,
+		OwnerUserID: ownerUserID, ProducerSource: e.emitter.source, ProducerRuntime: envelope.Event.Runtime,
+		Component: e.component, Event: envelope.Event,
+	}
+	sealedPayload, err := e.emitter.persistentSealer.seal(body)
+	if err != nil {
+		return SealedPreparedEvent{}, err
+	}
+	return SealedPreparedEvent{
+		Payload: sealedPayload,
+		Binding: preparedEventBinding(ownerUserID, envelope.Event),
+	}.Clone(), nil
+}
+
+func decodeLegacyPreparedEnvelope(payload []byte) (legacyPreparedEnvelope, error) {
+	if len(payload) == 0 {
+		return legacyPreparedEnvelope{}, errors.New("legacy prepared observability payload is empty")
+	}
+	if len(payload) > maxSealedPreparedEventBytes {
+		return legacyPreparedEnvelope{}, errors.New("legacy prepared observability payload exceeds size limit")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var envelope legacyPreparedEnvelope
+	if err := decoder.Decode(&envelope); err != nil {
+		return legacyPreparedEnvelope{}, fmt.Errorf("decode legacy prepared observability envelope: %w", err)
+	}
+	if err := requirePreparedJSONEOF(decoder); err != nil {
+		return legacyPreparedEnvelope{}, err
+	}
+	canonical, err := json.Marshal(envelope)
+	if err != nil {
+		return legacyPreparedEnvelope{}, fmt.Errorf("canonicalize legacy prepared observability envelope: %w", err)
+	}
+	if !bytes.Equal(payload, canonical) {
+		return legacyPreparedEnvelope{}, errors.New("legacy prepared observability envelope is not canonical")
+	}
+	if envelope.Version != legacyPreparedEventVersion {
+		return legacyPreparedEnvelope{}, errors.New("legacy prepared observability envelope version is unsupported")
+	}
+	if strings.TrimSpace(envelope.OwnerUserID) == "" || strings.TrimSpace(envelope.OwnerUserID) != envelope.OwnerUserID {
+		return legacyPreparedEnvelope{}, errors.New("legacy prepared observability owner is invalid")
+	}
+	bodyJSON, err := json.Marshal(legacyPreparedBody{
+		Version: envelope.Version, OwnerUserID: envelope.OwnerUserID, Event: envelope.Event,
+	})
+	if err != nil {
+		return legacyPreparedEnvelope{}, fmt.Errorf("marshal legacy prepared observability digest body: %w", err)
+	}
+	want, err := hex.DecodeString(envelope.SHA256)
+	if err != nil || len(want) != sha256.Size {
+		return legacyPreparedEnvelope{}, errors.New("legacy prepared observability digest is invalid")
+	}
+	got := sha256.Sum256(bodyJSON)
+	if subtle.ConstantTimeCompare(got[:], want) != 1 {
+		return legacyPreparedEnvelope{}, errors.New("legacy prepared observability digest mismatch")
+	}
+	if err := validatePreparedEventValue(envelope.Event); err != nil {
+		return legacyPreparedEnvelope{}, err
+	}
+	return envelope, nil
 }
 
 func (e *persistentComponentEmitter) RestorePreparedEvent(sealed SealedPreparedEvent) (PreparedEvent, error) {

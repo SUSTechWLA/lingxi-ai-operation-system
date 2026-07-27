@@ -41,7 +41,7 @@ func newTerminalReplayEmitter(t *testing.T, failures int) *terminalReplayEmitter
 		observability.Runtime{AppVersion: "test-app", GitCommit: "test-commit"}, replay, 8,
 		observability.PersistentSealingConfig{
 			Domain: "agent-terminal-test-v1",
-			Key:    []byte("0123456789abcdef0123456789abcdef-extra-test-key"),
+			Key:    "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=",
 		},
 	)
 	if err != nil {
@@ -67,7 +67,7 @@ func newPersistentAgentEmitterForTest(
 	t.Helper()
 	emitter, err := observability.NewPersistentEmitter(source, runtime, sink, capacity, observability.PersistentSealingConfig{
 		Domain: "agent-terminal-test-v1",
-		Key:    []byte("0123456789abcdef0123456789abcdef-extra-test-key"),
+		Key:    "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +113,10 @@ func (e *terminalReplayEmitter) ValidatePersistentConfiguration() error {
 
 func (e *terminalReplayEmitter) FreezeAndSeal(ctx context.Context, event observability.Event) (observability.SealedPreparedEvent, error) {
 	return e.persistent.FreezeAndSeal(ctx, event)
+}
+
+func (e *terminalReplayEmitter) MigrateClaimedLegacyPreparedEvent(ctx context.Context, payload []byte, event observability.Event) (observability.SealedPreparedEvent, error) {
+	return e.persistent.MigrateClaimedLegacyPreparedEvent(ctx, payload, event)
 }
 
 func (e *terminalReplayEmitter) RestorePreparedEvent(sealed observability.SealedPreparedEvent) (observability.PreparedEvent, error) {

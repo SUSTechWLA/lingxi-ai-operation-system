@@ -183,3 +183,100 @@ Result: **PASS**, no output.
   paths shown above.
 - Listener failures are sandbox infrastructure failures, not code/test
   assertion failures. No production or test code was weakened to bypass them.
+
+## Fix Round 3 — Round-1 compatibility and production key bootstrap
+
+Round 2 changed `preparedObservability` from the Round-1 base64 JSON string to
+an HMAC v2 object. Pending Round-1 rows therefore failed JSON decoding. The
+production key path also accepted human-selected text, while one-click emitted
+raw hex and did not converge existing env-file permissions.
+
+### Controlled compatibility state machine
+
+- `RunTerminalEvent` recognizes the historical string only as private pending
+  bytes. Decode/remarshal retains it, so ordinary database JSON handling cannot
+  silently clear or convert a pending event.
+- Migration runs after a repository claim and exact SQL event/run/callback
+  identity plus claim-token checks. The private decoder enforces the Round-1
+  size, canonical JSON, v1 version and SHA checksum, registry, redaction and
+  no-secret contracts, then proves trusted owner, source/component, tool
+  snapshot, and the complete terminal-derived Event.
+- A valid legacy Event is resealed with the configured persistent HMAC key as
+  v2. The replacement is persisted through the existing run/event/claim CAS
+  before callback or sink execution. Conversion/persist error or claim loss is
+  fail-closed. A callback crash retries the persisted v2; same-key restart
+  succeeds and wrong-key restart fails before callback.
+- Tests use literal Round-1 terminal JSON with the historical base64 transport
+  and canonical checksum. Coverage includes checksum/tamper/owner/SQL identity,
+  claim loss, persist failure, callback ordering, crash/retry, same/wrong-key
+  restart, and decode/remarshal retention.
+
+### One production key format and secure one-click bootstrap
+
+- Config validation and the HMAC sealer share one parser: canonical `base64:`
+  decoding to 32-64 bytes. Explicit checks reject whitespace, malformed or
+  noncanonical base64, short/overlong material, fewer than 16 distinct bytes,
+  exact repeated character/block patterns, repeated hex text, and known
+  placeholder text. Errors never echo the supplied value; no estimated entropy
+  claim is made.
+- Startup passes that same text to the sealer and treats either
+  `GIN_MODE=release` or `APP_ENV=production|prod|release` as production. Compose
+  sets both production indicators, the internal tool token, and enabled,
+  non-fallback sandbox configuration.
+- One-click generates 32 random key bytes in the accepted format and preserves
+  a valid existing key byte-for-byte. Missing/invalid existing keys stop with
+  restore-or-drain-before-rotation guidance. The script rejects symlink and
+  non-regular targets, verifies current-user ownership, applies `0600` before
+  secret access, verifies owner/mode after writes, and suppresses/restores
+  xtrace around secret handling.
+- The runbook documents generation, exact-byte legacy transport conversion,
+  pending-row drain, coordinated rotation, wrong-key recovery and binary/secret
+  rollback. The example placeholder remains production-invalid.
+
+### TDD and verification evidence
+
+Initial key parser RED:
+
+```text
+undefined: ParsePersistentSealingKey
+cannot use test.value (variable of type string) as []byte value in struct literal
+FAIL github.com/tangying-ai/aios-core/internal/core/observability [build failed]
+```
+
+The literal Round-1 fixture initially could not unmarshal a JSON string into a
+v2 object. Pre-fix one-click behavior generated raw hex, retained an existing
+`0644` mode, accepted invalid existing key text, and exposed secret assignments
+under `bash -x`. These contracts were observed RED before the production fixes.
+
+```text
+$ go test -race ./internal/core/observability ./internal/core/agentruntime \
+  -run 'Test(ParsePersistent|PersistentSealer|PersistentPrepared|Round1|Runner.*Round1|Runner.*Terminal|Repository.*Terminal)' -count=1
+ok github.com/tangying-ai/aios-core/internal/core/observability 1.479s
+ok github.com/tangying-ai/aios-core/internal/core/agentruntime 1.682s
+
+$ go test ./internal/core/observability ./internal/core/config ./cmd/tangying-ai-os -count=1
+ok github.com/tangying-ai/aios-core/internal/core/observability 13.861s
+ok github.com/tangying-ai/aios-core/internal/core/config 0.872s
+ok github.com/tangying-ai/aios-core/cmd/tangying-ai-os 0.535s
+
+$ GOFLAGS='-skip=^TestClientProviderPlannerUsesRequestTextProvider$' npm run test:observability-foundation
+contract plus observability, agentruntime, workflow, localrunner, translator,
+and worker/service: PASS
+
+$ go test ./... -skip '<the exact 13 pre-existing listener tests>' -count=1
+all cloud packages: PASS
+
+$ bash -n scripts/one-click-deploy.sh
+(no output, exit 0)
+
+$ python3 -m unittest scripts.test_one_click_deploy -v
+Ran 13 tests: OK
+
+$ go vet ./...
+(no output, exit 0)
+
+$ git diff --check
+(no output, exit 0)
+```
+
+No Workflow snapshot or worker-execution production code changed in this round.

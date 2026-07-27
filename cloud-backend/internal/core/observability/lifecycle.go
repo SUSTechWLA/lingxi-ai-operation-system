@@ -26,6 +26,7 @@ type PersistentPreparedEventEmitter interface {
 	DurableEventEmitter
 	ValidatePersistentConfiguration() error
 	FreezeAndSeal(context.Context, Event) (SealedPreparedEvent, error)
+	MigrateClaimedLegacyPreparedEvent(context.Context, []byte, Event) (SealedPreparedEvent, error)
 	RestorePreparedEvent(SealedPreparedEvent) (PreparedEvent, error)
 	RestorePreparedEventFor(context.Context, SealedPreparedEvent, Event) (PreparedEvent, error)
 	ReplayPreparedAndWait(context.Context, PreparedEvent) error

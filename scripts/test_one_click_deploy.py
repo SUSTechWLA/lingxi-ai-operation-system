@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import base64
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 
@@ -23,6 +25,25 @@ class OneClickDeployContractTest(unittest.TestCase):
         environment["TANGYING_DEPLOY_TEST"] = "1"
         return subprocess.run(
             ["bash", str(SCRIPT), *arguments],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def write_runtime_env(
+        self, target: Path, *, xtrace: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        trace = "set -x;" if xtrace else ""
+        command = (
+            f'{trace} script="$1"; target="$2"; source "$script"; '
+            'runtime_env="$target"; write_runtime_env'
+        )
+        environment = os.environ.copy()
+        environment["TANGYING_DESKTOP_DATA_ROOT"] = str(target.parent / "desktop-data")
+        return subprocess.run(
+            ["bash", "-c", command, "_", str(SCRIPT), str(target)],
             cwd=ROOT,
             env=environment,
             text=True,
@@ -90,6 +111,10 @@ class OneClickDeployContractTest(unittest.TestCase):
             "AIOS_VIDEO_PIPELINE_ROOT: /app/video-pipelines",
             "host.docker.internal:host-gateway",
             "tangying-project-data:",
+            "GIN_MODE: release",
+            "APP_ENV: production",
+            'SANDBOX_ENABLED: "true"',
+            'SANDBOX_FALLBACK: "false"',
         ):
             self.assertIn(contract, source)
         self.assertGreaterEqual(source.count("healthcheck:"), 4)
@@ -100,9 +125,65 @@ class OneClickDeployContractTest(unittest.TestCase):
         compose = COMPOSE.read_text(encoding="utf-8")
         self.assertIn("OBSERVABILITY_SEALING_KEY", script)
         self.assertIn("OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1", script)
-        self.assertIn("openssl rand -hex 32", script)
+        self.assertIn("base64:$(openssl rand -base64 32", script)
         self.assertIn("OBSERVABILITY_SEALING_KEY is required", compose)
         self.assertIn("OBSERVABILITY_SEALING_DOMAIN", compose)
+
+    def test_runtime_env_is_private_and_existing_valid_key_is_preserved(self) -> None:
+        valid_key = "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY="
+        with tempfile.TemporaryDirectory() as directory:
+            fresh = Path(directory) / "fresh.env"
+            result = self.write_runtime_env(fresh)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(fresh.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(fresh.stat().st_uid, os.getuid())
+            generated = next(
+                line.split("=", 1)[1]
+                for line in fresh.read_text().splitlines()
+                if line.startswith("OBSERVABILITY_SEALING_KEY=")
+            )
+            self.assertTrue(generated.startswith("base64:"))
+            decoded = base64.b64decode(
+                generated.removeprefix("base64:"), validate=True
+            )
+            self.assertGreaterEqual(len(decoded), 32)
+            self.assertGreaterEqual(len(set(decoded)), 16)
+
+            existing = Path(directory) / "existing.env"
+            existing.write_text(f"OBSERVABILITY_SEALING_KEY={valid_key}\n")
+            existing.chmod(0o644)
+            result = self.write_runtime_env(existing)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(existing.stat().st_mode & 0o777, 0o600)
+            self.assertIn(
+                f"OBSERVABILITY_SEALING_KEY={valid_key}\n",
+                existing.read_text(),
+            )
+
+    def test_invalid_existing_key_stops_without_rotation_or_leak(self) -> None:
+        invalid_key = "0123456789abcdef0123456789abcdef"
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "invalid.env"
+            target.write_text(f"OBSERVABILITY_SEALING_KEY={invalid_key}\n")
+            result = self.write_runtime_env(target)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("do not auto-rotate", result.stderr)
+            self.assertNotIn(invalid_key, result.stdout + result.stderr)
+            self.assertEqual(
+                target.read_text(), f"OBSERVABILITY_SEALING_KEY={invalid_key}\n"
+            )
+
+    def test_xtrace_does_not_print_generated_observability_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "trace.env"
+            result = self.write_runtime_env(target, xtrace=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            generated = next(
+                line.split("=", 1)[1]
+                for line in target.read_text().splitlines()
+                if line.startswith("OBSERVABILITY_SEALING_KEY=")
+            )
+            self.assertNotIn(generated, result.stdout + result.stderr)
 
     def test_cloud_runtime_binary_is_included_in_docker_context(self) -> None:
         source = DOCKERIGNORE.read_text(encoding="utf-8")

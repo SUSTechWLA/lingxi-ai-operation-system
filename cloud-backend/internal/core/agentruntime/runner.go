@@ -73,19 +73,20 @@ type Run struct {
 }
 
 type RunTerminalEvent struct {
-	EventID                string                             `json:"eventId"`
-	CallbackIdempotencyKey string                             `json:"callbackIdempotencyKey"`
-	RunID                  string                             `json:"runId"`
-	TaskID                 string                             `json:"taskId,omitempty"`
-	UserID                 string                             `json:"userId,omitempty"`
-	TraceID                string                             `json:"traceId,omitempty"`
-	ToolRegistrySnapshotID string                             `json:"toolRegistrySnapshotId,omitempty"`
-	Status                 RunStatus                          `json:"status"`
-	Context                map[string]interface{}             `json:"context,omitempty"`
-	ErrorCode              string                             `json:"errorCode,omitempty"`
-	Error                  string                             `json:"error,omitempty"`
-	OccurredAt             time.Time                          `json:"occurredAt"`
-	PreparedObservability  *observability.SealedPreparedEvent `json:"preparedObservability,omitempty"`
+	EventID                     string                             `json:"eventId"`
+	CallbackIdempotencyKey      string                             `json:"callbackIdempotencyKey"`
+	RunID                       string                             `json:"runId"`
+	TaskID                      string                             `json:"taskId,omitempty"`
+	UserID                      string                             `json:"userId,omitempty"`
+	TraceID                     string                             `json:"traceId,omitempty"`
+	ToolRegistrySnapshotID      string                             `json:"toolRegistrySnapshotId,omitempty"`
+	Status                      RunStatus                          `json:"status"`
+	Context                     map[string]interface{}             `json:"context,omitempty"`
+	ErrorCode                   string                             `json:"errorCode,omitempty"`
+	Error                       string                             `json:"error,omitempty"`
+	OccurredAt                  time.Time                          `json:"occurredAt"`
+	PreparedObservability       *observability.SealedPreparedEvent `json:"preparedObservability,omitempty"`
+	legacyPreparedObservability []byte
 }
 
 // RunTerminalCallback may be invoked again after a crash between the remote
@@ -1366,19 +1367,57 @@ func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int
 	var deliveryErrors []error
 	for _, delivery := range deliveries {
 		freezePayload := !delivery.PayloadFrozen
+		if strings.TrimSpace(delivery.ClaimToken) == "" || strings.TrimSpace(delivery.EventID) == "" {
+			deliveryErrors = append(deliveryErrors, errors.New("claimed terminal event is missing SQL identity or claim token"))
+			continue
+		}
 		if strings.TrimSpace(delivery.Event.EventID) == "" {
 			delivery.Event.EventID = delivery.EventID
 			freezePayload = true
+		} else if delivery.Event.EventID != delivery.EventID {
+			deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery,
+				fmt.Errorf("terminal event SQL identity mismatch for %s", delivery.RunID)))
+			continue
 		}
 		if strings.TrimSpace(delivery.Event.CallbackIdempotencyKey) == "" {
 			delivery.Event.CallbackIdempotencyKey = delivery.EventID
 			freezePayload = true
+		} else if delivery.Event.CallbackIdempotencyKey != delivery.EventID {
+			deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery,
+				fmt.Errorf("terminal callback identity mismatch for %s", delivery.RunID)))
+			continue
+		}
+		if strings.TrimSpace(delivery.Event.RunID) == "" {
+			delivery.Event.RunID = delivery.RunID
+			freezePayload = true
+		} else if delivery.Event.RunID != delivery.RunID {
+			deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery,
+				fmt.Errorf("terminal run identity mismatch for %s", delivery.RunID)))
+			continue
 		}
 		if delivery.Event.OccurredAt.IsZero() {
 			delivery.Event.OccurredAt = time.Now().UTC()
 			freezePayload = true
 		}
 		deliveryCtx := terminalDeliveryContext(ctx, delivery.Event)
+		if len(delivery.Event.legacyPreparedObservability) > 0 {
+			expected, legacyErr := terminalObservabilityValue(delivery.Event)
+			if legacyErr != nil {
+				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery, legacyErr))
+				continue
+			}
+			sealed, legacyErr := r.events.MigrateClaimedLegacyPreparedEvent(
+				deliveryCtx, delivery.Event.legacyPreparedObservability, expected,
+			)
+			if legacyErr != nil {
+				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery,
+					fmt.Errorf("migrate legacy terminal observability: %w", legacyErr)))
+				continue
+			}
+			delivery.Event.PreparedObservability = &sealed
+			delivery.Event.legacyPreparedObservability = nil
+			freezePayload = true
+		}
 		needsPreparedEnvelope := delivery.Event.PreparedObservability == nil
 		if !needsPreparedEnvelope {
 			if _, restoreErr := r.restoreTerminalPreparedObservability(deliveryCtx, delivery.Event); restoreErr != nil {

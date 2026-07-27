@@ -174,7 +174,7 @@ func TestValidateForModeAcceptsStrongInternalToolRegistrationToken(t *testing.T)
 		Auth:     AuthConfig{TokenSecret: "0123456789abcdef0123456789abcdef"},
 		Agent:    AgentConfig{ToolRegistrationInternalToken: "abcdef0123456789abcdef0123456789"},
 		Observability: ObservabilityConfig{
-			SealingKey: "observability-abcdef0123456789abcdef0123456789", SealingDomain: "cloud-agent-terminal-v1",
+			SealingKey: "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=", SealingDomain: "cloud-agent-terminal-v1",
 		},
 		MinIO: MinIOConfig{
 			AccessKey: "long-non-default-minio-access-key", SecretKey: "long-non-default-minio-secret-value",
@@ -222,7 +222,7 @@ func TestValidateForModeRejectsWeakObservabilitySealingKeyWithoutLeakingIt(t *te
 func TestObservabilitySealingConfigLoadsFromEnvironment(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
-	t.Setenv("OBSERVABILITY_SEALING_KEY", "environment-observability-key-0123456789abcdef")
+	t.Setenv("OBSERVABILITY_SEALING_KEY", "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=")
 	t.Setenv("OBSERVABILITY_SEALING_DOMAIN", "environment-agent-terminal-v1")
 	viper.AutomaticEnv()
 	setDefaults()
@@ -231,7 +231,7 @@ func TestObservabilitySealingConfigLoadsFromEnvironment(t *testing.T) {
 	if err := viper.Unmarshal(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Observability.SealingKey != "environment-observability-key-0123456789abcdef" ||
+	if cfg.Observability.SealingKey != "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=" ||
 		cfg.Observability.SealingDomain != "environment-agent-terminal-v1" {
 		t.Fatalf("observability environment config was not loaded: %#v", cfg.Observability)
 	}
