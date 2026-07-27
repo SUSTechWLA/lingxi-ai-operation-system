@@ -42,23 +42,30 @@ type workflowRepositoryCall struct {
 }
 
 type fakeWorkflowRows struct {
-	rows  []workflowManifestRow
-	index int
+	rows    []workflowManifestRow
+	index   int
+	scanErr error
+	err     error
+	closed  bool
 }
 
 func (r *fakeWorkflowRows) Next() bool { return r.index < len(r.rows) }
 func (r *fakeWorkflowRows) Scan(dest ...interface{}) error {
+	if r.scanErr != nil {
+		return r.scanErr
+	}
 	row := r.rows[r.index]
 	r.index++
 	return row.Scan(dest...)
 }
-func (r *fakeWorkflowRows) Close()     {}
-func (r *fakeWorkflowRows) Err() error { return nil }
+func (r *fakeWorkflowRows) Close()     { r.closed = true }
+func (r *fakeWorkflowRows) Err() error { return r.err }
 
 type fakeWorkflowRunDB struct {
 	execs     []workflowRepositoryCall
 	row       workflowManifestRow
 	queryRows *fakeWorkflowRows
+	queryErr  error
 }
 
 func (db *fakeWorkflowRunDB) Exec(_ context.Context, query string, args ...interface{}) (pgconn.CommandTag, error) {
@@ -71,6 +78,9 @@ func (db *fakeWorkflowRunDB) QueryRow(_ context.Context, query string, args ...i
 }
 func (db *fakeWorkflowRunDB) Query(_ context.Context, query string, args ...interface{}) (workflowRunRows, error) {
 	db.execs = append(db.execs, workflowRepositoryCall{query: query, args: append([]interface{}(nil), args...)})
+	if db.queryErr != nil {
+		return nil, db.queryErr
+	}
 	return db.queryRows, nil
 }
 
@@ -189,6 +199,9 @@ func TestWorkflowRepositoryCreateFindAndListUseManifestColumns(t *testing.T) {
 	if err != nil || len(listed) != 1 || listed[0].ReplayFromStageID == nil {
 		t.Fatalf("FindByProject runs=%#v error=%v", listed, err)
 	}
+	if !db.queryRows.closed {
+		t.Fatal("FindByProject did not close rows")
+	}
 	for _, call := range db.execs {
 		compact := strings.Join(strings.Fields(call.query), " ")
 		if !strings.Contains(compact, "tool_registry_snapshot_id") || !strings.Contains(compact, "run_manifest, parent_run_id, replay_from_stage_id") {
@@ -214,5 +227,97 @@ func TestWorkflowRepositoryRejectsOversizedManifestBeforeExec(t *testing.T) {
 	}
 	if len(db.execs) != 0 {
 		t.Fatal("oversized workflow manifest reached database")
+	}
+}
+
+func TestWorkflowRepositoryRunIdentityColumnBoundsBeforeCreate(t *testing.T) {
+	fields := []struct {
+		name  string
+		limit int
+		set   func(*WorkflowRun, string)
+	}{
+		{name: "trace ID", limit: database.RunTraceIDMaxBytes, set: func(run *WorkflowRun, value string) { run.TraceID = value }},
+		{name: "tool snapshot ID", limit: database.RunToolRegistrySnapshotIDMaxBytes, set: func(run *WorkflowRun, value string) { run.ToolRegistrySnapshotID = value }},
+		{name: "parent run ID", limit: database.RunParentRunIDMaxBytes, set: func(run *WorkflowRun, value string) { run.ParentRunID = &value }},
+		{name: "replay stage ID", limit: database.RunReplayFromStageIDMaxBytes, set: func(run *WorkflowRun, value string) { run.ReplayFromStageID = &value }},
+	}
+	for _, field := range fields {
+		t.Run(field.name+"/exact", func(t *testing.T) {
+			db := &fakeWorkflowRunDB{}
+			run := &WorkflowRun{ID: "wfr-1"}
+			field.set(run, strings.Repeat("x", field.limit))
+			if err := newRunRepositoryWithDB(db).Create(context.Background(), run); err != nil {
+				t.Fatalf("exact boundary failed: %v", err)
+			}
+			if len(db.execs) != 1 {
+				t.Fatalf("database calls = %d", len(db.execs))
+			}
+		})
+		t.Run(field.name+"/overflow", func(t *testing.T) {
+			db := &fakeWorkflowRunDB{}
+			run := &WorkflowRun{ID: "wfr-1"}
+			field.set(run, strings.Repeat("x", field.limit+1))
+			err := newRunRepositoryWithDB(db).Create(context.Background(), run)
+			if err == nil || !strings.Contains(err.Error(), database.RunManifestLimitExceededCode) {
+				t.Fatalf("overflow error = %v", err)
+			}
+			if len(db.execs) != 0 {
+				t.Fatalf("overflow reached database: %#v", db.execs)
+			}
+		})
+	}
+}
+
+func TestWorkflowRepositoryRunIdentityColumnBoundsAllowNilLineage(t *testing.T) {
+	db := &fakeWorkflowRunDB{}
+	if err := newRunRepositoryWithDB(db).Create(context.Background(), &WorkflowRun{ID: "wfr-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.execs) != 1 {
+		t.Fatalf("database calls = %d", len(db.execs))
+	}
+}
+
+func TestWorkflowRepositoryFindByProjectPropagatesQueryError(t *testing.T) {
+	queryErr := fmt.Errorf("query failed")
+	_, err := newRunRepositoryWithDB(&fakeWorkflowRunDB{queryErr: queryErr}).FindByProject(context.Background(), "project-1")
+	if err != queryErr {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWorkflowRepositoryFindByProjectClosesRowsOnRowErrors(t *testing.T) {
+	now := time.Now().UTC()
+	validRow := workflowManifestRow{
+		"wfr-1", "project-1", "user-1", "template-1", "1", "task-1", RunPending, 1,
+		map[string]interface{}{}, map[string]interface{}{}, map[string]StageStatus{}, "trace-1", "snapshot-1",
+		[]byte(`{"schemaVersion":"1"}`), nil, nil, (*time.Time)(nil), (*time.Time)(nil), now,
+	}
+	malformedRow := append(workflowManifestRow(nil), validRow...)
+	malformedRow[13] = []byte(`{"schemaVersion":`)
+	scanErr := fmt.Errorf("scan failed")
+	rowsErr := fmt.Errorf("rows failed")
+	cases := []struct {
+		name string
+		rows *fakeWorkflowRows
+		want error
+	}{
+		{name: "scan", rows: &fakeWorkflowRows{rows: []workflowManifestRow{validRow}, scanErr: scanErr}, want: scanErr},
+		{name: "malformed manifest", rows: &fakeWorkflowRows{rows: []workflowManifestRow{malformedRow}}},
+		{name: "terminal rows error", rows: &fakeWorkflowRows{err: rowsErr}, want: rowsErr},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := newRunRepositoryWithDB(&fakeWorkflowRunDB{queryRows: test.rows}).FindByProject(context.Background(), "project-1")
+			if test.want != nil && err != test.want {
+				t.Fatalf("error = %v, want %v", err, test.want)
+			}
+			if test.want == nil && err == nil {
+				t.Fatal("malformed run manifest JSON was accepted")
+			}
+			if !test.rows.closed {
+				t.Fatal("rows were not closed")
+			}
+		})
 	}
 }

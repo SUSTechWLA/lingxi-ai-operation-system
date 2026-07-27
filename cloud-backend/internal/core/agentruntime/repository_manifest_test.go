@@ -21,8 +21,10 @@ type agentRepositoryCall struct {
 }
 
 type fakeAgentRunDB struct {
-	execs []agentRepositoryCall
-	rows  []pgx.Row
+	execs     []agentRepositoryCall
+	rows      []pgx.Row
+	queryRows agentRunRows
+	queryErr  error
 }
 
 func (db *fakeAgentRunDB) Exec(_ context.Context, query string, args ...interface{}) (pgconn.CommandTag, error) {
@@ -40,8 +42,15 @@ func (db *fakeAgentRunDB) QueryRow(_ context.Context, query string, args ...inte
 	return row
 }
 
-func (db *fakeAgentRunDB) Query(context.Context, string, ...interface{}) (agentRunRows, error) {
-	return nil, fmt.Errorf("unexpected Query call")
+func (db *fakeAgentRunDB) Query(_ context.Context, query string, args ...interface{}) (agentRunRows, error) {
+	db.execs = append(db.execs, agentRepositoryCall{query: query, args: append([]interface{}(nil), args...)})
+	if db.queryErr != nil {
+		return nil, db.queryErr
+	}
+	if db.queryRows == nil {
+		return nil, fmt.Errorf("unexpected Query call")
+	}
+	return db.queryRows, nil
 }
 
 type manifestRow []interface{}
@@ -67,6 +76,26 @@ func (r manifestRow) Scan(dest ...interface{}) error {
 	}
 	return nil
 }
+
+type fakeAgentRunRows struct {
+	rows    []manifestRow
+	index   int
+	scanErr error
+	err     error
+	closed  bool
+}
+
+func (r *fakeAgentRunRows) Next() bool { return r.index < len(r.rows) }
+func (r *fakeAgentRunRows) Scan(dest ...interface{}) error {
+	if r.scanErr != nil {
+		return r.scanErr
+	}
+	row := r.rows[r.index]
+	r.index++
+	return row.Scan(dest...)
+}
+func (r *fakeAgentRunRows) Close()     { r.closed = true }
+func (r *fakeAgentRunRows) Err() error { return r.err }
 
 func TestScanRunPreservesManifestAndNullableLineage(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
@@ -202,5 +231,147 @@ func TestRepositoryRejectsOversizedManifestBeforeExec(t *testing.T) {
 	}
 	if len(db.execs) != 0 {
 		t.Fatal("oversized manifest reached database")
+	}
+}
+
+func TestRepositoryRunIdentityColumnBoundsApplyBeforeEveryWrite(t *testing.T) {
+	fields := []struct {
+		name  string
+		limit int
+		set   func(*Run, string)
+	}{
+		{name: "trace ID", limit: database.RunTraceIDMaxBytes, set: func(run *Run, value string) { run.TraceID = value }},
+		{name: "tool snapshot ID", limit: database.RunToolRegistrySnapshotIDMaxBytes, set: func(run *Run, value string) { run.ToolRegistrySnapshotID = value }},
+		{name: "parent run ID", limit: database.RunParentRunIDMaxBytes, set: func(run *Run, value string) { run.ParentRunID = &value }},
+		{name: "replay stage ID", limit: database.RunReplayFromStageIDMaxBytes, set: func(run *Run, value string) { run.ReplayFromStageID = &value }},
+	}
+	writers := []struct {
+		name  string
+		write func(*Repository, *Run) error
+	}{
+		{name: "CreateRun", write: func(repo *Repository, run *Run) error {
+			_, err := repo.CreateRun(context.Background(), run)
+			return err
+		}},
+		{name: "SaveRun", write: func(repo *Repository, run *Run) error {
+			return repo.SaveRun(context.Background(), run)
+		}},
+		{name: "SaveRunTerminal", write: func(repo *Repository, run *Run) error {
+			return repo.SaveRunTerminal(context.Background(), run, RunTerminalEvent{EventID: "event-1", RunID: run.ID})
+		}},
+	}
+
+	for _, writer := range writers {
+		for _, field := range fields {
+			t.Run(writer.name+"/"+field.name+"/exact", func(t *testing.T) {
+				db := &fakeAgentRunDB{}
+				run := &Run{ID: "run-1"}
+				field.set(run, strings.Repeat("x", field.limit))
+				if err := writer.write(newRepositoryWithDB(db), run); err != nil {
+					t.Fatalf("exact boundary failed: %v", err)
+				}
+				if len(db.execs) != 1 {
+					t.Fatalf("database calls = %d", len(db.execs))
+				}
+			})
+			t.Run(writer.name+"/"+field.name+"/overflow", func(t *testing.T) {
+				db := &fakeAgentRunDB{}
+				run := &Run{ID: "run-1"}
+				field.set(run, strings.Repeat("x", field.limit+1))
+				err := writer.write(newRepositoryWithDB(db), run)
+				if err == nil || !strings.Contains(err.Error(), database.RunManifestLimitExceededCode) {
+					t.Fatalf("overflow error = %v", err)
+				}
+				if len(db.execs) != 0 {
+					t.Fatalf("overflow reached database: %#v", db.execs)
+				}
+			})
+		}
+	}
+}
+
+func TestRepositoryRunIdentityColumnBoundsAllowNilLineage(t *testing.T) {
+	db := &fakeAgentRunDB{}
+	run := &Run{ID: "run-1"}
+	if _, err := newRepositoryWithDB(db).CreateRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.execs) != 1 {
+		t.Fatalf("database calls = %d", len(db.execs))
+	}
+}
+
+func TestRepositoryClaimTerminalEventsScansJSONAndClosesRows(t *testing.T) {
+	event := RunTerminalEvent{
+		EventID: "event-1",
+		RunID:   "run-1",
+		Status:  RunStatusSuccess,
+		Context: map[string]interface{}{"result": "ok"},
+	}
+	eventJSON, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := &fakeAgentRunRows{rows: []manifestRow{{"run-1", "event-1", "claim-1", eventJSON}}}
+	db := &fakeAgentRunDB{queryRows: rows}
+
+	deliveries, err := newRepositoryWithDB(db).ClaimTerminalEvents(
+		context.Background(), 4, time.Now().Add(time.Minute), "claim-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 || deliveries[0].RunID != "run-1" || deliveries[0].EventID != "event-1" ||
+		deliveries[0].ClaimToken != "claim-1" || !reflect.DeepEqual(deliveries[0].Event, event) {
+		t.Fatalf("deliveries = %#v", deliveries)
+	}
+	if !rows.closed {
+		t.Fatal("terminal event rows were not closed")
+	}
+	if len(db.execs) != 1 || !strings.Contains(db.execs[0].query, "RETURNING runs.id") {
+		t.Fatalf("query calls = %#v", db.execs)
+	}
+}
+
+func TestRepositoryClaimTerminalEventsPropagatesQueryError(t *testing.T) {
+	queryErr := fmt.Errorf("query failed")
+	rows := &fakeAgentRunRows{}
+	db := &fakeAgentRunDB{queryRows: rows, queryErr: queryErr}
+	_, err := newRepositoryWithDB(db).ClaimTerminalEvents(context.Background(), 1, time.Now(), "claim-1")
+	if err != queryErr {
+		t.Fatalf("error = %v", err)
+	}
+	if rows.closed {
+		t.Fatal("rows were closed even though Query did not return them")
+	}
+}
+
+func TestRepositoryClaimTerminalEventsClosesRowsOnRowErrors(t *testing.T) {
+	scanErr := fmt.Errorf("scan failed")
+	rowsErr := fmt.Errorf("rows failed")
+	cases := []struct {
+		name string
+		rows *fakeAgentRunRows
+		want error
+	}{
+		{name: "scan", rows: &fakeAgentRunRows{rows: []manifestRow{{"run-1"}}, scanErr: scanErr}, want: scanErr},
+		{name: "malformed JSON", rows: &fakeAgentRunRows{rows: []manifestRow{{"run-1", "event-1", "claim-1", []byte(`{"eventId":`)}}}},
+		{name: "terminal rows error", rows: &fakeAgentRunRows{err: rowsErr}, want: rowsErr},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := newRepositoryWithDB(&fakeAgentRunDB{queryRows: test.rows}).ClaimTerminalEvents(
+				context.Background(), 1, time.Now(), "claim-1",
+			)
+			if test.want != nil && err != test.want {
+				t.Fatalf("error = %v, want %v", err, test.want)
+			}
+			if test.want == nil && err == nil {
+				t.Fatal("malformed terminal event JSON was accepted")
+			}
+			if !test.rows.closed {
+				t.Fatal("rows were not closed")
+			}
+		})
 	}
 }

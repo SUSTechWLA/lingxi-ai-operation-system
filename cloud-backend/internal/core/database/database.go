@@ -14,14 +14,66 @@ import (
 const (
 	// Run-manifest limits bound durable metadata independently of prompt/tool
 	// payload size. Agent and workflow builders share this persistence contract.
-	RunManifestLimitExceededCode  = "RUN_MANIFEST_LIMIT_EXCEEDED"
-	RunManifestMaxBytes           = 32 * 1024
-	RunManifestMaxRunnerCatalogs  = 128
+	RunManifestLimitExceededCode = "RUN_MANIFEST_LIMIT_EXCEEDED"
+	RunManifestMaxBytes          = 32 * 1024
+	RunManifestMaxRunnerCatalogs = 128
+
+	// RunManifestMaxIdentifierBytes bounds identifiers inside run_manifest
+	// JSON. Persisted top-level columns use their exact DDL widths below.
 	RunManifestMaxIdentifierBytes = 256
 	RunManifestMaxRunnerIDBytes   = 128
 	RunManifestMaxVersionBytes    = 128
 	RunManifestMaxHashBytes       = 128
+
+	RunTraceIDMaxBytes                = 128
+	RunToolRegistrySnapshotIDMaxBytes = 160
+	RunParentRunIDMaxBytes            = 64
+	RunReplayFromStageIDMaxBytes      = 128
 )
+
+// ValidateRunIdentityColumnBounds enforces the exact VARCHAR widths shared by
+// agent_runs and workflow_runs before either repository reaches PostgreSQL.
+func ValidateRunIdentityColumnBounds(
+	traceID string,
+	toolRegistrySnapshotID string,
+	parentRunID *string,
+	replayFromStageID *string,
+) error {
+	if err := validateRunIdentityColumn("trace ID", traceID, RunTraceIDMaxBytes); err != nil {
+		return err
+	}
+	if err := validateRunIdentityColumn(
+		"tool snapshot ID",
+		toolRegistrySnapshotID,
+		RunToolRegistrySnapshotIDMaxBytes,
+	); err != nil {
+		return err
+	}
+	if parentRunID != nil {
+		if err := validateRunIdentityColumn("parent run ID", *parentRunID, RunParentRunIDMaxBytes); err != nil {
+			return err
+		}
+	}
+	if replayFromStageID != nil {
+		if err := validateRunIdentityColumn("replay stage ID", *replayFromStageID, RunReplayFromStageIDMaxBytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRunIdentityColumn(field, value string, maximum int) error {
+	if len(value) > maximum {
+		return fmt.Errorf(
+			"%s: %s bytes %d exceeds %d",
+			RunManifestLimitExceededCode,
+			field,
+			len(value),
+			maximum,
+		)
+	}
+	return nil
+}
 
 const localMCPReplanMigrationSQL = `UPDATE local_jobs
 SET status='FAILED',

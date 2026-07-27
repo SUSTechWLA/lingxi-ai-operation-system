@@ -17,6 +17,23 @@ func TestRunManifestMigrationIsIdempotentForAgentAndWorkflowRuns(t *testing.T) {
 			}
 		}
 	}
+	for _, column := range []struct {
+		fragment string
+		maximum  int
+		expected int
+	}{
+		{fragment: "trace_id VARCHAR(128)", maximum: RunTraceIDMaxBytes, expected: 128},
+		{fragment: "tool_registry_snapshot_id VARCHAR(160)", maximum: RunToolRegistrySnapshotIDMaxBytes, expected: 160},
+		{fragment: "parent_run_id VARCHAR(64)", maximum: RunParentRunIDMaxBytes, expected: 64},
+		{fragment: "replay_from_stage_id VARCHAR(128)", maximum: RunReplayFromStageIDMaxBytes, expected: 128},
+	} {
+		if !strings.Contains(runManifestMigration, column.fragment) {
+			t.Fatalf("migration missing %q", column.fragment)
+		}
+		if column.maximum != column.expected {
+			t.Fatalf("%s limit = %d, want %d", column.fragment, column.maximum, column.expected)
+		}
+	}
 }
 
 type recordingRunManifestMigrationExecer struct {

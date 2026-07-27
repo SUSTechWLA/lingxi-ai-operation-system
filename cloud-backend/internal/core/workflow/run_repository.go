@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/tangying-ai/aios-core/internal/core/database"
 )
 
 // RunRepository provides data access for WorkflowRun and StageRun.
@@ -30,6 +32,8 @@ type workflowRunDB interface {
 
 type pgxWorkflowRunDB struct{ pool *pgxpool.Pool }
 
+var _ workflowRunDB = pgxWorkflowRunDB{}
+
 func (db pgxWorkflowRunDB) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {
 	return db.pool.Exec(ctx, sql, arguments...)
 }
@@ -50,7 +54,7 @@ func newRunRepositoryWithDB(db workflowRunDB) *RunRepository {
 
 // Create inserts a new WorkflowRun.
 func (r *RunRepository) Create(ctx context.Context, run *WorkflowRun) error {
-	if err := validateWorkflowRunManifest(run.RunManifest); err != nil {
+	if err := validatePersistedWorkflowRun(run); err != nil {
 		return err
 	}
 	if run.ID == "" {
@@ -67,6 +71,18 @@ func (r *RunRepository) Create(ctx context.Context, run *WorkflowRun) error {
 		run.ParentRunID, run.ReplayFromStageID, run.StartedAt, run.FinishedAt, run.CreatedAt,
 	)
 	return err
+}
+
+func validatePersistedWorkflowRun(run *WorkflowRun) error {
+	if err := database.ValidateRunIdentityColumnBounds(
+		run.TraceID,
+		run.ToolRegistrySnapshotID,
+		run.ParentRunID,
+		run.ReplayFromStageID,
+	); err != nil {
+		return err
+	}
+	return validateWorkflowRunManifest(run.RunManifest)
 }
 
 // FindByID returns a WorkflowRun by ID.
@@ -112,6 +128,9 @@ func (r *RunRepository) FindByProject(ctx context.Context, projectID string) ([]
 			return nil, err
 		}
 		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return runs, nil
 }

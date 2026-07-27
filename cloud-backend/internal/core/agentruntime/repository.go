@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/tangying-ai/aios-core/internal/core/database"
 )
 
 type Repository struct {
@@ -28,6 +30,8 @@ type agentRunRows interface {
 }
 
 type pgxAgentRunDB struct{ pool *pgxpool.Pool }
+
+var _ agentRunDB = pgxAgentRunDB{}
 
 func (db pgxAgentRunDB) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {
 	return db.pool.Exec(ctx, sql, arguments...)
@@ -56,7 +60,7 @@ func newRepositoryWithDB(db agentRunDB) *Repository {
 }
 
 func (r *Repository) CreateRun(ctx context.Context, run *Run) (bool, error) {
-	if err := validateAgentRunManifest(run.RunManifest); err != nil {
+	if err := validatePersistedAgentRun(run); err != nil {
 		return false, err
 	}
 	planJSON, budgetJSON, metadataJSON, runManifestJSON := marshalRunFields(run)
@@ -73,7 +77,7 @@ func (r *Repository) CreateRun(ctx context.Context, run *Run) (bool, error) {
 }
 
 func (r *Repository) SaveRun(ctx context.Context, run *Run) error {
-	if err := validateAgentRunManifest(run.RunManifest); err != nil {
+	if err := validatePersistedAgentRun(run); err != nil {
 		return err
 	}
 	planJSON, budgetJSON, metadataJSON, runManifestJSON := marshalRunFields(run)
@@ -95,7 +99,7 @@ func (r *Repository) SaveRun(ctx context.Context, run *Run) error {
 }
 
 func (r *Repository) SaveRunTerminal(ctx context.Context, run *Run, event RunTerminalEvent) error {
-	if err := validateAgentRunManifest(run.RunManifest); err != nil {
+	if err := validatePersistedAgentRun(run); err != nil {
 		return err
 	}
 	planJSON, budgetJSON, metadataJSON, runManifestJSON := marshalRunFields(run)
@@ -120,6 +124,18 @@ func (r *Repository) SaveRunTerminal(ctx context.Context, run *Run, event RunTer
 		runManifestJSON, run.ParentRunID, run.ReplayFromStageID, run.CreatedAt, run.UpdatedAt, eventJSON, event.EventID,
 	)
 	return err
+}
+
+func validatePersistedAgentRun(run *Run) error {
+	if err := database.ValidateRunIdentityColumnBounds(
+		run.TraceID,
+		run.ToolRegistrySnapshotID,
+		run.ParentRunID,
+		run.ReplayFromStageID,
+	); err != nil {
+		return err
+	}
+	return validateAgentRunManifest(run.RunManifest)
 }
 
 func (r *Repository) ClaimTerminalEvents(ctx context.Context, limit int, leaseUntil time.Time, claimToken string) ([]TerminalEventDelivery, error) {
