@@ -135,13 +135,17 @@ func NormalizeError(code string, err error, component string, causedBy string) *
 	_ = err
 	fingerprintInput := code + "\x00" + strings.TrimSpace(component)
 	sum := sha256.Sum256([]byte(fingerprintInput))
+	causedByEventID := ""
+	if eventIDPattern.MatchString(causedBy) {
+		causedByEventID = causedBy
+	}
 
 	return &EventError{
 		Code:               code,
 		Class:              definition.Class,
 		Fingerprint:        hex.EncodeToString(sum[:]),
 		Retryable:          definition.Retryable,
-		CausedByEventID:    causedBy,
+		CausedByEventID:    causedByEventID,
 		UserMessageKey:     definition.UserMessageKey,
 		DeveloperDetail:    diagnosticKey(code),
 		SuggestedActionKey: definition.SuggestedActionKey,
@@ -151,6 +155,16 @@ func NormalizeError(code string, err error, component string, causedBy string) *
 func diagnosticKey(code string) string {
 	key := strings.ToLower(strings.ReplaceAll(code, "_", "."))
 	return "diagnostic." + key
+}
+
+func matchesDiagnosticKey(code, detail string) bool {
+	if detail == "" {
+		return true
+	}
+	if _, ok := errorRegistry[code]; !ok {
+		return false
+	}
+	return detail == diagnosticKey(code)
 }
 
 func (e EventError) validate() error {
@@ -176,8 +190,8 @@ func (e EventError) validate() error {
 	if e.CausedByEventID != "" && !eventIDPattern.MatchString(e.CausedByEventID) {
 		return fmt.Errorf("error.causedByEventId has an invalid format")
 	}
-	if e.DeveloperDetail != "" && !developerDetailPattern.MatchString(e.DeveloperDetail) {
-		return fmt.Errorf("error.developerDetail must be a stable diagnostic key")
+	if !matchesDiagnosticKey(e.Code, e.DeveloperDetail) {
+		return fmt.Errorf("error.developerDetail does not match error.code")
 	}
 	if err := validateArtifactRefs("error.evidenceRefs", e.EvidenceRefs); err != nil {
 		return err

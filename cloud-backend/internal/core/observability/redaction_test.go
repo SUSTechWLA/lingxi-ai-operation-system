@@ -1,8 +1,10 @@
 package observability
 
 import (
+	"encoding/json"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -28,20 +30,27 @@ func TestRedactNeverKeepsSecretValues(t *testing.T) {
 	if got.Evidence.Attributes != nil {
 		t.Fatalf("non-contract evidence attributes were retained: %#v", got.Evidence.Attributes)
 	}
-	for _, field := range []string{
-		"evidence.attributes.authorization",
-		"evidence.attributes.cookie",
-		"evidence.attributes.token",
-		"evidence.attributes.password",
-		"evidence.attributes.apiKey",
-		"evidence.attributes.secret",
-		"evidence.attributes.prompt",
-		"evidence.attributes.userInput",
-		"evidence.attributes.artifactId",
-	} {
-		if !slices.Contains(got.Privacy.RedactedFields, field) {
-			t.Errorf("redactedFields = %#v, missing %q", got.Privacy.RedactedFields, field)
-		}
+	if !slices.Contains(got.Privacy.RedactedFields, "evidence.attributes") {
+		t.Fatalf("redactedFields = %#v, missing bounded attribute category", got.Privacy.RedactedFields)
+	}
+}
+
+func TestRedactNeverCopiesUntrustedAttributeKeyText(t *testing.T) {
+	event := validEvent()
+	event.Evidence.Attributes = map[string]any{
+		"authorization.Bearer secret-value": "ignored",
+	}
+
+	got := Redact(event)
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "secret-value") || strings.Contains(string(data), "Bearer") {
+		t.Fatalf("untrusted attribute key leaked into redacted event: %s", data)
+	}
+	if !reflect.DeepEqual(got.Privacy.RedactedFields, []string{"evidence.attributes"}) {
+		t.Fatalf("redactedFields = %#v, want bounded category", got.Privacy.RedactedFields)
 	}
 }
 
@@ -82,6 +91,23 @@ func TestRedactRemovesArbitraryDeveloperErrorText(t *testing.T) {
 	}
 	if ContainsSecret(got) {
 		t.Fatal("redacted event still contains developer error text")
+	}
+}
+
+func TestRedactRemovesMismatchedDiagnosticKey(t *testing.T) {
+	event := validEvent()
+	event.Error.DeveloperDetail = "diagnostic.secret.abc123"
+
+	got := Redact(event)
+
+	if got.Error.DeveloperDetail != "" {
+		t.Fatalf("DeveloperDetail = %q, want empty", got.Error.DeveloperDetail)
+	}
+	if !slices.Contains(got.Privacy.RedactedFields, "error.developerDetail") {
+		t.Fatalf("redactedFields = %#v, missing developer detail", got.Privacy.RedactedFields)
+	}
+	if !ContainsSecret(event.Error) {
+		t.Fatal("ContainsSecret() accepted mismatched diagnostic key")
 	}
 }
 
@@ -129,5 +155,35 @@ func TestContainsSecretRejectsSecretClassification(t *testing.T) {
 
 	if !ContainsSecret(event) {
 		t.Fatal("ContainsSecret() = false for SECRET-classified event")
+	}
+}
+
+func TestContainsSecretRejectsDecodedSecretClassification(t *testing.T) {
+	value := map[string]any{
+		"wrapper": map[string]any{
+			"Classification": "secret",
+		},
+	}
+
+	if !ContainsSecret(value) {
+		t.Fatal("ContainsSecret() = false for decoded SECRET classification")
+	}
+}
+
+func TestContainsSecretRequiresDiagnosticKeyToMatchCode(t *testing.T) {
+	matching := &EventError{
+		Code:            "MCP.CONNECTION.UNAVAILABLE",
+		DeveloperDetail: "diagnostic.mcp.connection.unavailable",
+	}
+	mismatched := &EventError{
+		Code:            "MCP.CONNECTION.UNAVAILABLE",
+		DeveloperDetail: "diagnostic.secret.abc123",
+	}
+
+	if ContainsSecret(matching) {
+		t.Fatal("ContainsSecret() rejected matching diagnostic key")
+	}
+	if !ContainsSecret(mismatched) {
+		t.Fatal("ContainsSecret() accepted mismatched diagnostic key")
 	}
 }

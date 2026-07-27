@@ -309,12 +309,6 @@ func (e Event) Validate() error {
 	if !eventIDPattern.MatchString(e.EventID) {
 		return fmt.Errorf("eventId has an invalid format")
 	}
-	if e.OccurredAt.IsZero() {
-		return fmt.Errorf("occurredAt is required")
-	}
-	if e.IngestedAt.IsZero() {
-		return fmt.Errorf("ingestedAt is required")
-	}
 	if e.ProducerSequence < 0 {
 		return fmt.Errorf("producerSequence must be non-negative")
 	}
@@ -327,13 +321,13 @@ func (e Event) Validate() error {
 	if !messageKeyPattern.MatchString(e.MessageKey) {
 		return fmt.Errorf("messageKey has an invalid format")
 	}
-	if strings.TrimSpace(e.Source.Service) == "" {
+	if e.Source.Service == "" {
 		return fmt.Errorf("source.service is required")
 	}
-	if strings.TrimSpace(e.Source.Component) == "" {
+	if e.Source.Component == "" {
 		return fmt.Errorf("source.component is required")
 	}
-	if strings.TrimSpace(e.Source.Environment) == "" {
+	if e.Source.Environment == "" {
 		return fmt.Errorf("source.environment is required")
 	}
 	if err := e.Correlation.validate(); err != nil {
@@ -344,9 +338,6 @@ func (e Event) Validate() error {
 	}
 	if err := e.Evidence.validate(); err != nil {
 		return err
-	}
-	if e.Severity == SeverityError && e.Error == nil {
-		return fmt.Errorf("error is required for ERROR severity")
 	}
 	if e.Error != nil {
 		if err := e.Error.validate(); err != nil {
@@ -361,7 +352,7 @@ func (e Event) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(e.Privacy.RedactedFields))
 	for _, field := range e.Privacy.RedactedFields {
-		if strings.TrimSpace(field) == "" {
+		if field == "" {
 			return fmt.Errorf("privacy.redactedFields must not contain empty values")
 		}
 		if _, ok := seen[field]; ok {
@@ -399,9 +390,6 @@ func (c Correlation) validate() error {
 		if !check.pattern.MatchString(check.value) {
 			return fmt.Errorf("%s has an invalid format", check.name)
 		}
-	}
-	if c.StageID != "" && strings.TrimSpace(c.StageID) == "" {
-		return fmt.Errorf("correlation.stageId must not be blank")
 	}
 	return nil
 }

@@ -2,6 +2,8 @@ package observability
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -74,8 +76,6 @@ func TestEventValidateRejectsInvalidContractFields(t *testing.T) {
 	}{
 		{"schema version", func(e *Event) { e.SchemaVersion = "2.0" }, "schemaVersion"},
 		{"event id", func(e *Event) { e.EventID = "event_1" }, "eventId"},
-		{"occurred at", func(e *Event) { e.OccurredAt = time.Time{} }, "occurredAt"},
-		{"ingested at", func(e *Event) { e.IngestedAt = time.Time{} }, "ingestedAt"},
 		{"producer sequence", func(e *Event) { e.ProducerSequence = -1 }, "producerSequence"},
 		{"severity", func(e *Event) { e.Severity = "CRITICAL" }, "severity"},
 		{"closed event type", func(e *Event) { e.EventType = "workflow.stage.exploded" }, "eventType"},
@@ -86,7 +86,6 @@ func TestEventValidateRejectsInvalidContractFields(t *testing.T) {
 		{"trace id", func(e *Event) { e.Correlation.TraceID = "trace_1" }, "correlation.traceId"},
 		{"span id", func(e *Event) { e.Correlation.SpanID = "span_1" }, "correlation.spanId"},
 		{"optional correlation id", func(e *Event) { e.Correlation.TaskID = "task_1" }, "correlation.taskId"},
-		{"empty stage id", func(e *Event) { e.Correlation.StageID = " " }, "correlation.stageId"},
 		{"execution status", func(e *Event) { e.Execution.Status = "BROKEN" }, "execution.status"},
 		{"execution attempt", func(e *Event) { e.Execution.Attempt = 0 }, "execution.attempt"},
 		{"negative duration", func(e *Event) { value := int64(-1); e.Execution.DurationMs = &value }, "execution.durationMs"},
@@ -98,6 +97,7 @@ func TestEventValidateRejectsInvalidContractFields(t *testing.T) {
 		{"error fingerprint", func(e *Event) { e.Error.Fingerprint = "short" }, "error.fingerprint"},
 		{"error cause", func(e *Event) { e.Error.CausedByEventID = "event_1" }, "error.causedByEventId"},
 		{"developer detail", func(e *Event) { e.Error.DeveloperDetail = "dial tcp 127.0.0.1:9001" }, "error.developerDetail"},
+		{"mismatched developer detail", func(e *Event) { e.Error.DeveloperDetail = "diagnostic.secret.abc123" }, "error.developerDetail"},
 		{"error evidence ref", func(e *Event) { e.Error.EvidenceRefs = []string{"/tmp/error.log"} }, "error.evidenceRefs"},
 		{"protected stack ref", func(e *Event) { e.Error.ProtectedStackRef = "/tmp/stack.log" }, "error.protectedStackRef"},
 		{"classification", func(e *Event) { e.Privacy.Classification = "PRIVATE" }, "privacy.classification"},
@@ -118,13 +118,31 @@ func TestEventValidateRejectsInvalidContractFields(t *testing.T) {
 	}
 }
 
-func TestEventValidateRequiresErrorForErrorSeverity(t *testing.T) {
-	event := validEvent()
-	event.Error = nil
+func TestEventValidateMatchesSchemaPermissiveCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Event)
+	}{
+		{"zero occurred at", func(e *Event) { e.OccurredAt = time.Time{} }},
+		{"zero ingested at", func(e *Event) { e.IngestedAt = time.Time{} }},
+		{"whitespace source", func(e *Event) {
+			e.Source.Service = " "
+			e.Source.Component = " "
+			e.Source.Environment = " "
+		}},
+		{"whitespace stage id", func(e *Event) { e.Correlation.StageID = " " }},
+		{"whitespace redacted field", func(e *Event) { e.Privacy.RedactedFields = []string{" "} }},
+		{"error severity with null error", func(e *Event) { e.Error = nil }},
+	}
 
-	err := event.Validate()
-	if err == nil || !strings.Contains(err.Error(), "error") {
-		t.Fatalf("Validate() error = %v, want missing error", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := validEvent()
+			tt.mutate(&event)
+			if err := event.Validate(); err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
 	}
 }
 
@@ -157,5 +175,65 @@ func TestEventJSONMatchesClosedWireShape(t *testing.T) {
 	}
 	if strings.Contains(string(data), "raw-secret") {
 		t.Fatalf("secret leaked to wire: %s", data)
+	}
+}
+
+func TestGoPoliciesMatchCanonicalV1Contracts(t *testing.T) {
+	contractDir := filepath.Join("..", "..", "..", "..", "contracts", "observability", "v1")
+	schemaData, err := os.ReadFile(filepath.Join(contractDir, "event.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			EventType struct {
+				Enum []EventType `json:"enum"`
+			} `json:"eventType"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schemaData, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if len(eventTypes) != len(schema.Properties.EventType.Enum) {
+		t.Fatalf("Go event types = %d, schema event types = %d", len(eventTypes), len(schema.Properties.EventType.Enum))
+	}
+	for _, eventType := range schema.Properties.EventType.Enum {
+		if _, ok := eventTypes[eventType]; !ok {
+			t.Errorf("schema event type %q missing from Go policy", eventType)
+		}
+	}
+
+	registryData, err := os.ReadFile(filepath.Join(contractDir, "error-codes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var canonical []struct {
+		Code               string     `json:"code"`
+		Class              ErrorClass `json:"class"`
+		Retryable          bool       `json:"retryable"`
+		UserMessageKey     string     `json:"userMessageKey"`
+		SuggestedActionKey string     `json:"suggestedActionKey"`
+	}
+	if err := json.Unmarshal(registryData, &canonical); err != nil {
+		t.Fatal(err)
+	}
+	if len(errorRegistry) != len(canonical) {
+		t.Fatalf("Go error registry = %d, canonical registry = %d", len(errorRegistry), len(canonical))
+	}
+	for _, row := range canonical {
+		got, ok := errorRegistry[row.Code]
+		if !ok {
+			t.Errorf("canonical error code %q missing from Go policy", row.Code)
+			continue
+		}
+		want := errorDefinition{
+			Class:              row.Class,
+			Retryable:          row.Retryable,
+			UserMessageKey:     row.UserMessageKey,
+			SuggestedActionKey: row.SuggestedActionKey,
+		}
+		if got != want {
+			t.Errorf("errorRegistry[%q] = %+v, want %+v", row.Code, got, want)
+		}
 	}
 }

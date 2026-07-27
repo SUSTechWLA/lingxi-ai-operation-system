@@ -101,3 +101,19 @@ func TestNormalizeErrorRejectsUnregisteredCode(t *testing.T) {
 		t.Fatalf("NormalizeError() = %+v, want nil", got)
 	}
 }
+
+func TestNormalizeErrorDropsInvalidCausedByEventID(t *testing.T) {
+	got := NormalizeError(
+		"MCP.CONNECTION.UNAVAILABLE",
+		errors.New("boom"),
+		"mcp-client",
+		"authorization.Bearer secret-value",
+	)
+
+	if got.CausedByEventID != "" {
+		t.Fatalf("CausedByEventID = %q, want empty", got.CausedByEventID)
+	}
+	if strings.Contains(got.CausedByEventID, "secret-value") {
+		t.Fatal("invalid causal value retained secret text")
+	}
+}

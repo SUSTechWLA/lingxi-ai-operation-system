@@ -2,7 +2,6 @@ package observability
 
 import (
 	"reflect"
-	"sort"
 	"strings"
 	"unicode"
 )
@@ -25,21 +24,14 @@ func Redact(event Event) Event {
 		errorCopy := *event.Error
 		errorCopy.EvidenceRefs = cloneStrings(event.Error.EvidenceRefs)
 		redacted.Error = &errorCopy
-		if errorCopy.DeveloperDetail != "" && !developerDetailPattern.MatchString(errorCopy.DeveloperDetail) {
+		if !matchesDiagnosticKey(errorCopy.Code, errorCopy.DeveloperDetail) {
 			redacted.Error.DeveloperDetail = ""
 			addRedactedField(&redacted.Privacy, "error.developerDetail")
 		}
 	}
 
 	if len(event.Evidence.Attributes) > 0 {
-		keys := make([]string, 0, len(event.Evidence.Attributes))
-		for key := range event.Evidence.Attributes {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			addRedactedField(&redacted.Privacy, "evidence.attributes."+key)
-		}
+		addRedactedField(&redacted.Privacy, "evidence.attributes")
 	}
 
 	return redacted
@@ -68,6 +60,12 @@ func containsSecret(value reflect.Value, seen map[visit]struct{}) bool {
 		PrivacyClassification(value.String()) == PrivacySecret {
 		return true
 	}
+	if value.Type() == reflect.TypeOf(EventError{}) {
+		eventError := value.Interface().(EventError)
+		if !matchesDiagnosticKey(eventError.Code, eventError.DeveloperDetail) {
+			return true
+		}
+	}
 
 	switch value.Kind() {
 	case reflect.Pointer:
@@ -89,12 +87,21 @@ func containsSecret(value reflect.Value, seen map[visit]struct{}) bool {
 			return false
 		}
 		seen[current] = struct{}{}
+		if decodedDeveloperDetailMismatch(value) {
+			return true
+		}
 		iter := value.MapRange()
 		for iter.Next() {
 			key := iter.Key()
 			item := iter.Value()
 			if key.Kind() == reflect.String {
 				name := key.String()
+				if normalizedFieldName(name) == "classification" {
+					classification, ok := stringValue(item)
+					if ok && strings.EqualFold(classification, string(PrivacySecret)) {
+						return true
+					}
+				}
 				if sensitiveField(name) && hasContent(item) {
 					return true
 				}
@@ -142,6 +149,44 @@ func containsSecret(value reflect.Value, seen map[visit]struct{}) bool {
 		}
 	}
 	return false
+}
+
+func decodedDeveloperDetailMismatch(value reflect.Value) bool {
+	var code string
+	var detail string
+	hasDetail := false
+	iter := value.MapRange()
+	for iter.Next() {
+		key := iter.Key()
+		if key.Kind() != reflect.String {
+			continue
+		}
+		item, ok := stringValue(iter.Value())
+		if !ok {
+			continue
+		}
+		switch normalizedFieldName(key.String()) {
+		case "code":
+			code = item
+		case "developerdetail":
+			detail = item
+			hasDetail = true
+		}
+	}
+	return hasDetail && !matchesDiagnosticKey(code, detail)
+}
+
+func stringValue(value reflect.Value) (string, bool) {
+	for value.IsValid() && (value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) {
+		if value.IsNil() {
+			return "", false
+		}
+		value = value.Elem()
+	}
+	if !value.IsValid() || value.Kind() != reflect.String {
+		return "", false
+	}
+	return value.String(), true
 }
 
 func sensitiveField(name string) bool {
