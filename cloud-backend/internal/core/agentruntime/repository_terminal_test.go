@@ -53,3 +53,43 @@ func TestRepositoryFreezeTerminalEventWritesExactClaimedPayload(t *testing.T) {
 		t.Fatalf("freeze payload=%s error=%v", payload, err)
 	}
 }
+
+func TestRepositoryTerminalMigrationCASPreservesUnknownJSON(t *testing.T) {
+	raw := []byte(`{
+		"eventId":"evt_terminal_future_cas",
+		"callbackIdempotencyKey":"evt_terminal_future_cas",
+		"runId":"run-future-cas",
+		"status":"SUCCESS",
+		"occurredAt":"2026-07-28T01:02:03Z",
+		"preparedObservability":{"payload":"YmVmb3Jl","binding":{},"futureV2":{"kept":true}},
+		"futureTop":{"exact":9007199254740993123456789}
+	}`)
+	var event RunTerminalEvent
+	if err := json.Unmarshal(raw, &event); err != nil {
+		t.Fatal(err)
+	}
+	event.PreparedObservability.Payload = []byte("after")
+	delivery := TerminalEventDelivery{
+		RunID: "run-future-cas", EventID: "evt_terminal_future_cas", ClaimToken: "claim-future-cas", Event: event,
+	}
+	db := &fakeAgentRunDB{}
+	frozen, err := newRepositoryWithDB(db).FreezeTerminalEvent(context.Background(), delivery)
+	if err != nil || !frozen || len(db.execs) != 1 {
+		t.Fatalf("frozen=%v error=%v calls=%#v", frozen, err, db.execs)
+	}
+	payload := db.execs[0].args[3].([]byte)
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &top); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(top["futureTop"]), "9007199254740993123456789") {
+		t.Fatalf("repository CAS lost future top-level JSON: %s", payload)
+	}
+	var prepared map[string]json.RawMessage
+	if err := json.Unmarshal(top["preparedObservability"], &prepared); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := prepared["futureV2"]; !ok {
+		t.Fatalf("repository CAS lost future prepared JSON: %s", payload)
+	}
+}

@@ -165,6 +165,155 @@ $ git diff --check
 (no output, exit 0)
 ```
 
+## Fix Round 4 — forward-compatible terminal CAS and signed-source upgrade
+
+This round starts from `916145e74586322e930633bbe9646dc5363f45a0` and
+addresses only the two residual Important Task 1 findings, plus the directly
+related CRLF one-click upgrade edge. Workflow snapshot execution remains out of
+scope.
+
+### Lossless bounded terminal JSON migration
+
+- The root cause was a closed Go struct decode followed by a full struct
+  marshal in `FreezeTerminalEvent`. A claimed migration therefore discarded
+  every future top-level, prepared-envelope, binding, source, runtime, and
+  privacy member before the CAS.
+- `RunTerminalEvent` now retains a bounded, duplicate-safe ordered raw-object
+  baseline only when unknown members exist. Marshal performs a surgical merge:
+  unchanged known fields keep their original bytes, changed known fields are
+  authoritative, and unknown values survive recursively with exact arrays,
+  objects, nulls, and large integer spelling.
+- Validation runs before the normal Go decode and rejects duplicate object keys
+  at every depth, noncanonical case aliases of known keys, trailing data,
+  payloads over 256 KiB, depth over 32, and more than 16K values. This bounds the
+  preservation state and prevents an unknown field from hiding a later known
+  alias.
+- Direct decode/remarshal and repository CAS tests use `futureTop`, `futureV2`,
+  future binding/source/runtime/privacy members, and integers beyond JavaScript
+  precision. The CAS changes the known sealed payload and proves every future
+  member remains present.
+
+### Explicit authenticated source-environment migration
+
+- The pre-fix one-click environment had no `GIN_MODE` or `APP_ENV`, so durable
+  envelopes were signed as `development`. The newer compose runtime forced
+  `production`, and using runtime mode as the signed source made both v1 and v2
+  pending rows permanently unrestorable.
+- `OBSERVABILITY_SOURCE_ENVIRONMENT` is now an explicit stable signed identity,
+  independent from runtime validation mode. Production requires it explicitly;
+  development retains the historical `development` default. The optional
+  `OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS` is a canonical, duplicate-free,
+  at-most-eight-entry allowlist.
+- A v2 migration first opens and authenticates the canonical HMAC envelope,
+  domain, owner, trusted terminal-row binding, component,
+  and parent/event service and component. Only an allowlisted historical
+  environment can change. A v1 bridge similarly verifies its digest and exact
+  claimed-row value before producing the current HMAC envelope.
+- Runner persists the resealed payload through the existing run/event/claim CAS
+  before callback. Claim loss forbids callback. A current-source v2 envelope is
+  a byte-identical no-op; after a successful CAS, a restart without the
+  historical allowlist restores and delivers the current-source envelope.
+- Tests cover development v1 and v2 to production, production no-op, post-CAS
+  callback crash plus no-allowlist restart, lost claim, unlisted staging,
+  foreign service/component, and tampered HMAC.
+
+### One-click upgrade and CRLF behavior
+
+- Compose passes the explicit current and previous source variables. Existing
+  one-click environments add `production` plus temporary `development`; fresh
+  environments write `production` with an explicitly empty allowlist so later
+  reruns cannot accidentally enable migration.
+- Existing CRLF env files are normalized atomically to LF after owner/mode
+  checks, without rotating or printing the sealing key. Embedded carriage
+  returns, duplicate variables, invalid source identifiers, duplicate previous
+  values, and leading/trailing/consecutive comma ambiguity fail closed.
+- The beta runbook documents drain, allowlist removal, and rollback rules.
+
+### Fix Round 4 TDD evidence
+
+Initial RED was observed before production changes:
+
+```text
+TestRunTerminalEventJSONPreservesFutureTopAndPreparedV2Fields:
+  future top-level and prepared v2 fields were absent after remarshal
+TestRepositoryTerminalMigrationCASPreservesUnknownJSON:
+  claimed CAS payload discarded futureTop/futureV2
+TestRunTerminalEventJSONRejectsDuplicateKeysAtEveryDepth:
+  duplicate keys were accepted
+TestRunTerminalEventJSONEnforcesSizeAndDepthBounds:
+  oversized and deeply nested payloads were accepted
+
+TestRunnerMigratesPreviousSourceV2BeforeCallbackAndRestart:
+  prepared observability parent source domain mismatch
+
+scripts/test_one_click_deploy.py:
+  6 failures for missing source wiring, CRLF key parsing, and duplicate handling
+test_ambiguous_previous_source_list_stops_upgrade:
+  development, was accepted
+test_runtime_env_is_private_and_existing_valid_key_is_preserved:
+  fresh env omitted the explicit empty previous-source allowlist
+```
+
+Focused GREEN and race:
+
+```text
+$ go test -race ./internal/core/observability \
+    -run 'Test(Persistent|LegacyPreparedEvent)' -count=1
+ok github.com/tangying-ai/aios-core/internal/core/observability 1.548s
+
+$ go test -race ./internal/core/agentruntime \
+    -run 'Test(Runner.*(Terminal|Source|Round1)|RunTerminalEventJSON|RepositoryTerminalMigrationCAS)' -count=1
+ok github.com/tangying-ai/aios-core/internal/core/agentruntime 1.751s
+
+$ go test ./internal/core/config ./cmd/tangying-ai-os -count=1
+ok github.com/tangying-ai/aios-core/internal/core/config
+ok github.com/tangying-ai/aios-core/cmd/tangying-ai-os
+
+$ go test ./internal/core/database \
+    -run 'Test(AgentTerminal|NormalizeAgent|ValidAgent|EnsureAgent)' -count=1 -v
+all always-run migration tests PASS; PostgreSQL harness SKIP because no test DSN is configured
+```
+
+Repository gates (using a repository-local `GOCACHE` because the sandbox does
+not permit the default user cache path):
+
+```text
+$ npm run test:observability-contract
+PASS
+
+$ GOFLAGS='-skip=^TestClientProviderPlannerUsesRequestTextProvider$' \
+    npm run test:observability-foundation
+contract plus observability, agentruntime, workflow, localrunner, translator,
+and worker/service: PASS
+
+$ go test ./... -skip '<exact 13 existing httptest.NewServer test names>' -count=1
+all cloud packages PASS
+
+$ go vet ./...
+(no output, exit 0)
+
+$ bash -n scripts/one-click-deploy.sh scripts/beta-smoke-check.sh
+(no output, exit 0)
+
+$ python3 scripts/test_one_click_deploy.py
+Ran 16 tests: OK
+
+$ git diff --check
+(no output, exit 0)
+```
+
+The unmodified foundation run reaches and passes every non-listener package but
+still fails at the unchanged sandbox boundary:
+
+```text
+TestClientProviderPlannerUsesRequestTextProvider:
+httptest: failed to listen on a port: listen tcp6 [::1]:0:
+bind: operation not permitted
+```
+
+No listener test was modified or treated as passing, and no Task 2 code was
+changed.
+
 ## Fix Round 2 — authenticated restart capability and fail-closed wiring
 
 Round 1 still exposed a package-level decoder backed only by a public SHA-256

@@ -73,6 +73,10 @@ func main() {
 	if err := cfg.ValidateForMode(mode); err != nil {
 		zap.L().Fatal("Invalid runtime configuration", zap.Error(err))
 	}
+	observabilitySource, observabilitySealing, err := cloudObservabilitySourceIdentity(cfg.Observability)
+	if err != nil {
+		zap.L().Fatal("Invalid observability source identity configuration", zap.Error(err))
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -84,14 +88,11 @@ func main() {
 	database.RunMigrations(ctx, pool)
 	observabilityRepository := observability.NewRepository(pool)
 	observabilityEmitter, err := observability.NewPersistentEmitter(
-		observability.Source{Service: "cloud-backend", Component: "http-server", Environment: mode},
+		observabilitySource,
 		cloudObservabilityRuntime(),
 		observability.NewCompositeSink(logger.NewEventSink(zap.L()), observability.NewRepositorySink(observabilityRepository)),
 		1024,
-		observability.PersistentSealingConfig{
-			Domain: cfg.Observability.SealingDomain,
-			Key:    cfg.Observability.SealingKey,
-		},
+		observabilitySealing,
 	)
 	if err != nil {
 		zap.L().Fatal("Invalid persistent observability configuration", zap.Error(err))
@@ -715,6 +716,22 @@ func runtimeMode(ginMode, appEnv string) string {
 		}
 	}
 	return "development"
+}
+
+func cloudObservabilitySourceIdentity(cfg config.ObservabilityConfig) (
+	observability.Source,
+	observability.PersistentSealingConfig,
+	error,
+) {
+	environment, previous, err := cfg.SourceIdentity()
+	if err != nil {
+		return observability.Source{}, observability.PersistentSealingConfig{}, err
+	}
+	return observability.Source{
+			Service: "cloud-backend", Component: "http-server", Environment: environment,
+		}, observability.PersistentSealingConfig{
+			Domain: cfg.SealingDomain, Key: cfg.SealingKey, PreviousSourceEnvironments: previous,
+		}, nil
 }
 
 var (

@@ -113,6 +113,8 @@ class OneClickDeployContractTest(unittest.TestCase):
             "tangying-project-data:",
             "GIN_MODE: release",
             "APP_ENV: production",
+            "OBSERVABILITY_SOURCE_ENVIRONMENT: ${OBSERVABILITY_SOURCE_ENVIRONMENT:-production}",
+            "OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS: ${OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS:-}",
             'SANDBOX_ENABLED: "true"',
             'SANDBOX_FALLBACK: "false"',
         ):
@@ -125,6 +127,8 @@ class OneClickDeployContractTest(unittest.TestCase):
         compose = COMPOSE.read_text(encoding="utf-8")
         self.assertIn("OBSERVABILITY_SEALING_KEY", script)
         self.assertIn("OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1", script)
+        self.assertIn("OBSERVABILITY_SOURCE_ENVIRONMENT=production", script)
+        self.assertIn("OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development", script)
         self.assertIn("base64:$(openssl rand -base64 32", script)
         self.assertIn("OBSERVABILITY_SEALING_KEY is required", compose)
         self.assertIn("OBSERVABILITY_SEALING_DOMAIN", compose)
@@ -148,6 +152,24 @@ class OneClickDeployContractTest(unittest.TestCase):
             )
             self.assertGreaterEqual(len(decoded), 32)
             self.assertGreaterEqual(len(set(decoded)), 16)
+            self.assertIn(
+                "OBSERVABILITY_SOURCE_ENVIRONMENT=production\n",
+                fresh.read_text(),
+            )
+            self.assertNotIn(
+                "OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development\n",
+                fresh.read_text(),
+            )
+            self.assertIn(
+                "OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=\n",
+                fresh.read_text(),
+            )
+            rerun = self.write_runtime_env(fresh)
+            self.assertEqual(rerun.returncode, 0, rerun.stderr)
+            self.assertNotIn(
+                "OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development\n",
+                fresh.read_text(),
+            )
 
             existing = Path(directory) / "existing.env"
             existing.write_text(f"OBSERVABILITY_SEALING_KEY={valid_key}\n")
@@ -159,6 +181,75 @@ class OneClickDeployContractTest(unittest.TestCase):
                 f"OBSERVABILITY_SEALING_KEY={valid_key}\n",
                 existing.read_text(),
             )
+            self.assertIn(
+                "OBSERVABILITY_SOURCE_ENVIRONMENT=production\n",
+                existing.read_text(),
+            )
+            self.assertIn(
+                "OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development\n",
+                existing.read_text(),
+            )
+
+    def test_crlf_upgrade_is_normalized_without_rotating_key(self) -> None:
+        valid_key = "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY="
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "crlf.env"
+            target.write_bytes(
+                (
+                    f"OBSERVABILITY_SEALING_KEY={valid_key}\r\n"
+                    "OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1\r\n"
+                ).encode()
+            )
+            result = self.write_runtime_env(target)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = target.read_bytes()
+            self.assertNotIn(b"\r", payload)
+            self.assertIn(f"OBSERVABILITY_SEALING_KEY={valid_key}\n".encode(), payload)
+            self.assertIn(b"OBSERVABILITY_SOURCE_ENVIRONMENT=production\n", payload)
+            self.assertIn(
+                b"OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development\n", payload
+            )
+
+    def test_duplicate_source_migration_environment_stops_upgrade(self) -> None:
+        valid_key = "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY="
+        for duplicate_lines in (
+            "OBSERVABILITY_SOURCE_ENVIRONMENT=production\nOBSERVABILITY_SOURCE_ENVIRONMENT=production\n",
+            "OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development\nOBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development\n",
+        ):
+            with self.subTest(duplicate_lines=duplicate_lines):
+                with tempfile.TemporaryDirectory() as directory:
+                    target = Path(directory) / "duplicate.env"
+                    target.write_text(
+                        f"OBSERVABILITY_SEALING_KEY={valid_key}\n" + duplicate_lines
+                    )
+                    before = target.read_bytes()
+                    result = self.write_runtime_env(target)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("duplicated", result.stderr)
+                    self.assertEqual(target.read_bytes(), before)
+
+    def test_ambiguous_previous_source_list_stops_upgrade(self) -> None:
+        valid_key = "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY="
+        for previous_environments in (
+            ",development",
+            "development,",
+            "development,,staging",
+        ):
+            with self.subTest(previous_environments=previous_environments):
+                with tempfile.TemporaryDirectory() as directory:
+                    target = Path(directory) / "ambiguous.env"
+                    target.write_text(
+                        f"OBSERVABILITY_SEALING_KEY={valid_key}\n"
+                        "OBSERVABILITY_SOURCE_ENVIRONMENT=production\n"
+                        "OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1\n"
+                        "OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS="
+                        f"{previous_environments}\n"
+                    )
+                    before = target.read_bytes()
+                    result = self.write_runtime_env(target)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("invalid or ambiguous", result.stderr)
+                    self.assertEqual(target.read_bytes(), before)
 
     def test_invalid_existing_key_stops_without_rotation_or_leak(self) -> None:
         invalid_key = "0123456789abcdef0123456789abcdef"

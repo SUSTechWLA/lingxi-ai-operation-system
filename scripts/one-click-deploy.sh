@@ -83,6 +83,47 @@ secure_runtime_env_permissions() {
   [[ "$(runtime_env_mode "$runtime_env")" == "600" ]] || die "runtime environment mode verification failed; expected 0600"
 }
 
+normalize_runtime_env_line_endings() {
+  LC_ALL=C grep -q $'\r' "$runtime_env" || return 0
+  local normalized
+  normalized="$(mktemp "${runtime_env}.normalize.XXXXXX")"
+  chmod 600 "$normalized"
+  if ! LC_ALL=C awk '
+    {
+      sub(/\r$/, "")
+      if (index($0, "\r") != 0) exit 2
+      print
+    }
+  ' "$runtime_env" >"$normalized"; then
+    rm -f -- "$normalized"
+    die "runtime environment contains unsupported carriage returns; use LF or CRLF line endings only"
+  fi
+  mv -f -- "$normalized" "$runtime_env"
+  secure_runtime_env_permissions
+}
+
+valid_observability_source_environment() {
+  local environment="$1"
+  [[ -n "$environment" && "${#environment}" -le 64 && "$environment" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
+
+valid_previous_observability_source_environments() {
+  local value="$1" environment seen="," count=0
+  [[ -n "$value" ]] || return 0
+  [[ "$value" != ,* && "$value" != *, && "$value" != *,,* ]] || return 1
+  local environments=()
+  IFS=',' read -r -a environments <<<"$value"
+  [[ "${#environments[@]}" -le 8 ]] || return 1
+  for environment in "${environments[@]}"; do
+    valid_observability_source_environment "$environment" || return 1
+    [[ "$environment" != "production" ]] || return 1
+    [[ "$seen" != *",${environment},"* ]] || return 1
+    seen+="${environment},"
+    count=$((count + 1))
+  done
+  [[ "$count" -gt 0 ]]
+}
+
 valid_observability_sealing_key() {
   local key="$1" transport decoded_file canonical byte_count distinct_count key_hex key_hex_length
   local block_chars position block repeated="false" decode_ok="true" placeholder="false"
@@ -130,17 +171,45 @@ write_runtime_env() {
   umask 077
   if [[ -e "$runtime_env" || -L "$runtime_env" ]]; then
     secure_runtime_env_permissions
-    local observability_key_count observability_sealing_key upgraded="false"
+    normalize_runtime_env_line_endings
+    local observability_key_count observability_domain_count observability_source_count observability_previous_count
+    local observability_sealing_key observability_source_environment observability_previous_environments upgraded="false"
     observability_key_count="$(grep -c '^OBSERVABILITY_SEALING_KEY=' "$runtime_env" || true)"
     if [[ "$observability_key_count" != "1" ]]; then
       die "existing OBSERVABILITY_SEALING_KEY is missing or duplicated; do not auto-rotate: restore the prior key, or drain pending terminal events before rotation"
     fi
+    observability_domain_count="$(grep -c '^OBSERVABILITY_SEALING_DOMAIN=' "$runtime_env" || true)"
+    observability_source_count="$(grep -c '^OBSERVABILITY_SOURCE_ENVIRONMENT=' "$runtime_env" || true)"
+    observability_previous_count="$(grep -c '^OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=' "$runtime_env" || true)"
+    [[ "$observability_domain_count" -le 1 ]] || die "existing OBSERVABILITY_SEALING_DOMAIN is duplicated"
+    [[ "$observability_source_count" -le 1 ]] || die "existing OBSERVABILITY_SOURCE_ENVIRONMENT is duplicated"
+    [[ "$observability_previous_count" -le 1 ]] || die "existing OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS is duplicated"
     IFS= read -r observability_sealing_key < <(sed -n 's/^OBSERVABILITY_SEALING_KEY=//p' "$runtime_env")
     if ! valid_observability_sealing_key "$observability_sealing_key"; then
       die "existing OBSERVABILITY_SEALING_KEY is invalid; do not auto-rotate: re-encode the exact prior key bytes as base64:, or drain pending terminal events before rotation"
     fi
-    if ! grep -q '^OBSERVABILITY_SEALING_DOMAIN=' "$runtime_env"; then
+    if [[ "$observability_source_count" == "1" ]]; then
+      IFS= read -r observability_source_environment < <(sed -n 's/^OBSERVABILITY_SOURCE_ENVIRONMENT=//p' "$runtime_env")
+      if [[ "$observability_source_environment" != "production" ]]; then
+        die "existing OBSERVABILITY_SOURCE_ENVIRONMENT is invalid for one-click; expected production"
+      fi
+    fi
+    if [[ "$observability_previous_count" == "1" ]]; then
+      IFS= read -r observability_previous_environments < <(sed -n 's/^OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=//p' "$runtime_env")
+      if ! valid_previous_observability_source_environments "$observability_previous_environments"; then
+        die "existing OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS is invalid or ambiguous"
+      fi
+    fi
+    if [[ "$observability_domain_count" == "0" ]]; then
       printf 'OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1\n' >>"$runtime_env"
+      upgraded="true"
+    fi
+    if [[ "$observability_source_count" == "0" ]]; then
+      printf 'OBSERVABILITY_SOURCE_ENVIRONMENT=production\n' >>"$runtime_env"
+      upgraded="true"
+    fi
+    if [[ "$observability_previous_count" == "0" ]]; then
+      printf 'OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development\n' >>"$runtime_env"
       upgraded="true"
     fi
     if ! grep -q '^TOOL_REGISTRATION_INTERNAL_TOKEN=' "$runtime_env"; then
@@ -179,6 +248,8 @@ write_runtime_env() {
       printf 'TOOL_REGISTRATION_INTERNAL_TOKEN=%s\n' "$tool_registration_token"
       printf 'OBSERVABILITY_SEALING_KEY=%s\n' "$observability_sealing_key"
       printf 'OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1\n'
+      printf 'OBSERVABILITY_SOURCE_ENVIRONMENT=production\n'
+      printf 'OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=\n'
       printf 'CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,null\n'
       printf 'TANGYING_DESKTOP_DATA_ROOT=%s\n' "$desktop_data_root"
     } >"$runtime_env"

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -33,8 +34,59 @@ type Config struct {
 // The sealing key must remain stable across process restarts while an outbox
 // can contain pending terminal events.
 type ObservabilityConfig struct {
-	SealingKey    string `mapstructure:"OBSERVABILITY_SEALING_KEY"`
-	SealingDomain string `mapstructure:"OBSERVABILITY_SEALING_DOMAIN"`
+	SealingKey                 string `mapstructure:"OBSERVABILITY_SEALING_KEY"`
+	SealingDomain              string `mapstructure:"OBSERVABILITY_SEALING_DOMAIN"`
+	SourceEnvironment          string `mapstructure:"OBSERVABILITY_SOURCE_ENVIRONMENT"`
+	PreviousSourceEnvironments string `mapstructure:"OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS"`
+}
+
+var observabilitySourceEnvironmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// SourceIdentity returns the stable signed source identity independently from
+// GIN_MODE/APP_ENV. Development keeps the historical default when no explicit
+// value is configured; production validation requires an explicit value.
+func (cfg ObservabilityConfig) SourceIdentity() (string, []string, error) {
+	current := cfg.SourceEnvironment
+	if current == "" {
+		current = "development"
+	}
+	if err := validateObservabilitySourceEnvironment(current); err != nil {
+		return "", nil, err
+	}
+	if cfg.PreviousSourceEnvironments == "" {
+		return current, nil, nil
+	}
+	if strings.TrimSpace(cfg.PreviousSourceEnvironments) != cfg.PreviousSourceEnvironments {
+		return "", nil, fmt.Errorf("observability previous source environment allowlist is not canonical")
+	}
+	parts := strings.Split(cfg.PreviousSourceEnvironments, ",")
+	if len(parts) > 8 {
+		return "", nil, fmt.Errorf("observability previous source environment allowlist exceeds 8 entries")
+	}
+	seen := make(map[string]struct{}, len(parts))
+	previous := make([]string, 0, len(parts))
+	for _, environment := range parts {
+		if err := validateObservabilitySourceEnvironment(environment); err != nil {
+			return "", nil, fmt.Errorf("observability previous source environment allowlist is invalid")
+		}
+		if environment == current {
+			return "", nil, fmt.Errorf("observability previous source environment allowlist contains the current environment")
+		}
+		if _, exists := seen[environment]; exists {
+			return "", nil, fmt.Errorf("observability previous source environment allowlist contains duplicates")
+		}
+		seen[environment] = struct{}{}
+		previous = append(previous, environment)
+	}
+	return current, previous, nil
+}
+
+func validateObservabilitySourceEnvironment(environment string) error {
+	if environment == "" || strings.TrimSpace(environment) != environment || len(environment) > 64 ||
+		!observabilitySourceEnvironmentPattern.MatchString(environment) {
+		return fmt.Errorf("observability source environment must be a canonical 1-64 byte identifier")
+	}
+	return nil
 }
 
 // AgentConfig controls the dynamic agent runtime.
@@ -175,8 +227,9 @@ func Load() *Config {
 }
 
 func (cfg *Config) ValidateForMode(mode string) error {
+	_, _, sourceIdentityErr := cfg.Observability.SourceIdentity()
 	if !isProductionMode(mode) {
-		return nil
+		return sourceIdentityErr
 	}
 
 	var problems []string
@@ -191,6 +244,11 @@ func (cfg *Config) ValidateForMode(mode string) error {
 	}
 	if strings.TrimSpace(cfg.Observability.SealingDomain) == "" {
 		problems = append(problems, "OBSERVABILITY_SEALING_DOMAIN must be set in production")
+	}
+	if cfg.Observability.SourceEnvironment == "" {
+		problems = append(problems, "OBSERVABILITY_SOURCE_ENVIRONMENT must be set explicitly in production")
+	} else if sourceIdentityErr != nil {
+		problems = append(problems, "OBSERVABILITY_SOURCE_ENVIRONMENT and OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS must be canonical and non-overlapping")
 	}
 	if isWeakSecret(cfg.Postgres.Password, "changeme", "your-postgres-password") {
 		problems = append(problems, "POSTGRES_PASSWORD must be set to a non-default value in production")
@@ -271,6 +329,8 @@ func setDefaults() {
 	viper.SetDefault("AUTH_REFRESH_TOKEN_TTL_SECONDS", 2592000)
 	viper.SetDefault("OBSERVABILITY_SEALING_KEY", "")
 	viper.SetDefault("OBSERVABILITY_SEALING_DOMAIN", "cloud-agent-terminal-v1")
+	viper.SetDefault("OBSERVABILITY_SOURCE_ENVIRONMENT", "")
+	viper.SetDefault("OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS", "")
 	viper.SetDefault("WORKER_TOOL_TIMEOUT", 120)
 	viper.SetDefault("WORKER_THREAD_POOL_CORE", 10)
 	viper.SetDefault("WORKER_THREAD_POOL_MAX", 50)

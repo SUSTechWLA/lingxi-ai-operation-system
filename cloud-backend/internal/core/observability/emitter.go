@@ -118,6 +118,12 @@ func NewPersistentEmitter(
 	if err != nil {
 		return nil, err
 	}
+	if err := validateSourceEnvironment(source.Environment); err != nil {
+		return nil, fmt.Errorf("persistent observability source environment is invalid: %w", err)
+	}
+	if sealer.allowsPreviousSourceEnvironment(source.Environment) {
+		return nil, errors.New("persistent observability previous source environment allowlist contains the current environment")
+	}
 	emitter := NewEmitter(source, runtime, sink, capacity)
 	emitter.persistentSealer = sealer
 	return emitter, nil

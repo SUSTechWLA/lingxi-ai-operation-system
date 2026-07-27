@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -175,6 +176,7 @@ func TestValidateForModeAcceptsStrongInternalToolRegistrationToken(t *testing.T)
 		Agent:    AgentConfig{ToolRegistrationInternalToken: "abcdef0123456789abcdef0123456789"},
 		Observability: ObservabilityConfig{
 			SealingKey: "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=", SealingDomain: "cloud-agent-terminal-v1",
+			SourceEnvironment: "production",
 		},
 		MinIO: MinIOConfig{
 			AccessKey: "long-non-default-minio-access-key", SecretKey: "long-non-default-minio-secret-value",
@@ -224,6 +226,8 @@ func TestObservabilitySealingConfigLoadsFromEnvironment(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	t.Setenv("OBSERVABILITY_SEALING_KEY", "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=")
 	t.Setenv("OBSERVABILITY_SEALING_DOMAIN", "environment-agent-terminal-v1")
+	t.Setenv("OBSERVABILITY_SOURCE_ENVIRONMENT", "production")
+	t.Setenv("OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS", "development,legacy-beta")
 	viper.AutomaticEnv()
 	setDefaults()
 
@@ -232,8 +236,62 @@ func TestObservabilitySealingConfigLoadsFromEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Observability.SealingKey != "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=" ||
-		cfg.Observability.SealingDomain != "environment-agent-terminal-v1" {
+		cfg.Observability.SealingDomain != "environment-agent-terminal-v1" ||
+		cfg.Observability.SourceEnvironment != "production" ||
+		cfg.Observability.PreviousSourceEnvironments != "development,legacy-beta" {
 		t.Fatalf("observability environment config was not loaded: %#v", cfg.Observability)
+	}
+}
+
+func TestObservabilitySourceIdentityDefaultsDevelopmentWithoutRuntimeModeCoupling(t *testing.T) {
+	current, previous, err := (ObservabilityConfig{}).SourceIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != "development" || len(previous) != 0 {
+		t.Fatalf("source identity current=%q previous=%v", current, previous)
+	}
+}
+
+func TestObservabilitySourceIdentityParsesRestrictedPreviousAllowlist(t *testing.T) {
+	current, previous, err := (ObservabilityConfig{
+		SourceEnvironment:          "production",
+		PreviousSourceEnvironments: "development,legacy-beta",
+	}).SourceIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != "production" || !reflect.DeepEqual(previous, []string{"development", "legacy-beta"}) {
+		t.Fatalf("source identity current=%q previous=%v", current, previous)
+	}
+}
+
+func TestObservabilitySourceIdentityRejectsAmbiguousAllowlist(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		cfg  ObservabilityConfig
+	}{
+		{name: "current repeated", cfg: ObservabilityConfig{SourceEnvironment: "production", PreviousSourceEnvironments: "production"}},
+		{name: "duplicate", cfg: ObservabilityConfig{SourceEnvironment: "production", PreviousSourceEnvironments: "development,development"}},
+		{name: "empty member", cfg: ObservabilityConfig{SourceEnvironment: "production", PreviousSourceEnvironments: "development,"}},
+		{name: "whitespace", cfg: ObservabilityConfig{SourceEnvironment: "production", PreviousSourceEnvironments: "development, staging"}},
+		{name: "crlf value", cfg: ObservabilityConfig{SourceEnvironment: "production\r", PreviousSourceEnvironments: "development"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, _, err := test.cfg.SourceIdentity(); err == nil {
+				t.Fatal("ambiguous observability source identity was accepted")
+			}
+		})
+	}
+}
+
+func TestValidateForModeRequiresExplicitObservabilitySourceEnvironmentInProduction(t *testing.T) {
+	cfg := &Config{Observability: ObservabilityConfig{
+		SealingKey: "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=", SealingDomain: "cloud-agent-terminal-v1",
+	}}
+	err := cfg.ValidateForMode("production")
+	if err == nil || !strings.Contains(err.Error(), "OBSERVABILITY_SOURCE_ENVIRONMENT") {
+		t.Fatalf("missing explicit source environment error = %v", err)
 	}
 }
 

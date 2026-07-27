@@ -59,6 +59,8 @@ Important beta variables:
 | `AUTH_TOKEN_SECRET` | Long random auth/encryption secret. Required to be strong in `GIN_MODE=release`. |
 | `OBSERVABILITY_SEALING_KEY` | Canonical `base64:` transport of 32-64 random HMAC key bytes for durable agent terminal events. Generate it once and keep it stable across process restarts. |
 | `OBSERVABILITY_SEALING_DOMAIN` | Stable sealing-domain identifier. Default: `cloud-agent-terminal-v1`. |
+| `OBSERVABILITY_SOURCE_ENVIRONMENT` | Explicit stable environment in the signed observability source identity. It does not inherit `GIN_MODE` or `APP_ENV`; one-click uses `production`. |
+| `OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS` | Temporary comma-separated allowlist for authenticated source-environment migration. It never permits service, component, domain, owner, row-binding, or HMAC changes. |
 | `POSTGRES_PASSWORD` | Database password. Do not use defaults in release/production. |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | Object storage credentials. Do not use defaults in release/production. |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated frontend origins, for example `http://localhost:3000`. Must not be `*` in release/production. |
@@ -86,6 +88,51 @@ creates `.env.one-click` as an owner-only `0600` file and verifies its owner and
 mode before reading or writing secrets. It preserves a valid existing sealing
 key byte-for-byte. An invalid or missing key in an existing file stops the
 installer; it is never silently rotated.
+
+### Signed source migration
+
+`GIN_MODE` and `APP_ENV` control runtime validation only. They no longer define
+the signed observability source identity. Set
+`OBSERVABILITY_SOURCE_ENVIRONMENT` explicitly and keep it stable while terminal
+outbox rows are pending. A fresh one-click environment uses `production` and no
+previous-source allowlist.
+
+The pre-upgrade one-click deployment signed terminal envelopes as `development`
+because it had neither `GIN_MODE` nor `APP_ENV`. When one-click upgrades an
+existing private environment, it adds:
+
+```dotenv
+OBSERVABILITY_SOURCE_ENVIRONMENT=production
+OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development
+```
+
+The installer accepts LF or CRLF files, normalizes CRLF to LF without changing
+values, and rejects duplicate source-migration variables. During delivery, a
+legacy v1 digest or v2 HMAC envelope must first pass its original signature or
+digest, sealing domain where present, owner, trusted claimed-row binding, and
+the exact service and component identities. Only an allowlisted environment can
+change. The backend then reseals the envelope as `production` and persists it
+with the run/event/claim CAS before invoking the callback. Claim loss or a failed
+CAS forbids the callback. Existing `production` v2 envelopes restore directly
+and are not rewritten; unlisted environments and changed service/component
+identities fail closed.
+
+Keep `development` allowlisted until the terminal outbox is drained. Stop new
+producers and confirm:
+
+```sql
+SELECT count(*)
+FROM agent_runs
+WHERE terminal_event_json IS NOT NULL
+  AND terminal_event_delivered_at IS NULL;
+```
+
+When the count is zero, remove
+`OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS` (or leave it empty) and restart all
+backend instances together. For rollback, restore the exact prior key and
+domain. Do not roll back to a binary that signs only `development` while any
+newly resealed `production` envelope remains pending; drain first or keep the
+source-migration-capable binary in service until the count reaches zero.
 
 For an upgrade from the prior plain/hex transport, re-encode the exact previous
 key text as bytes without changing those HMAC bytes:

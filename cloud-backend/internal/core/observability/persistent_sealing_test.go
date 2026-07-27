@@ -5,10 +5,155 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 )
+
+func TestPersistentPreparedEventMigratesAllowedPreviousSourceEnvironment(t *testing.T) {
+	ctx := trustedcontext.WithUserID(context.Background(), "owner-frozen")
+	event := persistentTestEvent("evt_persistent_source_migration")
+	development := Source{Service: "cloud-backend", Component: "http-server", Environment: "development"}
+	first, firstComponent := newPersistentTestComponent(t, development, Runtime{AppVersion: "v1"}, testPersistentKey, testPersistentDomain, nil)
+	sealed, err := firstComponent.FreezeAndSeal(ctx, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	production := Source{Service: "cloud-backend", Component: "http-server", Environment: "production"}
+	second, secondComponent := newPersistentTestComponentWithPrevious(
+		t, production, Runtime{AppVersion: "v2"}, []string{"development"}, nil,
+	)
+	migrated, changed, err := secondComponent.MigrateClaimedPreparedEventSource(ctx, sealed, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed || bytes.Equal(migrated.Payload, sealed.Payload) {
+		t.Fatal("allowed previous source environment was not resealed")
+	}
+	capability, err := secondComponent.RestorePreparedEventFor(ctx, migrated, event)
+	if err != nil || capability == nil {
+		t.Fatalf("migrated current-source envelope did not restore: capability=%T error=%v", capability, err)
+	}
+	envelope, err := second.persistentSealer.open(migrated.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.ProducerSource != production || envelope.Event.Source.Environment != "production" ||
+		migrated.Binding.Source.Environment != "production" {
+		t.Fatalf("migrated source identity = producer %#v event %#v binding %#v", envelope.ProducerSource, envelope.Event.Source, migrated.Binding.Source)
+	}
+	if err := second.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Once the claimed CAS stores the current envelope, a normal restart does
+	// not need the migration allowlist.
+	restarted, restartedComponent := newPersistentTestComponent(t, production, Runtime{AppVersion: "v3"}, testPersistentKey, testPersistentDomain, nil)
+	defer restarted.Close(context.Background())
+	if _, err := restartedComponent.RestorePreparedEventFor(ctx, migrated, event); err != nil {
+		t.Fatalf("current-source restart failed: %v", err)
+	}
+}
+
+func TestPersistentPreparedEventKeepsCurrentSourceEnvelopeByteIdentical(t *testing.T) {
+	ctx := trustedcontext.WithUserID(context.Background(), "owner-frozen")
+	event := persistentTestEvent("evt_persistent_current_source")
+	production := Source{Service: "cloud-backend", Component: "http-server", Environment: "production"}
+	emitter, component := newPersistentTestComponentWithPrevious(
+		t, production, Runtime{AppVersion: "v1"}, []string{"development"}, nil,
+	)
+	defer emitter.Close(context.Background())
+	sealed, err := component.FreezeAndSeal(ctx, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, changed, err := component.MigrateClaimedPreparedEventSource(ctx, sealed, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed || !bytes.Equal(got.Payload, sealed.Payload) || !reflect.DeepEqual(got.Binding, sealed.Binding) {
+		t.Fatal("current source envelope was unnecessarily rewritten")
+	}
+}
+
+func TestPersistentPreparedEventSourceMigrationRejectsUnlistedTamperedAndForeignIdentity(t *testing.T) {
+	ctx := trustedcontext.WithUserID(context.Background(), "owner-frozen")
+	event := persistentTestEvent("evt_persistent_source_reject")
+	production := Source{Service: "cloud-backend", Component: "http-server", Environment: "production"}
+	current, currentComponent := newPersistentTestComponentWithPrevious(
+		t, production, Runtime{}, []string{"development"}, nil,
+	)
+	defer current.Close(context.Background())
+
+	sealFrom := func(t *testing.T, source Source) SealedPreparedEvent {
+		t.Helper()
+		emitter, component := newPersistentTestComponent(t, source, Runtime{}, testPersistentKey, testPersistentDomain, nil)
+		sealed, err := component.FreezeAndSeal(ctx, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := emitter.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return sealed
+	}
+
+	staging := sealFrom(t, Source{Service: "cloud-backend", Component: "http-server", Environment: "staging"})
+	if _, _, err := currentComponent.MigrateClaimedPreparedEventSource(ctx, staging, event); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("unlisted environment error = %v", err)
+	}
+	foreignService := sealFrom(t, Source{Service: "other-service", Component: "http-server", Environment: "development"})
+	if _, _, err := currentComponent.MigrateClaimedPreparedEventSource(ctx, foreignService, event); err == nil || !strings.Contains(err.Error(), "identity mismatch") {
+		t.Fatalf("foreign service error = %v", err)
+	}
+	foreignComponent := sealFrom(t, Source{Service: "cloud-backend", Component: "other-parent", Environment: "development"})
+	if _, _, err := currentComponent.MigrateClaimedPreparedEventSource(ctx, foreignComponent, event); err == nil || !strings.Contains(err.Error(), "identity mismatch") {
+		t.Fatalf("foreign parent component error = %v", err)
+	}
+	development := sealFrom(t, Source{Service: "cloud-backend", Component: "http-server", Environment: "development"})
+	tampered := development.Clone()
+	tampered.Payload = replaceSealedMACForTest(t, tampered.Payload, strings.Repeat("0", sha256.Size*2))
+	if _, _, err := currentComponent.MigrateClaimedPreparedEventSource(ctx, tampered, event); err == nil || !strings.Contains(err.Error(), "signature mismatch") {
+		t.Fatalf("tampered HMAC error = %v", err)
+	}
+}
+
+func TestLegacyPreparedEventMigratesAllowedPreviousSourceEnvironment(t *testing.T) {
+	ctx := trustedcontext.WithUserID(context.Background(), "owner-frozen")
+	event := persistentTestEvent("evt_legacy_source_migration")
+	event.Evidence.OutputRefs = nil
+	development := Source{Service: "cloud-backend", Component: "http-server", Environment: "development"}
+	legacyEmitter, legacyComponent := newPersistentTestComponent(t, development, Runtime{AppVersion: "legacy"}, testPersistentKey, testPersistentDomain, nil)
+	legacyPayload := legacyPreparedPayloadForTest(t, legacyComponent, ctx, event)
+	if err := legacyEmitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	production := Source{Service: "cloud-backend", Component: "http-server", Environment: "production"}
+	current, currentComponent := newPersistentTestComponentWithPrevious(t, production, Runtime{AppVersion: "current"}, []string{"development"}, nil)
+	defer current.Close(context.Background())
+	migrated, err := currentComponent.MigrateClaimedLegacyPreparedEvent(ctx, legacyPayload, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := currentComponent.RestorePreparedEventFor(ctx, migrated, event); err != nil {
+		t.Fatalf("migrated legacy envelope did not restore: %v", err)
+	}
+	envelope, err := current.persistentSealer.open(migrated.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.ProducerSource != production || envelope.Event.Source.Environment != "production" {
+		t.Fatalf("legacy source was not migrated: producer=%#v event=%#v", envelope.ProducerSource, envelope.Event.Source)
+	}
+}
 
 const (
 	testPersistentDomain = "cloud-agent-terminal-test-v1"
@@ -227,6 +372,56 @@ func newPersistentTestComponent(
 		t.Fatal(err)
 	}
 	return emitter, component
+}
+
+func newPersistentTestComponentWithPrevious(
+	t *testing.T,
+	source Source,
+	runtime Runtime,
+	previous []string,
+	sink Sink,
+) (*Emitter, PersistentPreparedEventEmitter) {
+	t.Helper()
+	emitter, err := NewPersistentEmitter(source, runtime, sink, 4, PersistentSealingConfig{
+		Domain: testPersistentDomain, Key: testPersistentKey, PreviousSourceEnvironments: previous,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	component, err := emitter.ForPersistentComponent(ComponentAgentRuntime)
+	if err != nil {
+		emitter.Close(context.Background())
+		t.Fatal(err)
+	}
+	return emitter, component
+}
+
+func legacyPreparedPayloadForTest(
+	t *testing.T,
+	component PersistentPreparedEventEmitter,
+	ctx context.Context,
+	event Event,
+) []byte {
+	t.Helper()
+	persistent := component.(*persistentComponentEmitter)
+	prepared, err := persistent.emitter.prepare(ctx, event, persistent.component)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, _ := trustedcontext.UserID(ctx)
+	body := legacyPreparedBody{Version: legacyPreparedEventVersion, OwnerUserID: owner, Event: prepared}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(bodyJSON)
+	payload, err := json.Marshal(legacyPreparedEnvelope{
+		Version: legacyPreparedEventVersion, OwnerUserID: owner, Event: prepared, SHA256: hex.EncodeToString(digest[:]),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }
 
 func persistentTestEvent(eventID string) Event {

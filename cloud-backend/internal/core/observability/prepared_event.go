@@ -27,15 +27,19 @@ const (
 	minPersistentSealingKeyBytes    = 32
 	maxPersistentSealingKeyBytes    = 64
 	maxPersistentSealingDomainBytes = 128
+	maxPreviousSourceEnvironments   = 8
+	maxSourceEnvironmentBytes       = 64
 )
 
 var persistentSealingDomainPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+var sourceEnvironmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // PersistentSealingConfig identifies one durable sealing domain. Key must be
 // stable across process restarts and is copied into private emitter state.
 type PersistentSealingConfig struct {
-	Domain string
-	Key    string
+	Domain                     string
+	Key                        string
+	PreviousSourceEnvironments []string
 }
 
 // PreparedEvent is an opaque replay capability. Only a persistent component
@@ -86,8 +90,9 @@ func (s SealedPreparedEvent) Clone() SealedPreparedEvent {
 }
 
 type persistentSealer struct {
-	domain string
-	key    []byte
+	domain                     string
+	key                        []byte
+	previousSourceEnvironments map[string]struct{}
 }
 
 type persistentPreparedEnvelope struct {
@@ -139,7 +144,33 @@ func newPersistentSealer(config PersistentSealingConfig) (*persistentSealer, err
 	if err != nil {
 		return nil, err
 	}
-	return &persistentSealer{domain: domain, key: key}, nil
+	if len(config.PreviousSourceEnvironments) > maxPreviousSourceEnvironments {
+		return nil, fmt.Errorf("persistent observability previous source environment allowlist exceeds %d entries", maxPreviousSourceEnvironments)
+	}
+	previous := make(map[string]struct{}, len(config.PreviousSourceEnvironments))
+	for _, environment := range config.PreviousSourceEnvironments {
+		if err := validateSourceEnvironment(environment); err != nil {
+			return nil, fmt.Errorf("persistent observability previous source environment is invalid: %w", err)
+		}
+		if _, exists := previous[environment]; exists {
+			return nil, errors.New("persistent observability previous source environment allowlist contains duplicates")
+		}
+		previous[environment] = struct{}{}
+	}
+	return &persistentSealer{domain: domain, key: key, previousSourceEnvironments: previous}, nil
+}
+
+func validateSourceEnvironment(environment string) error {
+	if environment == "" || strings.TrimSpace(environment) != environment ||
+		len(environment) > maxSourceEnvironmentBytes || !sourceEnvironmentPattern.MatchString(environment) {
+		return errors.New("source environment must be a canonical 1-64 byte identifier")
+	}
+	return nil
+}
+
+func (s *persistentSealer) allowsPreviousSourceEnvironment(environment string) bool {
+	_, ok := s.previousSourceEnvironments[environment]
+	return ok
 }
 
 // ParsePersistentSealingKey is the single production parser for durable
@@ -292,10 +323,15 @@ func (e *persistentComponentEmitter) MigrateClaimedLegacyPreparedEvent(
 	if ownerUserID == "" || envelope.OwnerUserID != ownerUserID {
 		return SealedPreparedEvent{}, errors.New("legacy prepared observability owner binding mismatch")
 	}
-	wantSource := e.emitter.source
-	wantSource.Component = string(e.component)
-	if envelope.Event.Source != wantSource {
+	currentSource := e.emitter.source
+	currentSource.Component = string(e.component)
+	historicalSource := envelope.Event.Source
+	if historicalSource.Service != currentSource.Service || historicalSource.Component != currentSource.Component {
 		return SealedPreparedEvent{}, errors.New("legacy prepared observability source binding mismatch")
+	}
+	if historicalSource.Environment != currentSource.Environment &&
+		!e.emitter.persistentSealer.allowsPreviousSourceEnvironment(historicalSource.Environment) {
+		return SealedPreparedEvent{}, errors.New("legacy prepared observability source environment is not allowed")
 	}
 	if expected.Runtime.ToolRegistrySnapshotID != envelope.Event.Runtime.ToolRegistrySnapshotID {
 		return SealedPreparedEvent{}, errors.New("legacy prepared observability tool registry binding mismatch")
@@ -306,7 +342,7 @@ func (e *persistentComponentEmitter) MigrateClaimedLegacyPreparedEvent(
 	expected.SchemaVersion = "1.0"
 	expected.IngestedAt = envelope.Event.IngestedAt
 	expected.ProducerSequence = envelope.Event.ProducerSequence
-	expected.Source = wantSource
+	expected.Source = historicalSource
 	expected.Runtime = envelope.Event.Runtime
 	expected.Correlation = sanitizeCorrelation(expected.Correlation)
 	if expected.Execution.Attempt == 0 {
@@ -325,10 +361,12 @@ func (e *persistentComponentEmitter) MigrateClaimedLegacyPreparedEvent(
 	if !reflect.DeepEqual(envelope.Event, expected) {
 		return SealedPreparedEvent{}, errors.New("legacy prepared observability terminal binding mismatch")
 	}
+	migratedEvent := envelope.Event
+	migratedEvent.Source = currentSource
 	body := persistentPreparedBody{
 		Version: persistentPreparedEventVersion, Domain: e.emitter.persistentSealer.domain,
 		OwnerUserID: ownerUserID, ProducerSource: e.emitter.source, ProducerRuntime: envelope.Event.Runtime,
-		Component: e.component, Event: envelope.Event,
+		Component: e.component, Event: migratedEvent,
 	}
 	sealedPayload, err := e.emitter.persistentSealer.seal(body)
 	if err != nil {
@@ -336,8 +374,73 @@ func (e *persistentComponentEmitter) MigrateClaimedLegacyPreparedEvent(
 	}
 	return SealedPreparedEvent{
 		Payload: sealedPayload,
-		Binding: preparedEventBinding(ownerUserID, envelope.Event),
+		Binding: preparedEventBinding(ownerUserID, migratedEvent),
 	}.Clone(), nil
+}
+
+// MigrateClaimedPreparedEventSource authenticates a current v2 envelope before
+// deciding whether it needs a one-time source-environment reseal. The HMAC,
+// sealing domain, owner, complete signed source identities, component, trusted
+// binding, and claimed-row binding all pass before any new envelope is issued.
+// Only the environment may change; service and component identity stay exact.
+func (e *persistentComponentEmitter) MigrateClaimedPreparedEventSource(
+	ctx context.Context,
+	sealed SealedPreparedEvent,
+	expected Event,
+) (SealedPreparedEvent, bool, error) {
+	if err := e.ValidatePersistentConfiguration(); err != nil {
+		return SealedPreparedEvent{}, false, err
+	}
+	envelope, err := e.emitter.persistentSealer.open(sealed.Payload)
+	if err != nil {
+		return SealedPreparedEvent{}, false, err
+	}
+	if envelope.Component != e.component {
+		return SealedPreparedEvent{}, false, errors.New("prepared observability component domain mismatch")
+	}
+	currentProducer := e.emitter.source
+	if envelope.ProducerSource.Service != currentProducer.Service ||
+		envelope.ProducerSource.Component != currentProducer.Component {
+		return SealedPreparedEvent{}, false, errors.New("prepared observability parent source identity mismatch")
+	}
+	historicalEventSource := envelope.ProducerSource
+	historicalEventSource.Component = string(e.component)
+	if envelope.Event.Source != historicalEventSource {
+		return SealedPreparedEvent{}, false, errors.New("prepared observability event source binding mismatch")
+	}
+	if err := validatePreparedEventValue(envelope.Event); err != nil {
+		return SealedPreparedEvent{}, false, err
+	}
+	wantBinding := preparedEventBinding(envelope.OwnerUserID, envelope.Event)
+	if !reflect.DeepEqual(sealed.Binding, wantBinding) {
+		return SealedPreparedEvent{}, false, errors.New("prepared observability trusted binding mismatch")
+	}
+	if err := e.validateExpectedPreparedEventBinding(ctx, sealed.Binding, expected, historicalEventSource); err != nil {
+		return SealedPreparedEvent{}, false, err
+	}
+	if envelope.ProducerSource.Environment == currentProducer.Environment {
+		return sealed.Clone(), false, nil
+	}
+	if !e.emitter.persistentSealer.allowsPreviousSourceEnvironment(envelope.ProducerSource.Environment) {
+		return SealedPreparedEvent{}, false, errors.New("prepared observability source environment is not allowed")
+	}
+
+	migratedEvent := envelope.Event
+	migratedEvent.Source = currentProducer
+	migratedEvent.Source.Component = string(e.component)
+	body := persistentPreparedBody{
+		Version: persistentPreparedEventVersion, Domain: e.emitter.persistentSealer.domain,
+		OwnerUserID: envelope.OwnerUserID, ProducerSource: currentProducer, ProducerRuntime: envelope.ProducerRuntime,
+		Component: e.component, Event: migratedEvent,
+	}
+	payload, err := e.emitter.persistentSealer.seal(body)
+	if err != nil {
+		return SealedPreparedEvent{}, false, err
+	}
+	return SealedPreparedEvent{
+		Payload: payload,
+		Binding: preparedEventBinding(envelope.OwnerUserID, migratedEvent),
+	}.Clone(), true, nil
 }
 
 func decodeLegacyPreparedEnvelope(payload []byte) (legacyPreparedEnvelope, error) {
@@ -435,33 +538,48 @@ func (e *persistentComponentEmitter) RestorePreparedEventFor(
 	if err != nil {
 		return nil, err
 	}
+	wantSource := e.emitter.source
+	wantSource.Component = string(e.component)
+	if err := e.validateExpectedPreparedEventBinding(ctx, sealed.Binding, expected, wantSource); err != nil {
+		return nil, err
+	}
+	return capability, nil
+}
+
+func (e *persistentComponentEmitter) validateExpectedPreparedEventBinding(
+	ctx context.Context,
+	binding PreparedEventBinding,
+	expected Event,
+	expectedSource Source,
+) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ownerUserID, _ := trustedcontext.UserID(ctx)
 	ownerUserID = strings.TrimSpace(ownerUserID)
 	if ownerUserID == "" {
-		return nil, errors.New("prepared observability expected event requires a trusted owner")
+		return errors.New("prepared observability expected event requires a trusted owner")
 	}
 	// Producer runtime is authenticated historical evidence, not part of the
 	// restart key domain. Preserve it while keeping the caller-owned tool
 	// snapshot an exact outbox expectation, including its empty value.
 	expectedToolSnapshotID := expected.Runtime.ToolRegistrySnapshotID
-	expected.Runtime = sealed.Binding.Runtime
+	expected.Runtime = binding.Runtime
 	expected.Runtime.ToolRegistrySnapshotID = expectedToolSnapshotID
 	preparedExpected, err := e.emitter.prepare(ctx, expected, e.component)
 	if err != nil {
-		return nil, fmt.Errorf("prepare expected observability event: %w", err)
+		return fmt.Errorf("prepare expected observability event: %w", err)
 	}
+	preparedExpected.Source = expectedSource
 	preparedExpected.Runtime = expected.Runtime
 	if err := validatePreparedEventValue(preparedExpected); err != nil {
-		return nil, fmt.Errorf("validate expected observability event: %w", err)
+		return fmt.Errorf("validate expected observability event: %w", err)
 	}
 	wantBinding := preparedEventBinding(ownerUserID, preparedExpected)
-	if !reflect.DeepEqual(sealed.Binding, wantBinding) {
-		return nil, fmt.Errorf("prepared observability caller binding mismatch: %s", strings.Join(preparedEventBindingMismatchFields(sealed.Binding, wantBinding), ","))
+	if !reflect.DeepEqual(binding, wantBinding) {
+		return fmt.Errorf("prepared observability caller binding mismatch: %s", strings.Join(preparedEventBindingMismatchFields(binding, wantBinding), ","))
 	}
-	return capability, nil
+	return nil
 }
 
 func preparedEventBindingMismatchFields(got, want PreparedEventBinding) []string {

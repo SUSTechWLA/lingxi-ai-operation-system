@@ -3,6 +3,9 @@ package agentruntime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -115,6 +118,41 @@ func TestRunnerMigratesRound1OnlyAfterClaimCASAndSurvivesRestart(t *testing.T) {
 	payloads, owners := sink.snapshot(t)
 	if len(payloads) != 1 || len(owners) != 1 || owners[0] != event.UserID {
 		t.Fatalf("migrated sink payloads=%d owners=%v", len(payloads), owners)
+	}
+}
+
+func TestRunnerMigratesDevelopmentRound1SourceToProduction(t *testing.T) {
+	store := newMemoryRunStore()
+	event := loadRound1TerminalFixtureForEnvironment(t, "development")
+	store.terminal[event.RunID] = event
+	store.terminalEventID[event.RunID] = event.EventID
+
+	emitter, persistent := newRound1PersistentEmitterWithSource(
+		t, round1TestSealingKey, "production", []string{"development"}, nil,
+	)
+	callbackCount := 0
+	runner := NewRunner(nil, store, nil, nil, nil).
+		WithObservability(persistent).
+		WithTerminalCallback(func(_ context.Context, callbackEvent RunTerminalEvent) error {
+			callbackCount++
+			stored := store.terminal[event.RunID]
+			if stored.PreparedObservability == nil || len(stored.legacyPreparedObservability) != 0 ||
+				callbackEvent.PreparedObservability == nil {
+				t.Fatal("development v1 source migration reached callback before current-source CAS")
+			}
+			if stored.PreparedObservability.Binding.Source.Environment != "production" {
+				t.Fatalf("stored source environment = %q", stored.PreparedObservability.Binding.Source.Environment)
+			}
+			return nil
+		})
+	if err := runner.DeliverPendingTerminalEventsOnce(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if callbackCount != 1 || !store.terminalDelivered(event.RunID) {
+		t.Fatalf("callbacks=%d delivered=%v", callbackCount, store.terminalDelivered(event.RunID))
 	}
 }
 
@@ -234,11 +272,23 @@ func TestRunnerRound1PersistFailureForbidsCallback(t *testing.T) {
 }
 
 func newRound1PersistentEmitter(t *testing.T, key string, sink observability.Sink) (*observability.Emitter, observability.PersistentPreparedEventEmitter) {
+	return newRound1PersistentEmitterWithSource(t, key, "test", nil, sink)
+}
+
+func newRound1PersistentEmitterWithSource(
+	t *testing.T,
+	key string,
+	environment string,
+	previous []string,
+	sink observability.Sink,
+) (*observability.Emitter, observability.PersistentPreparedEventEmitter) {
 	t.Helper()
 	emitter, err := observability.NewPersistentEmitter(
-		observability.Source{Service: "cloud", Component: "http-server", Environment: "test"},
+		observability.Source{Service: "cloud", Component: "http-server", Environment: environment},
 		observability.Runtime{AppVersion: "current-app", GitCommit: "current-commit"}, sink, 8,
-		observability.PersistentSealingConfig{Domain: "agent-terminal-test-v1", Key: key},
+		observability.PersistentSealingConfig{
+			Domain: "agent-terminal-test-v1", Key: key, PreviousSourceEnvironments: previous,
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -248,4 +298,50 @@ func newRound1PersistentEmitter(t *testing.T, key string, sink observability.Sin
 		t.Fatal(err)
 	}
 	return emitter, persistent
+}
+
+func loadRound1TerminalFixtureForEnvironment(t *testing.T, environment string) RunTerminalEvent {
+	t.Helper()
+	event := loadRound1TerminalFixture(t)
+	var envelope struct {
+		Version     string              `json:"version"`
+		OwnerUserID string              `json:"ownerUserId"`
+		Event       observability.Event `json:"event"`
+		SHA256      string              `json:"sha256"`
+	}
+	if err := json.Unmarshal(event.legacyPreparedObservability, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope.Event.Source.Environment = environment
+	body, err := json.Marshal(struct {
+		Version     string              `json:"version"`
+		OwnerUserID string              `json:"ownerUserId"`
+		Event       observability.Event `json:"event"`
+	}{Version: envelope.Version, OwnerUserID: envelope.OwnerUserID, Event: envelope.Event})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(body)
+	envelope.SHA256 = hex.EncodeToString(digest[:])
+	legacy, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the same base64 JSON-string transport used by the literal row,
+	// rather than assigning the private decoded bytes alone.
+	wire, err := json.Marshal(map[string]any{
+		"eventId": event.EventID, "callbackIdempotencyKey": event.CallbackIdempotencyKey,
+		"runId": event.RunID, "taskId": event.TaskID, "userId": event.UserID,
+		"traceId": event.TraceID, "toolRegistrySnapshotId": event.ToolRegistrySnapshotID,
+		"status": event.Status, "context": event.Context, "occurredAt": event.OccurredAt,
+		"preparedObservability": base64.StdEncoding.EncodeToString(legacy),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migratedFixture RunTerminalEvent
+	if err := json.Unmarshal(wire, &migratedFixture); err != nil {
+		t.Fatal(err)
+	}
+	return migratedFixture
 }

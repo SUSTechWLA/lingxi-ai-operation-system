@@ -64,10 +64,22 @@ func newPersistentAgentEmitterForTest(
 	sink observability.Sink,
 	capacity int,
 ) (*observability.Emitter, observability.PersistentPreparedEventEmitter) {
+	return newPersistentAgentEmitterForTestWithPrevious(t, source, runtime, sink, capacity, nil)
+}
+
+func newPersistentAgentEmitterForTestWithPrevious(
+	t *testing.T,
+	source observability.Source,
+	runtime observability.Runtime,
+	sink observability.Sink,
+	capacity int,
+	previousSourceEnvironments []string,
+) (*observability.Emitter, observability.PersistentPreparedEventEmitter) {
 	t.Helper()
 	emitter, err := observability.NewPersistentEmitter(source, runtime, sink, capacity, observability.PersistentSealingConfig{
-		Domain: "agent-terminal-test-v1",
-		Key:    "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=",
+		Domain:                     "agent-terminal-test-v1",
+		Key:                        "base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=",
+		PreviousSourceEnvironments: previousSourceEnvironments,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +90,101 @@ func newPersistentAgentEmitterForTest(
 		t.Fatal(err)
 	}
 	return emitter, persistent
+}
+
+func TestRunnerMigratesPreviousSourceV2BeforeCallbackAndRestart(t *testing.T) {
+	store := newMemoryRunStore()
+	run := terminalDeliveryTestRun("agr_phase_source_migration_restart")
+	developmentEmitter, developmentPersistent := newPersistentAgentEmitterForTest(t,
+		observability.Source{Service: "cloud-backend", Component: "http-server", Environment: "development"},
+		observability.Runtime{AppVersion: "development-app"}, nil, 4,
+	)
+	developmentRunner := NewRunner(nil, store, nil, nil, nil).WithObservability(developmentPersistent)
+	enqueueTerminalDeliveryForTest(t, developmentRunner, store, run, "evt_agent_terminal_source_migration_restart")
+	original := store.terminal[run.ID].PreparedObservability.Clone()
+	if err := developmentEmitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	productionSource := observability.Source{Service: "cloud-backend", Component: "http-server", Environment: "production"}
+	firstProductionEmitter, firstProductionPersistent := newPersistentAgentEmitterForTestWithPrevious(
+		t, productionSource, observability.Runtime{AppVersion: "production-app"}, nil, 4, []string{"development"},
+	)
+	callbackCount := 0
+	firstProductionRunner := NewRunner(nil, store, nil, nil, nil).
+		WithObservability(firstProductionPersistent).
+		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+			callbackCount++
+			stored := store.terminal[run.ID].PreparedObservability
+			if stored == nil || bytes.Equal(stored.Payload, original.Payload) {
+				t.Fatal("source migration reached callback before the claimed CAS")
+			}
+			return errors.New("simulated crash after source migration CAS")
+		})
+	if err := firstProductionRunner.DeliverPendingTerminalEventsOnce(context.Background(), 1); err == nil {
+		t.Fatal("simulated callback crash unexpectedly succeeded")
+	}
+	if err := firstProductionEmitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The CAS wrote a current-source envelope, so a restart intentionally omits
+	// the previous-source allowlist and still restores successfully.
+	restartedEmitter, restartedPersistent := newPersistentAgentEmitterForTest(
+		t, productionSource, observability.Runtime{AppVersion: "restarted-app"}, nil, 4,
+	)
+	restartedRunner := NewRunner(nil, store, nil, nil, nil).
+		WithObservability(restartedPersistent).
+		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+			callbackCount++
+			return nil
+		})
+	if err := restartedRunner.DeliverPendingTerminalEventsOnce(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := restartedEmitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if callbackCount != 2 || !store.terminalDelivered(run.ID) {
+		t.Fatalf("callbacks=%d delivered=%v", callbackCount, store.terminalDelivered(run.ID))
+	}
+}
+
+func TestRunnerPreviousSourceMigrationClaimLossForbidsCallback(t *testing.T) {
+	base := newMemoryRunStore()
+	run := terminalDeliveryTestRun("agr_phase_source_migration_claim_loss")
+	developmentEmitter, developmentPersistent := newPersistentAgentEmitterForTest(t,
+		observability.Source{Service: "cloud-backend", Component: "http-server", Environment: "development"},
+		observability.Runtime{}, nil, 4,
+	)
+	developmentRunner := NewRunner(nil, base, nil, nil, nil).WithObservability(developmentPersistent)
+	enqueueTerminalDeliveryForTest(t, developmentRunner, base, run, "evt_agent_terminal_source_migration_claim_loss")
+	if err := developmentEmitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &loseRound1FreezeStore{memoryRunStore: base}
+	productionEmitter, productionPersistent := newPersistentAgentEmitterForTestWithPrevious(t,
+		observability.Source{Service: "cloud-backend", Component: "http-server", Environment: "production"},
+		observability.Runtime{}, nil, 4, []string{"development"},
+	)
+	callbackCount := 0
+	runner := NewRunner(nil, store, nil, nil, nil).
+		WithObservability(productionPersistent).
+		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+			callbackCount++
+			return nil
+		})
+	err := runner.DeliverPendingTerminalEventsOnce(context.Background(), 1)
+	if err == nil || !strings.Contains(err.Error(), "claim lost during freeze payload") {
+		t.Fatalf("source migration claim-loss error = %v", err)
+	}
+	if callbackCount != 0 {
+		t.Fatalf("source migration claim loss reached callback %d times", callbackCount)
+	}
+	if err := productionEmitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (e *terminalReplayEmitter) Write(ctx context.Context, event observability.Event) error {
@@ -117,6 +224,10 @@ func (e *terminalReplayEmitter) FreezeAndSeal(ctx context.Context, event observa
 
 func (e *terminalReplayEmitter) MigrateClaimedLegacyPreparedEvent(ctx context.Context, payload []byte, event observability.Event) (observability.SealedPreparedEvent, error) {
 	return e.persistent.MigrateClaimedLegacyPreparedEvent(ctx, payload, event)
+}
+
+func (e *terminalReplayEmitter) MigrateClaimedPreparedEventSource(ctx context.Context, sealed observability.SealedPreparedEvent, event observability.Event) (observability.SealedPreparedEvent, bool, error) {
+	return e.persistent.MigrateClaimedPreparedEventSource(ctx, sealed, event)
 }
 
 func (e *terminalReplayEmitter) RestorePreparedEvent(sealed observability.SealedPreparedEvent) (observability.PreparedEvent, error) {

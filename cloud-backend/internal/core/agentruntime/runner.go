@@ -87,6 +87,7 @@ type RunTerminalEvent struct {
 	OccurredAt                  time.Time                          `json:"occurredAt"`
 	PreparedObservability       *observability.SealedPreparedEvent `json:"preparedObservability,omitempty"`
 	legacyPreparedObservability []byte
+	terminalJSONState           *terminalEventJSONState
 }
 
 // RunTerminalCallback may be invoked again after a crash between the remote
@@ -1417,6 +1418,25 @@ func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int
 			delivery.Event.PreparedObservability = &sealed
 			delivery.Event.legacyPreparedObservability = nil
 			freezePayload = true
+		}
+		if delivery.Event.PreparedObservability != nil {
+			expected, migrationErr := terminalObservabilityValue(delivery.Event)
+			if migrationErr != nil {
+				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery, migrationErr))
+				continue
+			}
+			migrated, changed, migrationErr := r.events.MigrateClaimedPreparedEventSource(
+				deliveryCtx, *delivery.Event.PreparedObservability, expected,
+			)
+			if migrationErr != nil {
+				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery,
+					fmt.Errorf("migrate terminal observability source: %w", migrationErr)))
+				continue
+			}
+			if changed {
+				delivery.Event.PreparedObservability = &migrated
+				freezePayload = true
+			}
 		}
 		needsPreparedEnvelope := delivery.Event.PreparedObservability == nil
 		if !needsPreparedEnvelope {
