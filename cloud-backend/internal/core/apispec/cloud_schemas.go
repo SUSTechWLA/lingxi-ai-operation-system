@@ -10,6 +10,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/skillcapability"
 	workflow "github.com/tangying-ai/aios-core/internal/core/workflow"
 )
@@ -33,6 +34,11 @@ func registerCloudSchemas(b *Builder) {
 			"message": {Schema: StringSchema()},
 		},
 	})
+	b.Schema("ObservabilityAckRequest", Reflect(observability.AcknowledgeRequest{}))
+	b.Schema("ObservabilityRunSummary", Reflect(observability.RunSummary{}))
+	b.Schema("ObservabilityEventPageResponse", Reflect(observabilityEventPageResponse{}))
+	b.Schema("ObservabilityAckResponse", Reflect(observabilityAckEnvelope{}))
+	b.Schema("ObservabilityRunSummaryResponse", Reflect(observabilityRunSummaryEnvelope{}))
 
 	// ── Health ──
 	b.Schema("HealthResponse", &Schema{
@@ -1158,6 +1164,24 @@ func registerCloudSchemas(b *Builder) {
 	_ = model.TaskCreated
 	_ = model.NodeCreated
 	_ = workflow.Template{}
+}
+
+type observabilityEventPageResponse struct {
+	Code    int                     `json:"code"`
+	Message string                  `json:"message"`
+	Data    observability.EventPage `json:"data"`
+}
+
+type observabilityAckEnvelope struct {
+	Code    int                               `json:"code"`
+	Message string                            `json:"message"`
+	Data    observability.AcknowledgeResponse `json:"data"`
+}
+
+type observabilityRunSummaryEnvelope struct {
+	Code    int                      `json:"code"`
+	Message string                   `json:"message"`
+	Data    observability.RunSummary `json:"data"`
 }
 
 func enumSchema(values ...string) *Schema {

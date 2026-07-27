@@ -800,3 +800,44 @@ func TestBuildCloudSpec_SnapshotPathCount(t *testing.T) {
 	}
 	t.Logf("Path count: %d", len(spec.Paths))
 }
+
+func TestBuildCloudSpecExposesAuthenticatedObservabilityRelay(t *testing.T) {
+	spec := BuildCloudSpec()
+	tests := []struct {
+		method, path, request, response string
+	}{
+		{"GET", "/api/observability/events", "", "ObservabilityEventPageResponse"},
+		{"POST", "/api/observability/events/ack", "ObservabilityAckRequest", "ObservabilityAckResponse"},
+		{"GET", "/api/observability/runs/:runId/summary", "", "ObservabilityRunSummaryResponse"},
+	}
+	for _, test := range tests {
+		op := operationForMethod(t, spec.Paths[test.path], test.method)
+		if op == nil {
+			t.Fatalf("%s %s missing", test.method, test.path)
+		}
+		if len(op.Tags) == 0 || op.Tags[0] != "Observability" {
+			t.Fatalf("%s %s tags = %v", test.method, test.path, op.Tags)
+		}
+		assertRequiredHeader(t, op, "Authorization", true)
+		if _, ok := op.Responses["401"]; !ok {
+			t.Fatalf("%s %s missing 401", test.method, test.path)
+		}
+		assertSchemaRef(t, op, test.request, test.response)
+	}
+
+	pull := operationForMethod(t, spec.Paths["/api/observability/events"], "GET")
+	limit := findParameter(pull, "query", "limit")
+	if limit == nil || inlineParameterSchema(limit).Default != 100 ||
+		*inlineParameterSchema(limit).Minimum != 1 || *inlineParameterSchema(limit).Maximum != 500 {
+		t.Fatalf("pull limit = %#v", limit)
+	}
+	ack := spec.Components.Schemas["ObservabilityAckRequest"]
+	if ack == nil || !reflect.DeepEqual(ack.Required, []string{"eventIds"}) {
+		t.Fatalf("ack schema = %#v", ack)
+	}
+	for _, forbidden := range []string{"prompt", "media", "toolArgs", "attributes", "errorText"} {
+		if _, ok := spec.Components.Schemas["ObservabilityRunSummary"].Properties[forbidden]; ok {
+			t.Fatalf("run summary exposes %q", forbidden)
+		}
+	}
+}

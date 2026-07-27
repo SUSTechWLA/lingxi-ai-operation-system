@@ -338,6 +338,7 @@ func main() {
 	r := newHTTPRouter(allowedCORSOrigins, observabilityEmitter)
 
 	auth.NewHandler(authService).RegisterRoutes(r)
+	observability.NewHandler(observability.NewRepository(pool)).RegisterRoutes(r, requireAuth)
 	orchestratorHandler.NewOrchestratorHandler(orchestratorService, stateMachine, taskExecutionCtrl, contextService).RegisterRoutes(r, requireAuth)
 	health.NewHandler([]health.DependencyCheck{
 		{Name: "postgres", Check: pool.Ping},

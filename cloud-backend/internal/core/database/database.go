@@ -168,6 +168,41 @@ const runManifestMigration = `
 	ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS replay_from_stage_id VARCHAR(128);
 `
 
+const observabilityRelayMigration = `
+	CREATE TABLE IF NOT EXISTS observability_event_outbox (
+		event_id VARCHAR(128) PRIMARY KEY,
+		user_id VARCHAR(64) NOT NULL,
+		run_id VARCHAR(128) NOT NULL,
+		trace_id VARCHAR(128) NOT NULL,
+		occurred_at TIMESTAMPTZ NOT NULL,
+		redacted_payload JSONB NOT NULL,
+		ingested_at TIMESTAMPTZ NOT NULL,
+		delivered_at TIMESTAMPTZ,
+		expires_at TIMESTAMPTZ NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_observability_event_outbox_user
+		ON observability_event_outbox(user_id, occurred_at, event_id)
+		WHERE delivered_at IS NULL;
+	CREATE INDEX IF NOT EXISTS idx_observability_event_outbox_correlation
+		ON observability_event_outbox(user_id, run_id, trace_id);
+	CREATE INDEX IF NOT EXISTS idx_observability_event_outbox_expiry
+		ON observability_event_outbox(expires_at);
+
+	CREATE TABLE IF NOT EXISTS observability_run_summaries (
+		user_id VARCHAR(64) NOT NULL,
+		run_id VARCHAR(128) NOT NULL,
+		status VARCHAR(32) NOT NULL,
+		duration_ms BIGINT,
+		error_fingerprints TEXT[] NOT NULL DEFAULT '{}',
+		correlation JSONB NOT NULL,
+		versions JSONB NOT NULL,
+		updated_at TIMESTAMPTZ NOT NULL,
+		PRIMARY KEY (user_id, run_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_observability_run_summaries_user_updated
+		ON observability_run_summaries(user_id, updated_at DESC);
+`
+
 type migrationExecer interface {
 	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
 }
@@ -182,6 +217,13 @@ func ensureVideoProjectConfigRevision(ctx context.Context, execer migrationExece
 func ensureRunManifestSchema(ctx context.Context, execer migrationExecer) error {
 	if _, err := execer.Exec(ctx, runManifestMigration); err != nil {
 		return fmt.Errorf("required run manifest schema: %w", err)
+	}
+	return nil
+}
+
+func ensureObservabilityRelaySchema(ctx context.Context, execer migrationExecer) error {
+	if _, err := execer.Exec(ctx, observabilityRelayMigration); err != nil {
+		return fmt.Errorf("required observability relay schema: %w", err)
 	}
 	return nil
 }
@@ -600,6 +642,9 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	if err := ensureRunManifestSchema(ctx, pool); err != nil {
 		zap.L().Fatal("Failed to install required run manifest schema", zap.Error(err))
 	}
+	if err := ensureObservabilityRelaySchema(ctx, pool); err != nil {
+		zap.L().Fatal("Failed to install required observability relay schema", zap.Error(err))
+	}
 
 	// Local Runner tables (video creation upgrade P7)
 	localRunnerSchema := `
@@ -797,6 +842,8 @@ func DropAll(ctx context.Context, pool *pgxpool.Pool) {
 	DROP TABLE IF EXISTS local_job_logs;
 	DROP TABLE IF EXISTS local_jobs;
 	DROP TABLE IF EXISTS local_runners;
+	DROP TABLE IF EXISTS observability_run_summaries;
+	DROP TABLE IF EXISTS observability_event_outbox;
 	DROP TABLE IF EXISTS outbox_dlq;
 	DROP TABLE IF EXISTS outbox;
 	DROP TABLE IF EXISTS ai_context;

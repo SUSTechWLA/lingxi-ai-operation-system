@@ -12,6 +12,7 @@ func BuildCloudSpec() *Spec {
 		Server("http://localhost:8080", "Local development server").
 		Tag("Health", "Service health and readiness").
 		Tag("Auth", "User registration, login, token refresh, and session identity").
+		Tag("Observability", "Authenticated delivery of redacted cloud events and run summaries").
 		Tag("Publish", "Multi-platform content publishing — frontend-facing").
 		Tag("AI", "AI-assisted content generation and polishing").
 		Tag("Trace", "Task lifecycle trace/debugging").
@@ -69,6 +70,34 @@ func BuildCloudSpec() *Spec {
 		Tags("Auth").
 		ResponseJSON("200", "Current user", "CurrentUserResponse").
 		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+
+	// ── Observability ──
+	minRelayLimit, maxRelayLimit := float64(1), float64(500)
+	b.Route("GET", "/api/observability/events", "Pull undelivered redacted observability events").
+		Tags("Observability").
+		creatorAuth(false).
+		QueryParam("cursor", "Opaque versioned continuation cursor", StringSchema(), false).
+		QueryParam("limit", "Maximum events to return", &Schema{
+			Type: "integer", Minimum: &minRelayLimit, Maximum: &maxRelayLimit, Default: 100,
+		}, false).
+		ResponseJSON("200", "Redacted event page", "ObservabilityEventPageResponse").
+		ResponseJSON("400", "Malformed cursor or limit", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+	b.Route("POST", "/api/observability/events/ack", "Acknowledge delivered observability events").
+		Tags("Observability").
+		creatorAuth(false).
+		BodyJSON("ObservabilityAckRequest", "At most 500 redacted event identifiers", true).
+		ResponseJSON("200", "Acknowledgement count", "ObservabilityAckResponse").
+		ResponseJSON("400", "Malformed or oversized acknowledgement", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+	b.Route("GET", "/api/observability/runs/:runId/summary", "Get an allowlisted redacted run summary").
+		Tags("Observability").
+		creatorAuth(false).
+		PathParam("runId", "Workflow or agent run identifier", StringSchema()).
+		ResponseJSON("200", "Redacted run summary", "ObservabilityRunSummaryResponse").
+		ResponseJSON("400", "Malformed run identifier", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Run summary not found", "ErrorResponse")
 
 	// ── Publish ──
 	b.Route("POST", "/api/publish", "Submit content for multi-platform publishing").
