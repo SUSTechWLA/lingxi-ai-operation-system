@@ -29,6 +29,39 @@ func TestEventRunIDAllowsRequestOnlyRelayWithoutInventingRun(t *testing.T) {
 	}
 }
 
+func TestEventRunIDRejectsRunlessDomainLifecycle(t *testing.T) {
+	for _, eventType := range []EventType{EventTypeToolCallStarted, EventTypeLocalJobFailed, EventTypeTaskCreated} {
+		event := validEvent()
+		event.EventType = eventType
+		event.Correlation = Correlation{TraceID: "trc_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+		if _, err := eventRunID(event); err == nil {
+			t.Errorf("%s accepted without run", eventType)
+		}
+	}
+}
+
+func TestEventRunIDUsesAgentOrTaskFallbackForStageLifecycle(t *testing.T) {
+	tests := []struct {
+		name        string
+		correlation Correlation
+		want        string
+	}{
+		{"agent run owns agent stage", Correlation{AgentRunID: "agr_agent"}, "agr_agent"},
+		{"task owns task scoped stage", Correlation{TaskID: "tsk_task"}, "tsk_task"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := validEvent()
+			event.EventType = EventTypeWorkflowStageStarted
+			event.Correlation = tt.correlation
+			runID, err := eventRunID(event)
+			if err != nil || runID != tt.want {
+				t.Fatalf("runID=%q err=%v, want %q", runID, err, tt.want)
+			}
+		})
+	}
+}
+
 type fakeRelayDB struct {
 	row      relayRow
 	rows     *relayRows

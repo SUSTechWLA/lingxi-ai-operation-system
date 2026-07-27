@@ -7,13 +7,25 @@ const fixture = JSON.parse(await readFile('contracts/observability/v1/example-st
 
 const approvedCodes = [
   'AUTH.SESSION.EXPIRED',
+  'REQUEST.HANDLER.FAILED',
   'WORKFLOW.STAGE.TIMEOUT',
+  'WORKFLOW.RUN.EXECUTION_FAILED',
+  'WORKFLOW.STAGE.EXECUTION_FAILED',
   'AGENT.PLAN.VALIDATION_FAILED',
+  'AGENT.PLAN.GENERATION_FAILED',
+  'AGENT.PLAN.COMPILATION_FAILED',
+  'AGENT.DAG.SUBMISSION_FAILED',
+  'AGENT.RUNTIME.INTERNAL_FAILURE',
   'LLM.PROVIDER.RATE_LIMITED',
   'LLM.RESPONSE.SCHEMA_INVALID',
+  'LLM.TRANSPORT.UNAVAILABLE',
+  'LLM.CALL.TIMEOUT',
+  'LLM.CALL.INTERNAL_FAILURE',
   'MCP.CONNECTION.UNAVAILABLE',
   'MCP.TOOL.NOT_FOUND',
   'TOOL.ARGUMENT.SCHEMA_INVALID',
+  'TOOL.EXECUTION.FAILED',
+  'LOCAL.JOB.EXECUTION_FAILED',
   'ARTIFACT.FILE.MISSING',
   'ARTIFACT.HASH.MISMATCH',
   'RENDER.BLENDER.PROCESS_FAILED',
@@ -40,6 +52,11 @@ const resolve = (definition) => {
 function validate(value, definition, path = '$') {
   const rules = resolve(definition)
   const issues = []
+  for (const rule of rules.allOf ?? []) issues.push(...validate(value, rule, path))
+  if (rules.if) {
+    const branch = validate(value, rules.if, path).length === 0 ? rules.then : rules.else
+    if (branch) issues.push(...validate(value, branch, path))
+  }
   if (rules.oneOf) {
     const matches = rules.oneOf.filter((option) => validate(value, option, path).length === 0)
     return matches.length === 1 ? [] : [`${path} must match exactly one schema`]
@@ -149,6 +166,10 @@ assertInvalidEvent('raw developer detail', unsafeDeveloperDetail)
 const unregisteredErrorCode = structuredClone(fixture)
 unregisteredErrorCode.error.code = 'RENDER.FFMPEG.UNKNOWN'
 assertInvalidEvent('unregistered error code', unregisteredErrorCode)
+
+const missingStructuredError = structuredClone(fixture)
+missingStructuredError.error = null
+assertInvalidEvent('error severity without structured error', missingStructuredError)
 
 const malformedRegistry = structuredClone(errors)
 malformedRegistry[0].prompt = 'synthetic-test-value'

@@ -10,6 +10,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
 	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
@@ -237,6 +238,7 @@ func TestExecuteNodeLocalToolUsesRetryAttemptInIdempotencyKey(t *testing.T) {
 
 	nodeExecutor := NewNodeExecutor(registry, nil, config.WorkerConfig{}, nil, nil, nodeRepo)
 	nodeExecutor.SetLocalJobDispatcher(dispatcher)
+	sink, emitter := observeWorkerExecutor(nodeExecutor)
 	nodeExecutor.ExecuteNode(ctx, eventbus.Event{
 		TaskID: "task_001",
 		NodeID: "render_exec",
@@ -252,6 +254,19 @@ func TestExecuteNodeLocalToolUsesRetryAttemptInIdempotencyKey(t *testing.T) {
 
 	if dispatcher.req.IdempotencyKey != "task_001-render_exec-attempt-2" {
 		t.Fatalf("retry dispatch should use an attempt-scoped idempotency key, got %#v", dispatcher.req)
+	}
+	assertWorkerLifecycle(t, emitter, sink, observability.EventTypeToolCallCompleted, "", 2)
+	var retryStarted, retryCompleted int
+	for _, event := range sink.snapshot() {
+		switch event.EventType {
+		case observability.EventTypeRecoveryRetryStarted:
+			retryStarted++
+		case observability.EventTypeRecoveryRetryCompleted:
+			retryCompleted++
+		}
+	}
+	if retryStarted != 1 || retryCompleted != 1 {
+		t.Fatalf("retry lifecycle started=%d completed=%d events=%+v", retryStarted, retryCompleted, sink.snapshot())
 	}
 }
 
@@ -428,11 +443,12 @@ func TestExecuteToolRejectsSandboxToolWhenSandboxUnavailable(t *testing.T) {
 type fakeLocalJobDispatcher struct {
 	req localrunner.DispatchLocalJobRequest
 	job *localrunner.LocalJob
+	err error
 }
 
 func (f *fakeLocalJobDispatcher) DispatchLocalJob(_ context.Context, req localrunner.DispatchLocalJobRequest) (*localrunner.LocalJob, error) {
 	f.req = req
-	return f.job, nil
+	return f.job, f.err
 }
 
 type fakeProjectIDResolver struct {

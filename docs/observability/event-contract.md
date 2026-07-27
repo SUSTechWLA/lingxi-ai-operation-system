@@ -18,7 +18,9 @@ callbacks.
 The outer `agent.run.*` pair describes creation and submission of an Agent run;
 successful submission leaves the persisted run in `RUNNING`. Internal Agent
 planning, compilation, and DAG submission use `workflow.stage.*` with fixed
-stage identifiers. Plan validation uses `agent.plan.validation.*`.
+stage identifiers. Plan validation uses `agent.plan.validation.*`; correction
+uses `correct.operation.*`, and the configured plan judge owns the genuine
+`verify.check.*` boundary.
 
 HTTP middleware accepts W3C `traceparent`. Kafka propagation reconstructs the
 same correlation context. Producers may supply existing domain IDs (`wfr-`,
@@ -36,8 +38,9 @@ tokens, credentials, or user comments. Zap diagnostics likewise omit raw
 `userInput` and translator `prompt` fields.
 
 `ERROR` severity is reserved for terminal events carrying a normalized code
-from the stable registry. A failure with no truthful registered mapping remains
-a `WARN` terminal event; producers do not invent a misleading error code.
+from the stable registry; both the Go validator and JSON schema reject an
+`ERROR` event without structured error metadata. Cancellation remains a
+`WARN`/`CANCELLED` terminal event.
 
 Emitter failure never fails a user workflow. Queue rejection or validation
 failure produces a bounded structured diagnostic containing only component,
@@ -45,6 +48,13 @@ event type, and `observability.emit.failed`. The shared emitter retains its
 bounded-queue policy: low-priority progress can be evicted; protected lifecycle
 events return an explicit overflow diagnostic rather than disappearing
 silently.
+
+Local-job terminal observability is a separate durable callback phase. The
+terminal event ID, occurrence time, duration, attempt, correlation, and failure
+code are derived from the persisted job row. Queue rejection or sink failure
+leaves that phase pending for authenticated reconciliation while product result
+and follow-up callbacks continue independently; a sink acknowledgement is
+required before the observability phase is marked delivered.
 
 ## Tool snapshot
 

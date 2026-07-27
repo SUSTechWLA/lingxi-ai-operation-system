@@ -620,9 +620,6 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    task_id VARCHAR(64),
 		    status VARCHAR(20) DEFAULT 'PENDING',
 		    attempt INT DEFAULT 1,
-		    trace_id VARCHAR(64),
-		    span_id VARCHAR(32),
-		    parent_span_id VARCHAR(32),
 		    input JSONB DEFAULT '{}',
 		    output JSONB DEFAULT '{}',
 		    stage_statuses JSONB DEFAULT '{}',
@@ -739,8 +736,14 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    artifact_policy JSONB DEFAULT '{}',
 		    idempotency_key VARCHAR(128),
 		    attempt INT DEFAULT 1,
+		    trace_id VARCHAR(64),
+		    span_id VARCHAR(32),
+		    parent_span_id VARCHAR(32),
 		    result_callback_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
 		    followup_callback_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+		    observability_callback_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+		    observability_callback_claim_token VARCHAR(96),
+		    observability_callback_lease_until TIMESTAMPTZ,
 		    claimed_at TIMESTAMPTZ,
 		    lease_expires_at TIMESTAMPTZ,
 		    completed_at TIMESTAMPTZ,
@@ -771,6 +774,10 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		ALTER TABLE local_jobs ALTER COLUMN result_callback_state SET DEFAULT 'PENDING';
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS followup_callback_state VARCHAR(20) NOT NULL DEFAULT 'DELIVERED';
 		ALTER TABLE local_jobs ALTER COLUMN followup_callback_state SET DEFAULT 'PENDING';
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS observability_callback_state VARCHAR(20) NOT NULL DEFAULT 'DELIVERED';
+		ALTER TABLE local_jobs ALTER COLUMN observability_callback_state SET DEFAULT 'PENDING';
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS observability_callback_claim_token VARCHAR(96);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS observability_callback_lease_until TIMESTAMPTZ;
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
 		UPDATE local_jobs lj

@@ -19,6 +19,7 @@ const (
 	ErrorClassIntegrity      ErrorClass = "INTEGRITY"
 	ErrorClassRender         ErrorClass = "RENDER"
 	ErrorClassMedia          ErrorClass = "MEDIA"
+	ErrorClassExecution      ErrorClass = "EXECUTION"
 )
 
 type EventError struct {
@@ -63,18 +64,25 @@ var errorRegistry = map[string]errorDefinition{
 		UserMessageKey:     "error.auth.session.expired",
 		SuggestedActionKey: "action.auth.sign.in",
 	},
+	"REQUEST.HANDLER.FAILED": {Class: ErrorClassExecution, Retryable: false, UserMessageKey: "error.request.handler.failed", SuggestedActionKey: "action.request.retry"},
 	"WORKFLOW.STAGE.TIMEOUT": {
 		Class:              ErrorClassTimeout,
 		Retryable:          true,
 		UserMessageKey:     "error.workflow.stage.timeout",
 		SuggestedActionKey: "action.workflow.retry.stage",
 	},
+	"WORKFLOW.RUN.EXECUTION_FAILED":   {Class: ErrorClassExecution, Retryable: true, UserMessageKey: "error.workflow.run.execution.failed", SuggestedActionKey: "action.workflow.retry.run"},
+	"WORKFLOW.STAGE.EXECUTION_FAILED": {Class: ErrorClassExecution, Retryable: true, UserMessageKey: "error.workflow.stage.execution.failed", SuggestedActionKey: "action.workflow.retry.stage"},
 	"AGENT.PLAN.VALIDATION_FAILED": {
 		Class:              ErrorClassValidation,
 		Retryable:          false,
 		UserMessageKey:     "error.agent.plan.validation.failed",
 		SuggestedActionKey: "action.agent.review.plan",
 	},
+	"AGENT.PLAN.GENERATION_FAILED":   {Class: ErrorClassExecution, Retryable: true, UserMessageKey: "error.agent.plan.generation.failed", SuggestedActionKey: "action.agent.retry.plan"},
+	"AGENT.PLAN.COMPILATION_FAILED":  {Class: ErrorClassExecution, Retryable: false, UserMessageKey: "error.agent.plan.compilation.failed", SuggestedActionKey: "action.agent.review.plan"},
+	"AGENT.DAG.SUBMISSION_FAILED":    {Class: ErrorClassConnection, Retryable: true, UserMessageKey: "error.agent.dag.submission.failed", SuggestedActionKey: "action.agent.retry.submission"},
+	"AGENT.RUNTIME.INTERNAL_FAILURE": {Class: ErrorClassExecution, Retryable: false, UserMessageKey: "error.agent.runtime.internal.failure", SuggestedActionKey: "action.agent.retry.run"},
 	"LLM.PROVIDER.RATE_LIMITED": {
 		Class:              ErrorClassProvider,
 		Retryable:          true,
@@ -87,6 +95,9 @@ var errorRegistry = map[string]errorDefinition{
 		UserMessageKey:     "error.llm.response.schema.invalid",
 		SuggestedActionKey: "action.llm.retry",
 	},
+	"LLM.TRANSPORT.UNAVAILABLE": {Class: ErrorClassConnection, Retryable: true, UserMessageKey: "error.llm.transport.unavailable", SuggestedActionKey: "action.llm.retry"},
+	"LLM.CALL.TIMEOUT":          {Class: ErrorClassTimeout, Retryable: true, UserMessageKey: "error.llm.call.timeout", SuggestedActionKey: "action.llm.retry"},
+	"LLM.CALL.INTERNAL_FAILURE": {Class: ErrorClassExecution, Retryable: false, UserMessageKey: "error.llm.call.internal.failure", SuggestedActionKey: "action.llm.retry"},
 	"MCP.CONNECTION.UNAVAILABLE": {
 		Class:              ErrorClassConnection,
 		Retryable:          true,
@@ -105,6 +116,8 @@ var errorRegistry = map[string]errorDefinition{
 		UserMessageKey:     "error.tool.argument.schema.invalid",
 		SuggestedActionKey: "action.tool.correct.arguments",
 	},
+	"TOOL.EXECUTION.FAILED":      {Class: ErrorClassExecution, Retryable: true, UserMessageKey: "error.tool.execution.failed", SuggestedActionKey: "action.tool.retry"},
+	"LOCAL.JOB.EXECUTION_FAILED": {Class: ErrorClassExecution, Retryable: true, UserMessageKey: "error.local.job.execution.failed", SuggestedActionKey: "action.local.job.retry"},
 	"ARTIFACT.FILE.MISSING": {
 		Class:              ErrorClassNotFound,
 		Retryable:          false,

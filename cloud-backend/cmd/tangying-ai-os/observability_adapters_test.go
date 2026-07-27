@@ -46,6 +46,14 @@ func TestDecisionLogAdapterRejectsAgentRunIDAndUsesResolvedWorkflowRun(t *testin
 	}
 }
 
+func TestDecisionLogAdapterRejectsNonemptyRunWithoutTask(t *testing.T) {
+	store := &adapterDecisionStore{}
+	err := (&decisionLogAdapter{store: store, resolver: adapterResolver{runID: "wfr-real"}}).Save(context.Background(), &agentruntime.DecisionLogRecord{WorkflowRunID: "agent_run_false"})
+	if err == nil || store.saved != nil {
+		t.Fatalf("err=%v saved=%v", err, store.saved)
+	}
+}
+
 type adapterRunService struct {
 	called       bool
 	runID, stage string

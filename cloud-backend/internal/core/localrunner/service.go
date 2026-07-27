@@ -169,7 +169,8 @@ const retireStaleMCPJobsSQL = `UPDATE local_jobs lj
        'catalogRevision',COALESCE(lj.catalog_revision,'')
      ),
      diagnostics=jsonb_build_object('retiredByRunnerId',$3),
-     retryable=true, result_callback_state='PENDING', followup_callback_state='PENDING',
+	     retryable=true, result_callback_state='PENDING', followup_callback_state='PENDING',
+	     observability_callback_state='PENDING',
      lease_expires_at=NULL, completed_at=NOW(), updated_at=NOW()
  WHERE lj.status='PENDING'
    AND lj.command='` + CommandLocalMCPToolCall + `'
@@ -205,12 +206,10 @@ const retireStaleMCPJobsSQL = `UPDATE local_jobs lj
    )`
 
 const pendingStaleMCPCallbacksSQL = ` FROM local_jobs lj
- WHERE lj.status='FAILED'
-   AND lj.command='` + CommandLocalMCPToolCall + `'
+ WHERE lj.status IN ('COMPLETED','FAILED')
    AND COALESCE(lj.user_id,'')=$1
    AND COALESCE(lj.runner_id,'')=$3
-   AND COALESCE(lj.target_runner_id,'')=$3
-   AND lj.error_json->>'code'='MCP_CATALOG_STALE'
+   AND (COALESCE(lj.target_runner_id,'')='' OR COALESCE(lj.target_runner_id,'')=$3)
 	   AND (
 	     lj.result_callback_state='PENDING'
 	     OR (
@@ -222,6 +221,8 @@ const pendingStaleMCPCallbacksSQL = ` FROM local_jobs lj
 	       lj.followup_callback_state='PROCESSING'
 	       AND (lj.followup_callback_lease_until IS NULL OR lj.followup_callback_lease_until < NOW())
 	     )
+	     OR lj.observability_callback_state='PENDING'
+	     OR (lj.observability_callback_state='PROCESSING' AND (lj.observability_callback_lease_until IS NULL OR lj.observability_callback_lease_until < NOW()))
 	   )
    AND EXISTS (
      SELECT 1 FROM local_runners lr
@@ -517,6 +518,7 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 		   diagnostics=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN '{}'::jsonb ELSE local_jobs.diagnostics END,
 		   result_callback_state=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN 'PENDING' ELSE local_jobs.result_callback_state END,
 		   followup_callback_state=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN 'PENDING' ELSE local_jobs.followup_callback_state END,
+		   observability_callback_state=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN 'PENDING' ELSE local_jobs.observability_callback_state END,
 		   retryable=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN true ELSE local_jobs.retryable END,
 		   runner_id=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.runner_id END,
 		   claimed_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.claimed_at END,
@@ -530,7 +532,7 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 		  WHERE COALESCE(local_jobs.user_id,'')=COALESCE(EXCLUDED.user_id,'')
 		    AND (
 		      local_jobs.status NOT IN ('COMPLETED','FAILED')
-		      OR (local_jobs.result_callback_state='DELIVERED' AND local_jobs.followup_callback_state='DELIVERED')
+		      OR (local_jobs.result_callback_state='DELIVERED' AND local_jobs.followup_callback_state='DELIVERED' AND local_jobs.observability_callback_state='DELIVERED')
 		    )
 		  RETURNING *
 		 ) `+localJobSelectPrefix()+` FROM upserted`,
@@ -750,6 +752,7 @@ func (s *Service) CompleteJob(ctx context.Context, identity JobMutationIdentity,
 		  UPDATE local_jobs lj
 		  SET status='COMPLETED', progress=1.0, output=$6,
 		      result_callback_state='PENDING', followup_callback_state='PENDING',
+		      observability_callback_state='PENDING',
 		      completed_at=NOW(), updated_at=NOW()
 		  WHERE `+jobMutationAccessPredicateSQL+`
 		  RETURNING *
@@ -775,6 +778,7 @@ func (s *Service) FailJob(ctx context.Context, identity JobMutationIdentity, job
 		  UPDATE local_jobs lj
 		  SET status='FAILED', error_message=$6, error_json=$7::jsonb, diagnostics=$8::jsonb, retryable=$9,
 		      result_callback_state='PENDING', followup_callback_state='PENDING',
+		      observability_callback_state='PENDING',
 		      completed_at=NOW(), updated_at=NOW()
 		  WHERE `+jobMutationAccessPredicateSQL+`
 		  RETURNING *
@@ -821,6 +825,46 @@ func (s *Service) ClaimTerminalCallback(ctx context.Context, identity JobMutatio
 	default:
 		return nil, fmt.Errorf("%w: callback authorization, runner identity, target, or terminal state predicate failed", ErrJobAccessDenied)
 	}
+}
+
+func (s *Service) ClaimTerminalObservability(ctx context.Context, identity JobMutationIdentity, jobID string) (*TerminalCallbackClaim, error) {
+	token := "callback_" + uuid.NewString()
+	var claimed bool
+	var observed string
+	err := s.pool.QueryRow(ctx, claimTerminalCallbackSQL("observability"), jobID, strings.TrimSpace(identity.UserID), strings.TrimSpace(identity.RunnerID), strings.TrimSpace(identity.DeviceID), strings.TrimSpace(identity.SessionID), token, time.Now().Add(terminalCallbackLeaseDuration)).Scan(&claimed, &observed)
+	if err != nil {
+		return nil, err
+	}
+	if claimed {
+		return &TerminalCallbackClaim{Token: token, IdempotencyKey: "local-job:" + jobID + ":observability"}, nil
+	}
+	if CallbackState(observed) == CallbackDelivered {
+		return &TerminalCallbackClaim{Delivered: true}, nil
+	}
+	if CallbackState(observed) == CallbackProcessing {
+		return nil, ErrCallbackBusy
+	}
+	return nil, fmt.Errorf("terminal observability state %q cannot be claimed", observed)
+}
+func (s *Service) AcknowledgeTerminalObservability(ctx context.Context, jobID, token string) error {
+	result, err := s.pool.Exec(ctx, ackTerminalCallbackSQL("observability"), jobID, token)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("observability callback acknowledgement token is stale or invalid")
+	}
+	return nil
+}
+func (s *Service) ReleaseTerminalObservability(ctx context.Context, jobID, token string) error {
+	result, err := s.pool.Exec(ctx, releaseTerminalCallbackSQL("observability"), jobID, token)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("observability callback release token is stale or invalid")
+	}
+	return nil
 }
 
 func callbackIdempotencyKey(jobID string, phase CallbackPhase) string {
@@ -1040,8 +1084,8 @@ func localJobSelectPrefix() string {
 	        mcp_logical_tool_name, mcp_remote_tool_name, project_id, task_id, node_id, tool_name, command, payload,
 	        status, progress, current_step, message, output, error_message, error_json,
 	        diagnostics, retryable, timeout_sec, artifact_policy, idempotency_key, attempt,
-	        result_callback_state, followup_callback_state,
-	        trace_id, span_id, parent_span_id, lease_expires_at, created_at, updated_at`
+	        result_callback_state, followup_callback_state, observability_callback_state,
+	        trace_id, span_id, parent_span_id, lease_expires_at, completed_at, created_at, updated_at`
 }
 
 type rowScanner interface {
@@ -1052,15 +1096,15 @@ func scanJob(row rowScanner) (*LocalJob, error) {
 	var job LocalJob
 	var runnerID, userID, targetRunnerID, catalogRevision, mcpProviderID, mcpLogicalToolName, mcpRemoteToolName *string
 	var taskID, nodeID, toolName, payload, currentStep, message, output, errorMessage, idempotencyKey, traceID, spanID, parentSpanID *string
-	var status, resultCallbackState, followupCallbackState string
+	var status, resultCallbackState, followupCallbackState, observabilityCallbackState string
 	var errorJSON, diagnosticsJSON, artifactPolicyJSON []byte
 	err := row.Scan(
 		&job.ID, &runnerID, &userID, &targetRunnerID, &catalogRevision, &mcpProviderID,
 		&mcpLogicalToolName, &mcpRemoteToolName, &job.ProjectID, &taskID, &nodeID, &toolName, &job.Command, &payload,
 		&status, &job.Progress, &currentStep, &message, &output, &errorMessage, &errorJSON,
 		&diagnosticsJSON, &job.Retryable, &job.TimeoutSec, &artifactPolicyJSON, &idempotencyKey,
-		&job.Attempt, &resultCallbackState, &followupCallbackState, &traceID, &spanID, &parentSpanID,
-		&job.LeaseExpiresAt, &job.CreatedAt, &job.UpdatedAt,
+		&job.Attempt, &resultCallbackState, &followupCallbackState, &observabilityCallbackState, &traceID, &spanID, &parentSpanID,
+		&job.LeaseExpiresAt, &job.CompletedAt, &job.CreatedAt, &job.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -1068,6 +1112,7 @@ func scanJob(row rowScanner) (*LocalJob, error) {
 	job.Status = JobStatus(status)
 	job.ResultCallbackState = CallbackState(resultCallbackState)
 	job.FollowupCallbackState = CallbackState(followupCallbackState)
+	job.ObservabilityCallbackState = CallbackState(observabilityCallbackState)
 	if traceID != nil {
 		job.TraceID = *traceID
 	}

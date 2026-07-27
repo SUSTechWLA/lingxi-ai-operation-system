@@ -62,6 +62,37 @@ func TestUpdateStageStatusEmitsSingleMappedTransition(t *testing.T) {
 	}
 }
 
+func TestWorkflowFailuresNormalizeStableCodesThroughEmitter(t *testing.T) {
+	sink := &workflowEventSink{}
+	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "workflow", Environment: "test"}, observability.Runtime{}, sink, 8)
+	service := (&RunService{runRepo: newRunRepositoryWithDB(&fakeWorkflowRunDB{})}).WithObservability(emitter)
+	if err := service.UpdateRunStatus(context.Background(), "wfr-failed", RunFailed); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.UpdateStageStatus(context.Background(), "wfr-failed", "render", StageFailed); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := map[observability.EventType]string{
+		observability.EventTypeWorkflowRunFailed:   "WORKFLOW.RUN.EXECUTION_FAILED",
+		observability.EventTypeWorkflowStageFailed: "WORKFLOW.STAGE.EXECUTION_FAILED",
+	}
+	for _, event := range sink.snapshot() {
+		if err := event.Validate(); err != nil {
+			t.Fatalf("invalid workflow event %s: %v", event.EventType, err)
+		}
+		if event.Error == nil || event.Error.Code != want[event.EventType] {
+			t.Fatalf("event %s error=%+v", event.EventType, event.Error)
+		}
+		delete(want, event.EventType)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing workflow failure events: %+v", want)
+	}
+}
+
 func TestDecisionLogSaveRejectsMissingWorkflowRunID(t *testing.T) {
 	store := &pgxDecisionLogStore{}
 	err := store.Save(context.Background(), &DecisionLogRecord{TaskID: "task-1", DecisionType: DecisionStageApproval})

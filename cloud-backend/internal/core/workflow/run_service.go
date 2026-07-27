@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -241,6 +242,14 @@ func (s *RunService) emitRunTransition(ctx context.Context, eventType observabil
 	if s == nil {
 		return
 	}
+	var eventErr *observability.EventError
+	if severity == observability.SeverityError {
+		code := "WORKFLOW.RUN.EXECUTION_FAILED"
+		if strings.HasPrefix(string(eventType), "workflow.stage.") {
+			code = "WORKFLOW.STAGE.EXECUTION_FAILED"
+		}
+		eventErr = observability.NormalizeError(code, nil, "workflow", "")
+	}
 	observability.EmitSafely(ctx, s.events, "workflow", observability.Event{
 		EventType:   eventType,
 		MessageKey:  string(eventType),
@@ -249,6 +258,7 @@ func (s *RunService) emitRunTransition(ctx context.Context, eventType observabil
 		Execution: observability.Execution{
 			Status: status, Attempt: attempt, DurationMs: durationMs,
 		},
+		Error: eventErr,
 		Privacy: observability.Privacy{
 			Classification: observability.PrivacyInternal,
 			RedactedFields: []string{"workflow.input", "workflow.output", "workflow.stage.payload"},

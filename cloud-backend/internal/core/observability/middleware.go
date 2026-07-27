@@ -34,16 +34,13 @@ func Middleware(emitter *Emitter) gin.HandlerFunc {
 		ctx := WithCorrelation(c.Request.Context(), correlation)
 		c.Request = c.Request.WithContext(ctx)
 		c.Header("traceparent", fmt.Sprintf("00-%s-%s-%s", traceID, spanID, flags))
-		if emitter != nil {
-			if err := emitter.Emit(ctx, requestEvent(EventTypeRequestAccepted, SeverityInfo, ExecutionStatusStarted, correlation, nil)); err != nil {
-				zap.L().Error("Failed to emit HTTP request accepted event", zap.Error(err))
-			}
-		}
-
-		started := time.Now()
+		started := time.Now().UTC()
 		defer func() {
 			recovered := recover()
 			durationMs := time.Since(started).Milliseconds()
+			// Authentication middleware runs after this middleware. Snapshot its
+			// resulting trusted context only after the handler chain returns.
+			emitCtx := c.Request.Context()
 
 			status := ExecutionStatusCompleted
 			severity := SeverityInfo
@@ -54,7 +51,12 @@ func Middleware(emitter *Emitter) gin.HandlerFunc {
 				eventType = EventTypeRequestFailed
 			}
 			if emitter != nil {
-				err := emitter.Emit(ctx, requestEvent(eventType, severity, status, correlation, &durationMs))
+				accepted := requestEvent(EventTypeRequestAccepted, SeverityInfo, ExecutionStatusStarted, correlation, nil)
+				accepted.OccurredAt = started
+				if err := emitter.Emit(emitCtx, accepted); err != nil {
+					zap.L().Warn("Failed to emit HTTP request accepted event", zap.Error(err))
+				}
+				err := emitter.Emit(emitCtx, requestEvent(eventType, severity, status, correlation, &durationMs))
 				if err != nil {
 					zap.L().Error("Failed to emit HTTP observability event", zap.Error(err))
 				}
@@ -84,6 +86,10 @@ func Middleware(emitter *Emitter) gin.HandlerFunc {
 }
 
 func requestEvent(eventType EventType, severity Severity, status ExecutionStatus, correlation Correlation, durationMs *int64) Event {
+	var eventErr *EventError
+	if severity == SeverityError {
+		eventErr = NormalizeError("REQUEST.HANDLER.FAILED", nil, "http-server", "")
+	}
 	return Event{
 		Severity:    severity,
 		EventType:   eventType,
@@ -94,6 +100,7 @@ func requestEvent(eventType EventType, severity Severity, status ExecutionStatus
 			Attempt:    1,
 			DurationMs: durationMs,
 		},
+		Error: eventErr,
 		Privacy: Privacy{
 			Classification: PrivacyInternal,
 			RedactedFields: []string{},

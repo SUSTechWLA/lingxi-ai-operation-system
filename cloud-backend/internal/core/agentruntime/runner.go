@@ -14,6 +14,7 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/observability"
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -225,7 +226,8 @@ func (r *Runner) StartAsync(ctx context.Context, req StartRunRequest) (*Run, err
 		return existing, nil
 	}
 	backgroundRun := *run
-	go r.completeStartInBackground(req, &backgroundRun)
+	ownerUserID, _ := trustedcontext.UserID(ctx)
+	go r.completeStartInBackground(req, &backgroundRun, ownerUserID)
 	return run, nil
 }
 
@@ -347,9 +349,12 @@ func existingIdempotencyFingerprint(run *Run) string {
 	return fingerprint
 }
 
-func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
+func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run, ownerUserID string) {
 	correlation := observability.Correlation{TraceID: run.TraceID, AgentRunID: run.ID}
 	parent := observability.WithCorrelation(context.Background(), correlation)
+	if ownerUserID != "" {
+		parent = trustedcontext.WithUserID(parent, ownerUserID)
+	}
 	ctx, cancel := context.WithTimeout(parent, asyncRunStartTimeout)
 	defer cancel()
 	if _, err := r.completeStart(ctx, req, run); err != nil {
@@ -410,7 +415,7 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 			messageKey = "agent.run.failed"
 			status = observability.ExecutionStatusFailed
 			severity = observability.SeverityError
-			eventErr = observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", errors.New("agent run panic"), "agent-runtime", "")
+			eventErr = observability.NormalizeError("AGENT.RUNTIME.INTERNAL_FAILURE", errors.New("agent run panic"), "agent-runtime", "")
 			r.emitLifecycle(ctx, eventType, messageKey, status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
 			panic(recovered)
 		}
@@ -425,7 +430,7 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 				messageKey = "agent.run.failed"
 				status = observability.ExecutionStatusFailed
 				severity = observability.SeverityError
-				eventErr = observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", retErr, "agent-runtime", "")
+				eventErr = observability.NormalizeError(agentErrorCode(retErr), retErr, "agent-runtime", "")
 			}
 		}
 		r.emitLifecycle(ctx, eventType, messageKey, status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
@@ -442,129 +447,99 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 		guard = r.guard.withToolCatalog(req.requestToolSnapshot)
 		compiler = r.compiler.withToolCatalog(req.requestToolSnapshot)
 	}
-	planningStartedAt := time.Now()
 	planningCorrelation := correlation
 	planningCorrelation.StageID = "agent-planning"
-	r.emitStage(ctx, planningCorrelation, "agent.plan.started", observability.EventTypeWorkflowStageStarted, observability.ExecutionStatusStarted, observability.SeverityInfo, nil, nil)
-	plan, err := r.planner.GeneratePlan(ctx, req)
+	var plan *AgentPlan
+	err := r.observeAgentBoundary(ctx, planningCorrelation, agentBoundarySpec{started: observability.EventTypeWorkflowStageStarted, completed: observability.EventTypeWorkflowStageCompleted, failed: observability.EventTypeWorkflowStageFailed, cancelled: observability.EventTypeWorkflowStageCancelled, startKey: "agent.plan.started", completeKey: "agent.plan.completed", failKey: "agent.plan.failed", cancelKey: "agent.plan.cancelled", errorCode: "AGENT.PLAN.GENERATION_FAILED", component: "agent-planner"}, func() error {
+		generated, planErr := r.planner.GeneratePlan(ctx, req)
+		if planErr != nil {
+			return planErr
+		}
+		plan, planErr = cloneGeneratedPlan(generated)
+		return planErr
+	})
 	if err != nil {
-		durationMs := time.Since(planningStartedAt).Milliseconds()
-		r.emitStage(ctx, planningCorrelation, "agent.plan.failed", observability.EventTypeWorkflowStageFailed, observability.ExecutionStatusFailed, observability.SeverityError, &durationMs,
-			observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", err, "agent-planner", ""))
 		return nil, fmt.Errorf("generate agent plan: %w", err)
 	}
-	planningDurationMs := time.Since(planningStartedAt).Milliseconds()
-	r.emitStage(ctx, planningCorrelation, "agent.plan.completed", observability.EventTypeWorkflowStageCompleted, observability.ExecutionStatusCompleted, observability.SeverityInfo, &planningDurationMs, nil)
 	if err := r.abortIfCancelled(ctx, run); err != nil {
 		return nil, err
 	}
 	applyRequestPlanDefaults(plan, req)
 	plan = compiler.PreparePlan(plan)
 	applyShotRegenerationPlanScope(plan, req.Context)
-	validationStartedAt := time.Now()
 	validationCorrelation := correlation
 	validationCorrelation.StageID = "agent-plan-validation"
-	var validationDurationMs int64
-	r.emitLifecycle(ctx, observability.EventTypeAgentPlanValidationStarted, "agent.plan.validation.started",
-		observability.ExecutionStatusStarted, observability.SeverityInfo, validationCorrelation, nil, nil, observability.Evidence{})
-	if err := guard.ValidatePlan(ctx, req.UserID, plan); err != nil {
-		// Attempt plan repair with the same request-scoped tool snapshot. An old
-		// unscoped repairer is never used for a dynamic snapshot run because it
-		// could silently drop or replace runner-local tools.
-		var repaired *AgentPlan
-		var repairErr error
-		canRepair := false
-		correctionStarted := false
-		correctionStartedAt := time.Time{}
+	err = r.observeAgentBoundary(ctx, validationCorrelation, agentBoundarySpec{started: observability.EventTypeAgentPlanValidationStarted, completed: observability.EventTypeAgentPlanValidationCompleted, failed: observability.EventTypeAgentPlanValidationFailed, cancelled: observability.EventTypeWorkflowStageCancelled, startKey: "agent.plan.validation.started", completeKey: "agent.plan.validation.completed", failKey: "agent.plan.validation.failed", cancelKey: "agent.plan.validation.cancelled", errorCode: "AGENT.PLAN.VALIDATION_FAILED", component: "agent-plan-guard"}, func() error {
+		validationErr := guard.ValidatePlan(ctx, req.UserID, plan)
+		if validationErr == nil {
+			return nil
+		}
+		var repair func() (*AgentPlan, error)
+		if scoped, ok := r.planner.(RequestScopedPlanRepairer); ok {
+			repair = func() (*AgentPlan, error) { return scoped.RepairPlanForRequest(ctx, req, plan, "validation failed") }
+		} else if req.requestToolSnapshot == nil {
+			if legacy, ok := r.planner.(PlanRepairer); ok {
+				repair = func() (*AgentPlan, error) { return legacy.RepairPlan(ctx, plan, "validation failed") }
+			}
+		}
+		if repair == nil {
+			return validationErr
+		}
 		correctionCorrelation := correlation
 		correctionCorrelation.StageID = "agent-plan-correction"
-		if repairer, ok := r.planner.(RequestScopedPlanRepairer); ok {
-			canRepair = true
-			correctionStarted = true
-			correctionStartedAt = time.Now()
-			r.emitLifecycle(ctx, observability.EventTypeCorrectOperationStarted, "correct.operation.started",
-				observability.ExecutionStatusStarted, observability.SeverityInfo, correctionCorrelation, nil, nil, observability.Evidence{})
-			repaired, repairErr = repairer.RepairPlanForRequest(ctx, req, plan, err.Error())
-		} else if req.requestToolSnapshot == nil {
-			if repairer, ok := r.planner.(PlanRepairer); ok {
-				canRepair = true
-				correctionStarted = true
-				correctionStartedAt = time.Now()
-				r.emitLifecycle(ctx, observability.EventTypeCorrectOperationStarted, "correct.operation.started",
-					observability.ExecutionStatusStarted, observability.SeverityInfo, correctionCorrelation, nil, nil, observability.Evidence{})
-				repaired, repairErr = repairer.RepairPlan(ctx, plan, err.Error())
+		var repaired *AgentPlan
+		repairErr := r.observeAgentBoundary(ctx, correctionCorrelation, agentBoundarySpec{started: observability.EventTypeCorrectOperationStarted, completed: observability.EventTypeCorrectOperationCompleted, failed: observability.EventTypeCorrectOperationFailed, cancelled: observability.EventTypeCorrectOperationFailed, startKey: "correct.operation.started", completeKey: "correct.operation.completed", failKey: "correct.operation.failed", cancelKey: "correct.operation.cancelled", errorCode: "AGENT.PLAN.VALIDATION_FAILED", component: "agent-plan-correction"}, func() error {
+			var err error
+			repaired, err = repair()
+			if err != nil {
+				return err
 			}
-		}
-		if canRepair {
-			zap.L().Warn("agent plan guard validation failed, attempting repair",
-				zap.Error(err),
-			)
-			if repairErr == nil && repaired != nil {
-				applyRequestPlanDefaults(repaired, req)
-				repaired = compiler.PreparePlan(repaired)
-				applyShotRegenerationPlanScope(repaired, req.Context)
-				revalidateErr := guard.ValidatePlan(ctx, req.UserID, repaired)
-				if revalidateErr == nil {
-					plan = repaired
-					zap.L().Info("agent plan repaired successfully")
-					correctionDurationMs := time.Since(correctionStartedAt).Milliseconds()
-					r.emitLifecycle(ctx, observability.EventTypeCorrectOperationCompleted, "correct.operation.completed",
-						observability.ExecutionStatusCompleted, observability.SeverityInfo, correctionCorrelation, &correctionDurationMs, nil, observability.Evidence{})
-					validationDurationMs = time.Since(validationStartedAt).Milliseconds()
-					r.emitLifecycle(ctx, observability.EventTypeAgentPlanValidationCompleted, "agent.plan.validation.completed",
-						observability.ExecutionStatusCompleted, observability.SeverityInfo, validationCorrelation, &validationDurationMs, nil, observability.Evidence{})
-					goto planOK
-				}
-				zap.L().Warn("agent plan repair did not pass revalidation", zap.Error(revalidateErr))
-			} else if repairErr != nil {
-				zap.L().Warn("agent plan repair failed", zap.Error(repairErr))
+			if repaired == nil {
+				return errors.New("plan repair returned nil")
 			}
-		} else if req.requestToolSnapshot != nil {
-			zap.L().Warn("agent plan repair skipped because planner has no request-scoped repair contract", zap.Error(err))
-		}
-		if correctionStarted {
-			correctionDurationMs := time.Since(correctionStartedAt).Milliseconds()
-			correctionErr := repairErr
-			if correctionErr == nil {
-				correctionErr = err
+			repaired, err = cloneGeneratedPlan(repaired)
+			if err != nil {
+				return err
 			}
-			r.emitLifecycle(ctx, observability.EventTypeCorrectOperationFailed, "correct.operation.failed",
-				observability.ExecutionStatusFailed, observability.SeverityError, correctionCorrelation, &correctionDurationMs,
-				observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", correctionErr, "agent-plan-correction", ""), observability.Evidence{})
+			applyRequestPlanDefaults(repaired, req)
+			repaired = compiler.PreparePlan(repaired)
+			applyShotRegenerationPlanScope(repaired, req.Context)
+			return guard.ValidatePlan(ctx, req.UserID, repaired)
+		})
+		if repairErr != nil {
+			return repairErr
 		}
-		validationDurationMs = time.Since(validationStartedAt).Milliseconds()
-		r.emitLifecycle(ctx, observability.EventTypeAgentPlanValidationFailed, "agent.plan.validation.failed",
-			observability.ExecutionStatusFailed, observability.SeverityError, validationCorrelation, &validationDurationMs,
-			observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", err, "agent-plan-guard", ""), observability.Evidence{})
+		plan = repaired
+		return nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("guard agent plan: %w", err)
 	}
-	validationDurationMs = time.Since(validationStartedAt).Milliseconds()
-	r.emitLifecycle(ctx, observability.EventTypeAgentPlanValidationCompleted, "agent.plan.validation.completed",
-		observability.ExecutionStatusCompleted, observability.SeverityInfo, validationCorrelation, &validationDurationMs, nil, observability.Evidence{})
-planOK:
 	agentToolTrace := buildAgentToolTrace(plan, GuardDecisionTrace{Passed: true})
 	logAgentToolTrace(req, plan, agentToolTrace)
 	judgeReport := PlanJudgeReport{Passed: true}
 	if r.planJudge != nil {
-		judgeReport = r.planJudge.Evaluate(plan)
-	}
-	if !judgeReport.Passed {
-		return nil, fmt.Errorf("agent plan failed video beta validation: %s", summarizePlanJudgeWarnings(judgeReport.Warnings))
+		judgeCorrelation := correlation
+		judgeCorrelation.StageID = "agent-plan-judge"
+		err = r.observeAgentBoundary(ctx, judgeCorrelation, agentBoundarySpec{started: observability.EventTypeVerifyCheckStarted, completed: observability.EventTypeVerifyCheckPassed, failed: observability.EventTypeVerifyCheckFailed, cancelled: observability.EventTypeVerifyCheckWarned, startKey: "verify.check.started", completeKey: "verify.check.passed", failKey: "verify.check.failed", cancelKey: "verify.check.cancelled", errorCode: "AGENT.PLAN.VALIDATION_FAILED", component: "agent-plan-judge"}, func() error {
+			judgeReport = r.planJudge.Evaluate(plan)
+			if !judgeReport.Passed {
+				return errors.New("agent plan judge rejected plan")
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("agent plan failed video beta validation: %w", err)
+		}
 	}
 
-	compilationStartedAt := time.Now()
 	compilationCorrelation := correlation
 	compilationCorrelation.StageID = "agent-plan-compilation"
-	r.emitStage(ctx, compilationCorrelation, "agent.plan.compilation.started", observability.EventTypeWorkflowStageStarted, observability.ExecutionStatusStarted, observability.SeverityInfo, nil, nil)
-	dag, err := compiler.Compile(plan)
+	var dag *model.DAGRequest
+	err = r.observeAgentBoundary(ctx, compilationCorrelation, agentBoundarySpec{started: observability.EventTypeWorkflowStageStarted, completed: observability.EventTypeWorkflowStageCompleted, failed: observability.EventTypeWorkflowStageFailed, cancelled: observability.EventTypeWorkflowStageCancelled, startKey: "agent.plan.compilation.started", completeKey: "agent.plan.compilation.completed", failKey: "agent.plan.compilation.failed", cancelKey: "agent.plan.compilation.cancelled", errorCode: "AGENT.PLAN.COMPILATION_FAILED", component: "agent-plan-compiler"}, func() error { var compileErr error; dag, compileErr = compiler.Compile(plan); return compileErr })
 	if err != nil {
-		durationMs := time.Since(compilationStartedAt).Milliseconds()
-		r.emitStage(ctx, compilationCorrelation, "agent.plan.compilation.failed", observability.EventTypeWorkflowStageFailed, observability.ExecutionStatusFailed, observability.SeverityError, &durationMs,
-			observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", err, "agent-plan-compiler", ""))
 		return nil, fmt.Errorf("compile agent plan: %w", err)
 	}
-	compilationDurationMs := time.Since(compilationStartedAt).Milliseconds()
-	r.emitStage(ctx, compilationCorrelation, "agent.plan.compilation.completed", observability.EventTypeWorkflowStageCompleted, observability.ExecutionStatusCompleted, observability.SeverityInfo, &compilationDurationMs, nil)
 	if providers := clientModelProvidersFromContext(req.Context); len(providers) > 0 {
 		injectClientModelProviders(dag, providers)
 	}
@@ -614,48 +589,37 @@ planOK:
 		taskInput["planJudgeWarnings"] = judgeReport.Warnings
 		taskInput["planJudgePassed"] = judgeReport.Passed
 	}
-	submissionStartedAt := time.Now()
 	submissionCorrelation := correlation
 	submissionCorrelation.StageID = "agent-dag-submission"
-	r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.started", observability.EventTypeWorkflowStageStarted, observability.ExecutionStatusStarted, observability.SeverityInfo, nil, nil)
-	task, err := r.orchestrator.CreateTask(ctx, req.UserID, taskInput)
+	err = r.observeAgentBoundary(ctx, submissionCorrelation, agentBoundarySpec{started: observability.EventTypeWorkflowStageStarted, completed: observability.EventTypeWorkflowStageCompleted, failed: observability.EventTypeWorkflowStageFailed, cancelled: observability.EventTypeWorkflowStageCancelled, startKey: "agent.dag.submission.started", completeKey: "agent.dag.submission.completed", failKey: "agent.dag.submission.failed", cancelKey: "agent.dag.submission.cancelled", errorCode: "AGENT.DAG.SUBMISSION_FAILED", component: "agent-dag-submission"}, func() error {
+		task, createErr := r.orchestrator.CreateTask(ctx, req.UserID, taskInput)
+		if createErr != nil {
+			return fmt.Errorf("create agent task: %w", createErr)
+		}
+		run.TaskID = task.ID
+		correlation.TaskID = task.ID
+		submissionCorrelation.TaskID = task.ID
+		r.emitLifecycle(ctx, observability.EventTypeTaskCreated, "task.created", observability.ExecutionStatusCompleted, observability.SeverityInfo, correlation, nil, nil, observability.Evidence{})
+		if cancelErr := r.abortIfCancelled(ctx, run); cancelErr != nil {
+			return cancelErr
+		}
+		if saveErr := r.store.SaveRun(ctx, run); saveErr != nil {
+			return fmt.Errorf("store agent run task link: %w", saveErr)
+		}
+		if cancelErr := r.abortIfCancelled(ctx, run); cancelErr != nil {
+			return cancelErr
+		}
+		if submitErr := r.orchestrator.SubmitDAG(ctx, task.ID, scopeDAGToTask(task.ID, dag)); submitErr != nil {
+			run.Status = RunStatusFailed
+			run.UpdatedAt = time.Now()
+			_ = r.store.SaveRun(ctx, run)
+			return fmt.Errorf("submit agent DAG: %w", submitErr)
+		}
+		return nil
+	})
 	if err != nil {
-		durationMs := time.Since(submissionStartedAt).Milliseconds()
-		r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.failed", observability.EventTypeWorkflowStageFailed, observability.ExecutionStatusFailed, observability.SeverityError, &durationMs, nil)
-		return nil, fmt.Errorf("create agent task: %w", err)
-	}
-	run.TaskID = task.ID
-	correlation.TaskID = task.ID
-	submissionCorrelation.TaskID = task.ID
-	r.emitLifecycle(ctx, observability.EventTypeTaskCreated, "task.created",
-		observability.ExecutionStatusCompleted, observability.SeverityInfo, correlation, nil, nil, observability.Evidence{})
-	if err := r.abortIfCancelled(ctx, run); err != nil {
-		durationMs := time.Since(submissionStartedAt).Milliseconds()
-		r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.cancelled", observability.EventTypeWorkflowStageCancelled, observability.ExecutionStatusCancelled, observability.SeverityWarn, &durationMs, nil)
 		return nil, err
 	}
-	if err := r.store.SaveRun(ctx, run); err != nil {
-		durationMs := time.Since(submissionStartedAt).Milliseconds()
-		r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.failed", observability.EventTypeWorkflowStageFailed, observability.ExecutionStatusFailed, observability.SeverityError, &durationMs, nil)
-		return nil, fmt.Errorf("store agent run task link: %w", err)
-	}
-	if err := r.abortIfCancelled(ctx, run); err != nil {
-		durationMs := time.Since(submissionStartedAt).Milliseconds()
-		r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.cancelled", observability.EventTypeWorkflowStageCancelled, observability.ExecutionStatusCancelled, observability.SeverityWarn, &durationMs, nil)
-		return nil, err
-	}
-
-	scoped := scopeDAGToTask(task.ID, dag)
-	if err := r.orchestrator.SubmitDAG(ctx, task.ID, scoped); err != nil {
-		run.Status = RunStatusFailed
-		run.UpdatedAt = time.Now()
-		_ = r.store.SaveRun(ctx, run)
-		durationMs := time.Since(submissionStartedAt).Milliseconds()
-		r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.failed", observability.EventTypeWorkflowStageFailed, observability.ExecutionStatusFailed, observability.SeverityError, &durationMs, nil)
-		return nil, fmt.Errorf("submit agent DAG: %w", err)
-	}
-	submissionDurationMs := time.Since(submissionStartedAt).Milliseconds()
-	r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.completed", observability.EventTypeWorkflowStageCompleted, observability.ExecutionStatusCompleted, observability.SeverityInfo, &submissionDurationMs, nil)
 	if err := r.abortIfCancelled(ctx, run); err != nil {
 		return nil, err
 	}
@@ -668,8 +632,78 @@ planOK:
 	return run, nil
 }
 
+func cloneGeneratedPlan(plan *AgentPlan) (*AgentPlan, error) {
+	if plan == nil {
+		return nil, nil
+	}
+	cloned, err := cloneJSONValue(plan)
+	if err != nil {
+		return nil, fmt.Errorf("clone generated plan: %w", err)
+	}
+	result, ok := cloned.(*AgentPlan)
+	if !ok {
+		return nil, fmt.Errorf("clone generated plan returned %T", cloned)
+	}
+	return result, nil
+}
+
 func (r *Runner) emitStage(ctx context.Context, correlation observability.Correlation, messageKey string, eventType observability.EventType, status observability.ExecutionStatus, severity observability.Severity, durationMs *int64, eventErr *observability.EventError) {
 	r.emitLifecycle(ctx, eventType, messageKey, status, severity, correlation, durationMs, eventErr, observability.Evidence{})
+}
+
+type agentBoundarySpec struct {
+	started, completed, failed, cancelled                           observability.EventType
+	startKey, completeKey, failKey, cancelKey, errorCode, component string
+}
+type classifiedAgentError struct {
+	code string
+	err  error
+}
+
+func (e *classifiedAgentError) Error() string { return e.err.Error() }
+func (e *classifiedAgentError) Unwrap() error { return e.err }
+func classifyAgentError(code string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &classifiedAgentError{code: code, err: err}
+}
+func agentErrorCode(err error) string {
+	var classified *classifiedAgentError
+	if errors.As(err, &classified) && classified.code != "" {
+		return classified.code
+	}
+	return "AGENT.RUNTIME.INTERNAL_FAILURE"
+}
+
+func (r *Runner) observeAgentBoundary(ctx context.Context, correlation observability.Correlation, spec agentBoundarySpec, fn func() error) (retErr error) {
+	startedAt := time.Now()
+	r.emitLifecycle(ctx, spec.started, spec.startKey, observability.ExecutionStatusStarted, observability.SeverityInfo, correlation, nil, nil, observability.Evidence{})
+	defer func() {
+		duration := time.Since(startedAt).Milliseconds()
+		eventType, key, status, severity := spec.completed, spec.completeKey, observability.ExecutionStatusCompleted, observability.SeverityInfo
+		var eventErr *observability.EventError
+		if recovered := recover(); recovered != nil {
+			eventType, key, status, severity = spec.failed, spec.failKey, observability.ExecutionStatusFailed, observability.SeverityError
+			eventErr = observability.NormalizeError("AGENT.RUNTIME.INTERNAL_FAILURE", errors.New("agent boundary panic"), spec.component, "")
+			r.emitLifecycle(ctx, eventType, key, status, severity, correlation, &duration, eventErr, observability.Evidence{})
+			panic(recovered)
+		}
+		if retErr != nil {
+			if errors.Is(retErr, context.Canceled) || errors.Is(retErr, context.DeadlineExceeded) {
+				eventType, key, status, severity = spec.cancelled, spec.cancelKey, observability.ExecutionStatusCancelled, observability.SeverityWarn
+			} else {
+				eventType, key, status, severity = spec.failed, spec.failKey, observability.ExecutionStatusFailed, observability.SeverityError
+				eventErr = observability.NormalizeError(spec.errorCode, retErr, spec.component, "")
+			}
+		}
+		r.emitLifecycle(ctx, eventType, key, status, severity, correlation, &duration, eventErr, observability.Evidence{})
+	}()
+	retErr = fn()
+	if retErr != nil {
+		retErr = classifyAgentError(spec.errorCode, retErr)
+	}
+	return
 }
 
 func (r *Runner) emitLifecycle(ctx context.Context, eventType observability.EventType, messageKey string, status observability.ExecutionStatus, severity observability.Severity, correlation observability.Correlation, durationMs *int64, eventErr *observability.EventError, evidence observability.Evidence) {

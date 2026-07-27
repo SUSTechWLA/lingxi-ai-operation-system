@@ -17,6 +17,15 @@ type errorSink struct{}
 func (*errorSink) Write(context.Context, Event) error { return errSinkWrite }
 func (*errorSink) Close(context.Context) error        { return nil }
 
+func TestEmitAndWaitReturnsSinkAcknowledgement(t *testing.T) {
+	emitter := NewEmitter(testSource(), Runtime{}, &errorSink{}, 2)
+	err := emitter.EmitAndWait(context.Background(), validEvent())
+	if !errors.Is(err, errSinkWrite) {
+		t.Fatalf("err=%v", err)
+	}
+	_ = emitter.Close(context.Background())
+}
+
 type cancelSink struct {
 	started chan struct{}
 	once    sync.Once

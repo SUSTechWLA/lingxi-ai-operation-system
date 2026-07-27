@@ -15,6 +15,11 @@ type EventEmitter interface {
 	Emit(context.Context, Event) error
 }
 
+type DurableEventEmitter interface {
+	EventEmitter
+	EmitAndWait(context.Context, Event) error
+}
+
 // EnsureCorrelation supplies product-independent trace/span identifiers when a
 // lifecycle operation starts outside HTTP or Kafka middleware.
 func EnsureCorrelation(ctx context.Context) context.Context {

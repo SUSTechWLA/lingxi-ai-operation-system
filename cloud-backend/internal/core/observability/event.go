@@ -319,6 +319,9 @@ func (e Event) Validate() error {
 	if _, ok := severities[e.Severity]; !ok {
 		return fmt.Errorf("severity is not registered")
 	}
+	if e.Severity == SeverityError && e.Error == nil {
+		return fmt.Errorf("ERROR severity requires a registered error")
+	}
 	if _, ok := eventTypes[e.EventType]; !ok {
 		return fmt.Errorf("eventType is not registered")
 	}

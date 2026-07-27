@@ -128,8 +128,8 @@ WITH accepted AS (
 	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 	ON CONFLICT (event_id) DO UPDATE SET event_id=observability_event_outbox.event_id
 	WHERE observability_event_outbox.user_id=EXCLUDED.user_id
-	  AND (observability_event_outbox.redacted_payload - 'ingestedAt')
-	      = (EXCLUDED.redacted_payload - 'ingestedAt')
+	  AND (observability_event_outbox.redacted_payload - 'ingestedAt' - 'producerSequence')
+	      = (EXCLUDED.redacted_payload - 'ingestedAt' - 'producerSequence')
 	RETURNING (xmax = 0) AS inserted
 ), summary AS (
 	INSERT INTO observability_run_summaries (
@@ -267,21 +267,47 @@ func eventRunID(event Event) (string, error) {
 	}
 	switch {
 	case strings.HasPrefix(string(event.EventType), "workflow."):
-		if workflowRunID == "" {
-			return "", errors.New("workflow event requires workflow run identity")
+		if workflowRunID != "" {
+			return workflowRunID, nil
 		}
-		return workflowRunID, nil
+		if agentRunID != "" {
+			return agentRunID, nil
+		}
+		if event.Correlation.TaskID != "" {
+			return event.Correlation.TaskID, nil
+		}
+		return "", errors.New("workflow event requires run identity")
 	case strings.HasPrefix(string(event.EventType), "agent."):
-		if agentRunID == "" {
-			return "", errors.New("agent event requires agent run identity")
+		if agentRunID != "" {
+			return agentRunID, nil
 		}
-		return agentRunID, nil
+		if event.Correlation.TaskID != "" {
+			return event.Correlation.TaskID, nil
+		}
+		return "", errors.New("agent event requires run identity")
 	case workflowRunID != "":
 		return workflowRunID, nil
 	case agentRunID != "":
 		return agentRunID, nil
+	case event.Correlation.TaskID != "":
+		return event.Correlation.TaskID, nil
 	default:
-		return "", nil
+		if runlessEventType(event.EventType) {
+			return "", nil
+		}
+		return "", errors.New("observability lifecycle event requires run identity")
+	}
+}
+
+func runlessEventType(eventType EventType) bool {
+	switch eventType {
+	case EventTypeRequestAccepted, EventTypeRequestCompleted, EventTypeRequestFailed,
+		EventTypeRequestAuthenticationSucceeded, EventTypeRequestAuthenticationFailed,
+		EventTypeMCPConnectionStarted, EventTypeMCPConnectionCompleted, EventTypeMCPConnectionFailed,
+		EventTypeMCPDiscoveryStarted, EventTypeMCPDiscoveryCompleted, EventTypeMCPDiscoveryFailed:
+		return true
+	default:
+		return false
 	}
 }
 

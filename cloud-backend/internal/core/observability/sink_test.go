@@ -59,6 +59,21 @@ func TestCompositeSinkAttemptsEverySinkAndJoinsErrors(t *testing.T) {
 	}
 }
 
+func TestCompositeSinkDeduplicatesIdenticalInstances(t *testing.T) {
+	sink := &ownerCapturingSink{}
+	composite := NewCompositeSink(sink, sink)
+	event := validEvent()
+	if err := composite.Write(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if err := composite.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("identical sink writes=%d", len(sink.events))
+	}
+}
+
 func TestUserOwnedEmitterEventReachesScopedPullAndAck(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	db := newStatefulRelayDB(func() time.Time { return now })

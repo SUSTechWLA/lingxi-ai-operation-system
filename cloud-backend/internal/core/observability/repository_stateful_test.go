@@ -27,6 +27,24 @@ type statefulRelayDB struct {
 	summaryWrites int
 }
 
+func TestRepositoryTreatsProducerSequenceAsTransportMetadataForIdempotency(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	db := newStatefulRelayDB(func() time.Time { return now })
+	repo := newRepositoryWithRelayDBAndClock(db, func() time.Time { return now })
+	event := validEvent()
+	event.EventID = "evt_retry_same"
+	event.OccurredAt = now
+	event.ProducerSequence = 1
+	if err := repo.SaveSummary(context.Background(), "user_a", event); err != nil {
+		t.Fatal(err)
+	}
+	replay := event
+	replay.ProducerSequence = 99
+	if err := repo.SaveSummary(context.Background(), "user_a", replay); err != nil {
+		t.Fatalf("same logical event replay: %v", err)
+	}
+}
+
 type statefulOutboxRow struct {
 	userID, runID, traceID string
 	eventID                string
@@ -180,6 +198,7 @@ func payloadWithoutIngestedAt(payload []byte) []byte {
 		return nil
 	}
 	delete(decoded, "ingestedAt")
+	delete(decoded, "producerSequence")
 	canonical, _ := json.Marshal(decoded)
 	return canonical
 }

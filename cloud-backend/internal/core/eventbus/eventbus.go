@@ -86,7 +86,7 @@ func (p *Producer) Publish(topic, key string, event Event) error {
 }
 
 func (p *Producer) PublishContext(ctx context.Context, topic, key string, event Event) error {
-	return p.Publish(topic, key, eventWithCorrelation(ctx, event))
+	return p.Publish(topic, key, EnrichEventFromContext(ctx, event))
 }
 func (p *Producer) Close() error {
 	return p.producer.Close()
@@ -193,7 +193,9 @@ func (h *consumerGroupHandler) handleEvent(event Event) error {
 	return h.handlerFn(ctx, event)
 }
 
-func eventWithCorrelation(ctx context.Context, event Event) Event {
+// EnrichEventFromContext snapshots trusted internal ownership and correlation
+// before an event crosses either the direct Kafka or transactional outbox boundary.
+func EnrichEventFromContext(ctx context.Context, event Event) Event {
 	correlation := observability.CorrelationFromContext(ctx)
 	if event.TraceID == "" {
 		event.TraceID = correlation.TraceID

@@ -11,7 +11,7 @@ import (
 
 func TestEventCorrelationCarriesTrustedOwnerAcrossKafkaBoundary(t *testing.T) {
 	ctx := trustedcontext.WithUserID(context.Background(), "user-1")
-	event := eventWithCorrelation(ctx, Event{TaskID: "task-1"})
+	event := EnrichEventFromContext(ctx, Event{TaskID: "task-1"})
 	if event.OwnerUserID != "user-1" {
 		t.Fatalf("owner=%q", event.OwnerUserID)
 	}

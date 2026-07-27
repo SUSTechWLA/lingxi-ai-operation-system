@@ -178,6 +178,16 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	toolName := tool.DetermineToolName(event.Type, payload)
 	parameters := tool.ExtractParameters(payload)
 	manifest := ne.toolRegistry.GetManifest(toolName)
+	toolCtx := ne.buildToolContext(ctx, nodeID, taskID, isLongRunning)
+	lifecycle := ne.startToolBoundary(ctx, taskID, nodeID, idempotencyKey, toolCtx.RetryCount+1)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			lifecycle.fail("TOOL.EXECUTION.FAILED", nil)
+			lifecycle.finish()
+			panic(recovered)
+		}
+		lifecycle.finish()
+	}()
 
 	// Resolve {{node_id.output.field}} references and validate only the logical
 	// tool arguments, excluding transport metadata added by DAG compilation.
@@ -188,6 +198,7 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 			resolveErr = fmt.Errorf("exact output reference remains unresolved")
 		}
 		ne.publishFailure(ctx, taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
+		lifecycle.fail("TOOL.EXECUTION.FAILED", nil)
 		return
 	}
 	contractManifest := ne.executionContractManifest(toolName, parameters, manifest)
@@ -195,15 +206,14 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	contractArguments, resolveErr = ne.resolveParameters(ctx, taskID, contractArguments)
 	if resolveErr != nil {
 		ne.publishFailure(ctx, taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
+		lifecycle.fail("TOOL.EXECUTION.FAILED", nil)
 		return
 	}
 	if err := validateExecutionInput(contractManifest, contractArguments); err != nil {
 		ne.publishFailure(ctx, taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
+		lifecycle.fail("TOOL.ARGUMENT.SCHEMA_INVALID", nil)
 		return
 	}
-
-	// Build tool context with checkpoint data for retries.
-	toolCtx := ne.buildToolContext(ctx, nodeID, taskID, isLongRunning)
 
 	// Local execution plane: dispatch to local runner and return. External
 	// bridge nodes keep "external" as the executable tool, so also inspect the
@@ -212,7 +222,10 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		idempotencyKey = ne.localDispatchIdempotencyKey(ctx, nodeID, idempotencyKey)
 		if err := ne.dispatchLocalNode(ctx, event, localManifest, parameters, idempotencyKey); err != nil {
 			ne.publishFailure(ctx, taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
+			lifecycle.fail("TOOL.EXECUTION.FAILED", nil)
+			return
 		}
+		lifecycle.complete(nil)
 		return
 	}
 
@@ -235,7 +248,7 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	})
 
 	// Execute the tool on the cloud plane.
-	result, execErr := ne.executeToolObserved(ctx, toolName, parameters, toolCtx, isLongRunning, progressCb, taskID, nodeID, idempotencyKey)
+	result, execErr := ne.executeTool(ctx, toolName, parameters, toolCtx, isLongRunning, progressCb)
 
 	durationMs := time.Since(startTime).Milliseconds()
 
@@ -252,6 +265,8 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 			failureData["resourceUsage"] = result.ResourceUsage
 		}
 		ne.publishFailure(ctx, taskID, nodeID, traceID, result.Error, idempotencyKey, failureData)
+		size := int64(len(result.Stdout) + len(result.Stderr))
+		lifecycle.fail("TOOL.EXECUTION.FAILED", &size)
 		return
 	}
 
@@ -269,85 +284,66 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	}
 
 	ne.publishSuccess(ctx, taskID, nodeID, traceID, data, idempotencyKey)
+	size := int64(len(result.Stdout) + len(result.Stderr))
+	lifecycle.complete(&size)
 }
 
-func (ne *NodeExecutor) executeToolObserved(
-	ctx context.Context,
-	toolName string,
-	parameters map[string]interface{},
-	toolCtx tool.ToolContext,
-	isLongRunning bool,
-	progressCb tool.ProgressCallback,
-	taskID, nodeID, toolCallID string,
-) (result executor.ExecutionResult, retErr error) {
+type toolLifecycleBoundary struct {
+	executor    *NodeExecutor
+	ctx         context.Context
+	correlation observability.Correlation
+	attempt     int64
+	startedAt   time.Time
+	status      observability.ExecutionStatus
+	code        string
+	size        *int64
+	finished    bool
+}
+
+func (ne *NodeExecutor) startToolBoundary(ctx context.Context, taskID, nodeID, toolCallID string, attempt int) *toolLifecycleBoundary {
 	ctx = observability.EnsureCorrelation(ctx)
 	correlation := observability.CorrelationFromContext(ctx)
 	correlation.TaskID = taskID
 	correlation.StageID = nodeID
 	correlation.ToolCallID = toolCallID
-	attempt := int64(toolCtx.RetryCount + 1)
-	startedAt := time.Now()
-	ne.emitToolLifecycle(ctx, observability.EventTypeToolCallStarted, observability.ExecutionStatusStarted,
-		observability.SeverityInfo, correlation, attempt, nil, nil, nil)
-	auxiliary := auxiliaryToolLifecycles(toolName, attempt)
-	for _, lifecycle := range auxiliary {
-		ne.emitToolLifecycle(ctx, lifecycle.started, observability.ExecutionStatusStarted,
-			observability.SeverityInfo, correlation, attempt, nil, nil, nil)
+	b := &toolLifecycleBoundary{executor: ne, ctx: ctx, correlation: correlation, attempt: int64(attempt), startedAt: time.Now(), status: observability.ExecutionStatusFailed, code: "TOOL.EXECUTION.FAILED"}
+	ne.emitToolLifecycle(ctx, observability.EventTypeToolCallStarted, observability.ExecutionStatusStarted, observability.SeverityInfo, correlation, b.attempt, nil, nil, nil)
+	if b.attempt > 1 {
+		ne.emitToolLifecycle(ctx, observability.EventTypeRecoveryRetryStarted, observability.ExecutionStatusStarted, observability.SeverityInfo, correlation, b.attempt, nil, nil, nil)
 	}
-	defer func() {
-		durationMs := time.Since(startedAt).Milliseconds()
-		eventType := observability.EventTypeToolCallCompleted
-		status := observability.ExecutionStatusCompleted
-		severity := observability.SeverityInfo
-		var eventErr *observability.EventError
-		sizeBytes := int64(len(result.Stdout) + len(result.Stderr))
-		if recovered := recover(); recovered != nil {
-			eventType = observability.EventTypeToolCallFailed
-			status = observability.ExecutionStatusFailed
-			severity = observability.SeverityError
-			ne.emitToolLifecycle(ctx, eventType, status, severity, correlation, attempt, &durationMs, nil, &sizeBytes)
-			for _, lifecycle := range auxiliary {
-				ne.emitToolLifecycle(ctx, lifecycle.failed, observability.ExecutionStatusFailed,
-					observability.SeverityError, correlation, attempt, &durationMs, nil, &sizeBytes)
-			}
-			panic(recovered)
-		}
-		if retErr != nil || result.Error != "" || result.ExitCode != 0 {
-			eventType = observability.EventTypeToolCallFailed
-			status = observability.ExecutionStatusFailed
-			severity = observability.SeverityError
-			if strings.Contains(result.Error, inputSchemaInvalidCode) || strings.Contains(result.Error, "Invalid parameters") {
-				eventErr = observability.NormalizeError("TOOL.ARGUMENT.SCHEMA_INVALID", retErr, "worker-tool-executor", "")
-			}
-		}
-		ne.emitToolLifecycle(ctx, eventType, status, severity, correlation, attempt, &durationMs, eventErr, &sizeBytes)
-		for _, lifecycle := range auxiliary {
-			terminalType := lifecycle.completed
-			if status == observability.ExecutionStatusFailed {
-				terminalType = lifecycle.failed
-			}
-			ne.emitToolLifecycle(ctx, terminalType, status, severity, correlation, attempt, &durationMs, eventErr, &sizeBytes)
-		}
-	}()
-	return ne.executeTool(ctx, toolName, parameters, toolCtx, isLongRunning, progressCb)
+	return b
 }
-
-type toolAuxiliaryLifecycle struct {
-	started   observability.EventType
-	completed observability.EventType
-	failed    observability.EventType
+func (b *toolLifecycleBoundary) complete(size *int64) {
+	b.status = observability.ExecutionStatusCompleted
+	b.code = ""
+	b.size = size
 }
-
-func auxiliaryToolLifecycles(_ string, attempt int64) []toolAuxiliaryLifecycle {
-	var lifecycles []toolAuxiliaryLifecycle
-	// Verify/Correct events require explicit semantic metadata. Tool names are
-	// not authoritative roles; the current manifest has no such field.
-	if attempt > 1 {
-		lifecycles = append(lifecycles, toolAuxiliaryLifecycle{
-			started: observability.EventTypeRecoveryRetryStarted, completed: observability.EventTypeRecoveryRetryCompleted, failed: observability.EventTypeRecoveryRetryFailed,
-		})
+func (b *toolLifecycleBoundary) fail(code string, size *int64) {
+	b.status = observability.ExecutionStatusFailed
+	b.code = code
+	b.size = size
+}
+func (b *toolLifecycleBoundary) finish() {
+	if b == nil || b.finished {
+		return
 	}
-	return lifecycles
+	b.finished = true
+	duration := time.Since(b.startedAt).Milliseconds()
+	eventType, severity := observability.EventTypeToolCallCompleted, observability.SeverityInfo
+	var eventErr *observability.EventError
+	if b.status == observability.ExecutionStatusFailed {
+		eventType = observability.EventTypeToolCallFailed
+		severity = observability.SeverityError
+		eventErr = observability.NormalizeError(b.code, errors.New("tool execution failed"), "worker-tool-executor", "")
+	}
+	b.executor.emitToolLifecycle(b.ctx, eventType, b.status, severity, b.correlation, b.attempt, &duration, eventErr, b.size)
+	if b.attempt > 1 {
+		retryType := observability.EventTypeRecoveryRetryCompleted
+		if b.status == observability.ExecutionStatusFailed {
+			retryType = observability.EventTypeRecoveryRetryFailed
+		}
+		b.executor.emitToolLifecycle(b.ctx, retryType, b.status, severity, b.correlation, b.attempt, &duration, eventErr, b.size)
+	}
 }
 
 func (ne *NodeExecutor) emitToolLifecycle(ctx context.Context, eventType observability.EventType, status observability.ExecutionStatus, severity observability.Severity, correlation observability.Correlation, attempt int64, durationMs *int64, eventErr *observability.EventError, sizeBytes *int64) {
@@ -549,6 +545,11 @@ func (ne *NodeExecutor) executeTool(
 	} else if et, ok := t.(tool.ExecutableTool); ok {
 		resultCh := make(chan tool.ToolResult, 1)
 		go func() {
+			defer func() {
+				if recover() != nil {
+					resultCh <- tool.FailureResult("tool execution panic")
+				}
+			}()
 			resultCh <- et.Execute(ctx, parameters, toolCtx)
 		}()
 

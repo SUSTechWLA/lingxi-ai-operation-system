@@ -318,7 +318,7 @@ var _ OutboxStore = (*pgStore)(nil)
 
 // SaveEvent writes an event to the outbox table (to be relayed to Kafka).
 func SaveEvent(ctx context.Context, pool *pgxpool.Pool, aggregateType, aggregateID, eventType string, event eventbus.Event) error {
-	payload, err := json.Marshal(event)
+	payload, err := marshalEventPayload(ctx, event)
 	if err != nil {
 		return err
 	}
@@ -336,7 +336,7 @@ func SaveEvent(ctx context.Context, pool *pgxpool.Pool, aggregateType, aggregate
 // update also lets scheduler recovery race safely with an API retry: exactly
 // one caller inserts the outbox row.
 func SaveNodeReadyEvent(ctx context.Context, pool *pgxpool.Pool, nodeID, idempotencyKey string, event eventbus.Event) (bool, error) {
-	payload, err := json.Marshal(event)
+	payload, err := marshalEventPayload(ctx, event)
 	if err != nil {
 		return false, err
 	}
@@ -365,4 +365,8 @@ func SaveNodeReadyEvent(ctx context.Context, pool *pgxpool.Pool, nodeID, idempot
 		return false, err
 	}
 	return true, nil
+}
+
+func marshalEventPayload(ctx context.Context, event eventbus.Event) ([]byte, error) {
+	return json.Marshal(eventbus.EnrichEventFromContext(ctx, event))
 }

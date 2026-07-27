@@ -10,7 +10,30 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 )
+
+func TestMiddlewareDefersPairedEventsUntilPostAuthOwnerExists(t *testing.T) {
+	sink := &ownerCapturingSink{}
+	emitter := NewEmitter(testSource(), Runtime{}, sink, 4)
+	r := gin.New()
+	r.Use(Middleware(emitter))
+	r.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(trustedcontext.WithUserID(c.Request.Context(), "user-1"))
+		c.Next()
+	})
+	r.GET("/private", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/private", nil))
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.owners) != 2 || sink.owners[0] != "user-1" || sink.owners[1] != "user-1" {
+		t.Fatalf("owners=%v", sink.owners)
+	}
+	if !sink.events[0].OccurredAt.Before(sink.events[1].OccurredAt) && !sink.events[0].OccurredAt.Equal(sink.events[1].OccurredAt) {
+		t.Fatalf("event order=%v", sink.events)
+	}
+}
 
 func TestMiddlewarePreservesIncomingTraceparent(t *testing.T) {
 	gin.SetMode(gin.TestMode)

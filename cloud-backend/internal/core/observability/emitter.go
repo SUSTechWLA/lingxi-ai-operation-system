@@ -28,6 +28,7 @@ type Sink interface {
 type queuedEvent struct {
 	event       Event
 	ownerUserID string
+	result      chan error
 }
 
 type Component string
@@ -50,7 +51,10 @@ func (e *Emitter) ForComponent(component Component) EventEmitter {
 	return &componentEmitter{emitter: e, component: component}
 }
 func (e *componentEmitter) Emit(ctx context.Context, event Event) error {
-	return e.emitter.emit(ctx, event, e.component)
+	return e.emitter.emit(ctx, event, e.component, nil)
+}
+func (e *componentEmitter) EmitAndWait(ctx context.Context, event Event) error {
+	return e.emitter.emitAndWait(ctx, event, e.component)
 }
 
 type Emitter struct {
@@ -107,10 +111,30 @@ func NewEmitter(source Source, runtime Runtime, sink Sink, capacity int) *Emitte
 // Protected events are never silently lost: if no lower-priority event can be
 // evicted, Emit returns ErrQueueFull.
 func (e *Emitter) Emit(ctx context.Context, event Event) error {
-	return e.emit(ctx, event, "")
+	return e.emit(ctx, event, "", nil)
 }
 
-func (e *Emitter) emit(ctx context.Context, event Event, component Component) error {
+func (e *Emitter) EmitAndWait(ctx context.Context, event Event) error {
+	return e.emitAndWait(ctx, event, "")
+}
+
+func (e *Emitter) emitAndWait(ctx context.Context, event Event, component Component) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result := make(chan error, 1)
+	if err := e.emit(ctx, event, component, result); err != nil {
+		return err
+	}
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (e *Emitter) emit(ctx context.Context, event Event, component Component, result chan error) error {
 	if e == nil {
 		return errors.New("observability emitter requires a sink")
 	}
@@ -131,7 +155,7 @@ func (e *Emitter) emit(ctx context.Context, event Event, component Component) er
 		prepared.Source.Component = string(component)
 	}
 	owner, _ := trustedcontext.UserID(ctx)
-	item := queuedEvent{event: prepared, ownerUserID: owner}
+	item := queuedEvent{event: prepared, ownerUserID: owner, result: result}
 
 	e.mu.Lock()
 	if e.closing {
@@ -144,7 +168,11 @@ func (e *Emitter) emit(ctx context.Context, event Event, component Component) er
 			e.mu.Unlock()
 			return ErrQueueFull
 		}
+		evicted := e.queue[victim]
 		copy(e.queue[victim:], e.queue[victim+1:])
+		if evicted.result != nil {
+			evicted.result <- ErrQueueFull
+		}
 		e.queue = e.queue[:len(e.queue)-1]
 	}
 	e.queue = append(e.queue, item)
@@ -250,10 +278,14 @@ func (e *Emitter) run() {
 			if item.ownerUserID != "" {
 				writeCtx = trustedcontext.WithUserID(writeCtx, item.ownerUserID)
 			}
-			if err := e.sink.Write(writeCtx, item.event); err != nil {
+			err := e.sink.Write(writeCtx, item.event)
+			if err != nil {
 				e.recordError(err)
 			}
 			cancel()
+			if item.result != nil {
+				item.result <- err
+			}
 			continue
 		}
 		if closing {

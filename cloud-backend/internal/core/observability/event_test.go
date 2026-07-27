@@ -62,6 +62,15 @@ func validEvent() Event {
 	}
 }
 
+func TestEventValidationRequiresStableErrorForErrorSeverity(t *testing.T) {
+	event := validEvent()
+	event.Severity = SeverityError
+	event.Error = nil
+	if err := event.Validate(); err == nil {
+		t.Fatal("ERROR without EventError accepted")
+	}
+}
+
 func TestEventValidateAcceptsContractCompatibleEvent(t *testing.T) {
 	if err := validEvent().Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -141,7 +150,6 @@ func TestEventValidateMatchesSchemaPermissiveCases(t *testing.T) {
 		}},
 		{"whitespace stage id", func(e *Event) { e.Correlation.StageID = " " }},
 		{"whitespace redacted field", func(e *Event) { e.Privacy.RedactedFields = []string{" "} }},
-		{"error severity with null error", func(e *Event) { e.Error = nil }},
 	}
 
 	for _, tt := range tests {

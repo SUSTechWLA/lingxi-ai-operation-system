@@ -10,7 +10,25 @@ import (
 	"time"
 
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 )
+
+func TestMarshalEventPayloadSnapshotsTrustedOwnerAndCorrelation(t *testing.T) {
+	ctx := trustedcontext.WithUserID(context.Background(), "user-1")
+	ctx = observability.WithCorrelation(ctx, observability.Correlation{TraceID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SpanID: "1111111111111111"})
+	payload, err := marshalEventPayload(ctx, eventbus.Event{TaskID: "task-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event eventbus.Event
+	if err := json.Unmarshal(payload, &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.OwnerUserID != "user-1" || event.TraceID != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || event.SpanID != "1111111111111111" {
+		t.Fatalf("event=%+v", event)
+	}
+}
 
 // ── Mock OutboxStore ────────────────────────────────────────────────────
 
@@ -114,7 +132,7 @@ func (m *mockStore) MoveToDLQ(ctx context.Context, entry OutboxEntry, errMsg str
 type mockPublisher struct {
 	mu         sync.Mutex
 	published  []publishedEvent
-	publishErr error // if set and failMap is empty, every Publish fails
+	publishErr error           // if set and failMap is empty, every Publish fails
 	failMap    map[string]bool // topic → always fail for this topic
 }
 

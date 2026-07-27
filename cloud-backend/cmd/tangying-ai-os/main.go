@@ -1499,6 +1499,12 @@ func (r *stageDirectorRegistry) Get(stageName string) agentruntime.StageDirector
 }
 
 func (a *decisionLogAdapter) Save(ctx context.Context, r *agentruntime.DecisionLogRecord) error {
+	if r == nil {
+		return fmt.Errorf("decision record is required")
+	}
+	if strings.TrimSpace(r.TaskID) == "" {
+		return fmt.Errorf("decision taskId is required")
+	}
 	workflowRunID := strings.TrimSpace(r.WorkflowRunID)
 	if a.resolver != nil && strings.TrimSpace(r.TaskID) != "" {
 		resolved, err := a.resolver.FindRunIDByTaskID(ctx, r.TaskID)

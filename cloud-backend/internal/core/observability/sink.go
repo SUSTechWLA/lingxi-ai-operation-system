@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync/atomic"
 
 	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
@@ -12,10 +13,19 @@ type compositeSink struct{ sinks []Sink }
 
 func NewCompositeSink(sinks ...Sink) Sink {
 	filtered := make([]Sink, 0, len(sinks))
+	seen := map[Sink]struct{}{}
 	for _, sink := range sinks {
-		if sink != nil {
-			filtered = append(filtered, sink)
+		if sink == nil {
+			continue
 		}
+		typ := reflect.TypeOf(sink)
+		if typ.Comparable() {
+			if _, ok := seen[sink]; ok {
+				continue
+			}
+			seen[sink] = struct{}{}
+		}
+		filtered = append(filtered, sink)
 	}
 	return &compositeSink{sinks: filtered}
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -60,6 +59,12 @@ type ScopedLocalJobManifestResolver interface {
 // returned terminal jobs include any pending callback replay work.
 type StaleMCPJobRetirer interface {
 	RetireStaleMCPJobs(ctx context.Context, identity JobMutationIdentity) ([]*LocalJob, error)
+}
+
+type TerminalObservabilityStore interface {
+	ClaimTerminalObservability(context.Context, JobMutationIdentity, string) (*TerminalCallbackClaim, error)
+	AcknowledgeTerminalObservability(context.Context, string, string) error
+	ReleaseTerminalObservability(context.Context, string, string) error
 }
 
 // ArtifactSyncCallback is invoked after a local job completes successfully,
@@ -197,6 +202,7 @@ func (h *Handler) retireStaleMCPJobs(ctx context.Context, identity JobMutationId
 		return err
 	}
 	for _, job := range jobs {
+		h.deliverTerminalObservability(ctx, identity, job)
 		if err := h.deliverTerminalCallbacks(ctx, identity, job); err != nil {
 			return err
 		}
@@ -249,6 +255,7 @@ func (h *Handler) completeJob(c *gin.Context) {
 		return
 	}
 	if jobContext != nil && (jobContext.Status == JobCompleted || jobContext.Status == JobFailed) {
+		h.deliverTerminalObservability(c.Request.Context(), identity, jobContext)
 		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, jobContext); err != nil {
 			writeCallbackError(c, err)
 			return
@@ -283,7 +290,7 @@ func (h *Handler) completeJob(c *gin.Context) {
 		writeJobMutationError(c, err)
 		return
 	}
-	h.emitAuthoritativeLocalJobTerminal(c.Request.Context(), job)
+	h.deliverTerminalObservability(c.Request.Context(), identity, job)
 	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
 		writeCallbackError(c, err)
 		return
@@ -342,7 +349,7 @@ func (h *Handler) failInvalidCompletion(c *gin.Context, identity JobMutationIden
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.emitAuthoritativeLocalJobTerminal(c.Request.Context(), failed)
+	h.deliverTerminalObservability(c.Request.Context(), identity, failed)
 	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, failed); err != nil {
 		writeCallbackError(c, err)
 		return
@@ -550,6 +557,7 @@ func (h *Handler) failJob(c *gin.Context) {
 		return
 	}
 	if existing != nil && (existing.Status == JobCompleted || existing.Status == JobFailed) {
+		h.deliverTerminalObservability(c.Request.Context(), identity, existing)
 		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, existing); err != nil {
 			writeCallbackError(c, err)
 			return
@@ -565,7 +573,7 @@ func (h *Handler) failJob(c *gin.Context) {
 		writeJobMutationError(c, err)
 		return
 	}
-	h.emitAuthoritativeLocalJobTerminal(c.Request.Context(), job)
+	h.deliverTerminalObservability(c.Request.Context(), identity, job)
 	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
 		writeCallbackError(c, err)
 		return
@@ -573,26 +581,71 @@ func (h *Handler) failJob(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-func (h *Handler) emitAuthoritativeLocalJobTerminal(ctx context.Context, job *LocalJob) {
+func (h *Handler) emitAuthoritativeLocalJobTerminal(ctx context.Context, job *LocalJob) error {
 	if job == nil || (job.Status != JobCompleted && job.Status != JobFailed) {
-		return
+		return nil
+	}
+	if h == nil || h.events == nil {
+		return nil
 	}
 	ctx = trustedcontext.WithUserID(observability.EnsureCorrelation(ctx), job.UserID)
-	correlation, attempt := localJobCorrelation(ctx, job)
-	var durationMs *int64
-	if !job.CreatedAt.IsZero() {
-		value := time.Since(job.CreatedAt).Milliseconds()
-		if value >= 0 {
-			durationMs = &value
-		}
-	}
-	if job.Status == JobCompleted {
-		h.emitLocalJob(ctx, observability.EventTypeLocalJobCompleted, observability.ExecutionStatusCompleted, observability.SeverityInfo, correlation, attempt, durationMs, nil, nil)
+	return h.events.Emit(ctx, localJobTerminalEvent(job))
+}
+
+func (h *Handler) deliverTerminalObservability(ctx context.Context, identity JobMutationIdentity, job *LocalJob) {
+	if h == nil || h.events == nil || job == nil {
 		return
 	}
-	// Failure is derived from the durable status. Keep ERROR reserved until a
-	// truthful stable local-execution code is present in the registry.
-	h.emitLocalJob(ctx, observability.EventTypeLocalJobFailed, observability.ExecutionStatusFailed, observability.SeverityWarn, correlation, attempt, durationMs, nil, nil)
+	store, ok := h.service.(TerminalObservabilityStore)
+	if !ok {
+		_ = h.emitAuthoritativeLocalJobTerminal(ctx, job)
+		return
+	}
+	claim, err := store.ClaimTerminalObservability(ctx, identity, job.ID)
+	if err != nil || claim == nil || claim.Delivered {
+		return
+	}
+	event := localJobTerminalEvent(job)
+	emitCtx := trustedcontext.WithUserID(observability.EnsureCorrelation(ctx), job.UserID)
+	if durable, ok := h.events.(observability.DurableEventEmitter); ok {
+		err = durable.EmitAndWait(emitCtx, event)
+	} else {
+		err = h.events.Emit(emitCtx, event)
+	}
+	if err != nil {
+		_ = store.ReleaseTerminalObservability(ctx, job.ID, claim.Token)
+		return
+	}
+	if err = store.AcknowledgeTerminalObservability(ctx, job.ID, claim.Token); err != nil {
+		_ = store.ReleaseTerminalObservability(ctx, job.ID, claim.Token)
+	}
+}
+
+func localJobTerminalEvent(job *LocalJob) observability.Event {
+	if job == nil {
+		return observability.Event{}
+	}
+	correlation, attempt := localJobCorrelation(context.Background(), job)
+	occurred := job.UpdatedAt.UTC()
+	if job.CompletedAt != nil && !job.CompletedAt.IsZero() {
+		occurred = job.CompletedAt.UTC()
+	}
+	if occurred.IsZero() {
+		occurred = job.CreatedAt.UTC()
+	}
+	var durationMs *int64
+	if !job.CreatedAt.IsZero() && !occurred.Before(job.CreatedAt) {
+		value := occurred.Sub(job.CreatedAt).Milliseconds()
+		durationMs = &value
+	}
+	eventType, status, severity := observability.EventTypeLocalJobCompleted, observability.ExecutionStatusCompleted, observability.SeverityInfo
+	var eventErr *observability.EventError
+	if job.Status == JobFailed {
+		eventType, status, severity = observability.EventTypeLocalJobFailed, observability.ExecutionStatusFailed, observability.SeverityError
+		eventErr = observability.NormalizeError("LOCAL.JOB.EXECUTION_FAILED", errors.New("local job failed"), "local-runner", "")
+	}
+	digest := observability.HashText(job.ID + "\x00" + string(job.Status) + "\x00" + fmt.Sprint(job.Attempt))
+	return observability.Event{EventID: "evt_local_" + digest[:32], OccurredAt: occurred, EventType: eventType, MessageKey: string(eventType), Severity: severity, Correlation: correlation, Execution: observability.Execution{Status: status, Attempt: attempt, DurationMs: durationMs}, Error: eventErr, Privacy: observability.Privacy{Classification: observability.PrivacyInternal, RedactedFields: []string{"localJob.payload", "localJob.output", "localJob.error", "localJob.diagnostics"}}}
 }
 
 func localJobCorrelation(ctx context.Context, job *LocalJob) (observability.Correlation, int64) {
@@ -652,6 +705,7 @@ func (h *Handler) recoverTerminalMutation(c *gin.Context, identity JobMutationId
 	if err != nil || job == nil || (job.Status != JobCompleted && job.Status != JobFailed) {
 		return false
 	}
+	h.deliverTerminalObservability(c.Request.Context(), identity, job)
 	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
 		writeCallbackError(c, err)
 		return true

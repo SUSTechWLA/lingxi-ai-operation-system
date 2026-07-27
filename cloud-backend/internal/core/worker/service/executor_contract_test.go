@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -69,6 +70,9 @@ func TestExecuteNodeEmitsPairedToolLifecycleWithoutArguments(t *testing.T) {
 	events := sink.snapshot()
 	var started, completed int
 	for _, event := range events {
+		if err := event.Validate(); err != nil {
+			t.Fatalf("invalid event %s: %v", event.EventType, err)
+		}
 		switch event.EventType {
 		case observability.EventTypeToolCallStarted:
 			started++
@@ -120,6 +124,7 @@ func TestExecuteNodeBlocksUnresolvedExactReferenceBeforeToolExecution(t *testing
 	registry.Register(executable)
 	publisher := &recordingEventPublisher{}
 	nodeExecutor := NewNodeExecutor(registry, publisher, config.WorkerConfig{}, executor.NewDirectExecutor(), nil, newFakeNodeRepo())
+	sink, emitter := observeWorkerExecutor(nodeExecutor)
 
 	nodeExecutor.ExecuteNode(context.Background(), eventbus.Event{
 		TaskID: "task-1", NodeID: "consume", Type: string(model.NodeTypeTool),
@@ -137,6 +142,7 @@ func TestExecuteNodeBlocksUnresolvedExactReferenceBeforeToolExecution(t *testing
 	if !strings.Contains(failure.ErrorMessage, "INPUT_REFERENCE_UNRESOLVED") {
 		t.Fatalf("failure = %#v, want INPUT_REFERENCE_UNRESOLVED", failure)
 	}
+	assertWorkerLifecycle(t, emitter, sink, observability.EventTypeToolCallFailed, "TOOL.EXECUTION.FAILED", 1)
 }
 
 func TestExecuteNodeValidatesPureInputAgainstDelegatedManifestBeforeLocalDispatch(t *testing.T) {
@@ -152,6 +158,7 @@ func TestExecuteNodeValidatesPureInputAgainstDelegatedManifestBeforeLocalDispatc
 	publisher := &recordingEventPublisher{}
 	nodeExecutor := NewNodeExecutor(registry, publisher, config.WorkerConfig{}, nil, nil, newFakeNodeRepo())
 	nodeExecutor.SetLocalJobDispatcher(dispatcher)
+	sink, emitter := observeWorkerExecutor(nodeExecutor)
 
 	nodeExecutor.ExecuteNode(context.Background(), eventbus.Event{
 		TaskID: "task-1", NodeID: "local", Type: string(model.NodeTypeTool),
@@ -169,6 +176,7 @@ func TestExecuteNodeValidatesPureInputAgainstDelegatedManifestBeforeLocalDispatc
 	if !strings.Contains(failure.ErrorMessage, "INPUT_SCHEMA_INVALID") {
 		t.Fatalf("failure = %#v, want INPUT_SCHEMA_INVALID", failure)
 	}
+	assertWorkerLifecycle(t, emitter, sink, observability.EventTypeToolCallFailed, "TOOL.ARGUMENT.SCHEMA_INVALID", 1)
 }
 
 func TestExecuteNodeValidatesExecutableToolResultBeforePublishingSuccess(t *testing.T) {
@@ -191,6 +199,7 @@ func TestExecuteNodeValidatesExecutableToolResultBeforePublishingSuccess(t *test
 	registry.Register(executable)
 	publisher := &recordingEventPublisher{}
 	nodeExecutor := NewNodeExecutor(registry, publisher, config.WorkerConfig{}, nil, nil, newFakeNodeRepo())
+	sink, emitter := observeWorkerExecutor(nodeExecutor)
 
 	nodeExecutor.ExecuteNode(context.Background(), eventbus.Event{
 		TaskID: "task-1", NodeID: "exec", Type: string(model.NodeTypeTool),
@@ -210,6 +219,78 @@ func TestExecuteNodeValidatesExecutableToolResultBeforePublishingSuccess(t *test
 	if publisher.hasStatus(model.NodeSuccess) {
 		t.Fatal("invalid executable output published success")
 	}
+	assertWorkerLifecycle(t, emitter, sink, observability.EventTypeToolCallFailed, "TOOL.EXECUTION.FAILED", 1)
+}
+
+func TestExecuteNodePanicEmitsExactlyOneStableFailure(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	registry.Register(panicWorkerTool{})
+	nodeExecutor := NewNodeExecutor(registry, &recordingEventPublisher{}, config.WorkerConfig{}, nil, nil, newFakeNodeRepo())
+	sink, emitter := observeWorkerExecutor(nodeExecutor)
+	nodeExecutor.ExecuteNode(context.Background(), eventbus.Event{
+		TaskID: "task-panic", NodeID: "node-panic", Type: string(model.NodeTypeTool),
+		Payload: map[string]interface{}{"tool": "panic_tool", "parameters": map[string]interface{}{}},
+	})
+	assertWorkerLifecycle(t, emitter, sink, observability.EventTypeToolCallFailed, "TOOL.EXECUTION.FAILED", 1)
+}
+
+func TestExecuteNodeLocalDispatchFailureEmitsExactlyOneStableFailure(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	registry.RegisterExternal(&tool.ToolManifest{Name: "local_failure", ExecutionPlane: tool.ExecutionPlaneLocal, LocalCommand: "LOCAL_MCP_TOOL_CALL"})
+	nodeExecutor := NewNodeExecutor(registry, &recordingEventPublisher{}, config.WorkerConfig{}, nil, nil, newFakeNodeRepo())
+	nodeExecutor.SetLocalJobDispatcher(&fakeLocalJobDispatcher{err: errors.New("runner unavailable")})
+	sink, emitter := observeWorkerExecutor(nodeExecutor)
+	nodeExecutor.ExecuteNode(context.Background(), eventbus.Event{
+		TaskID: "task-local", NodeID: "node-local", Type: string(model.NodeTypeTool),
+		Payload: map[string]interface{}{"tool": "local_failure", "parameters": map[string]interface{}{}},
+	})
+	assertWorkerLifecycle(t, emitter, sink, observability.EventTypeToolCallFailed, "TOOL.EXECUTION.FAILED", 1)
+}
+
+func observeWorkerExecutor(nodeExecutor *NodeExecutor) (*workerEventSink, *observability.Emitter) {
+	sink := &workerEventSink{}
+	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "worker", Environment: "test"}, observability.Runtime{}, sink, 32)
+	nodeExecutor.WithObservability(emitter)
+	return sink, emitter
+}
+
+func assertWorkerLifecycle(t *testing.T, emitter *observability.Emitter, sink *workerEventSink, terminal observability.EventType, code string, attempt int64) {
+	t.Helper()
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var started, ended int
+	for _, event := range sink.snapshot() {
+		if err := event.Validate(); err != nil {
+			t.Fatalf("invalid worker event %s: %v", event.EventType, err)
+		}
+		if event.EventType == observability.EventTypeToolCallStarted {
+			started++
+		}
+		if event.EventType == terminal {
+			ended++
+			if event.Execution.Attempt != attempt {
+				t.Errorf("attempt=%d, want %d", event.Execution.Attempt, attempt)
+			}
+			if code != "" && (event.Error == nil || event.Error.Code != code) {
+				t.Errorf("terminal error=%+v, want code %s", event.Error, code)
+			}
+		}
+	}
+	if started != 1 || ended != 1 {
+		t.Fatalf("tool lifecycle started=%d ended=%d events=%+v", started, ended, sink.snapshot())
+	}
+}
+
+type panicWorkerTool struct{}
+
+func (panicWorkerTool) Name() string                                   { return "panic_tool" }
+func (panicWorkerTool) Description() string                            { return "panic test" }
+func (panicWorkerTool) Type() tool.ToolType                            { return tool.ToolTypeCustom }
+func (panicWorkerTool) ValidateParameters(map[string]interface{}) bool { return true }
+func (panicWorkerTool) Manifest() tool.ToolManifest                    { return tool.ToolManifest{Name: "panic_tool"} }
+func (panicWorkerTool) Execute(context.Context, map[string]interface{}, tool.ToolContext) tool.ToolResult {
+	panic("worker tool panic")
 }
 
 func TestExecuteNodeRequiresJSONBuildableStdoutWhenOutputSchemaDeclared(t *testing.T) {

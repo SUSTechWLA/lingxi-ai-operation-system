@@ -110,7 +110,7 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (res
 			stageType = observability.EventTypeWorkflowStageFailed
 			status = observability.ExecutionStatusFailed
 			severity = observability.SeverityError
-			eventErr = observability.NormalizeError("LLM.RESPONSE.SCHEMA_INVALID", errors.New("translator panic"), "translator", "")
+			eventErr = observability.NormalizeError("LLM.CALL.INTERNAL_FAILURE", errors.New("translator panic"), "translator", "")
 			s.emitLifecycle(ctx, llmType, string(llmType), status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
 			s.emitLifecycle(ctx, stageType, "translator.dag.failed", status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
 			panic(recovered)
@@ -120,10 +120,16 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (res
 			stageType = observability.EventTypeWorkflowStageFailed
 			severity = observability.SeverityError
 			status = observability.ExecutionStatusFailed
-			if errors.Is(retErr, context.Canceled) || errors.Is(retErr, context.DeadlineExceeded) {
+			if errors.Is(retErr, context.Canceled) {
 				severity = observability.SeverityWarn
+				status = observability.ExecutionStatusCancelled
+				stageType = observability.EventTypeWorkflowStageCancelled
+			} else if errors.Is(retErr, context.DeadlineExceeded) {
+				eventErr = observability.NormalizeError("LLM.CALL.TIMEOUT", retErr, "translator", "")
 			} else if translatorResponseError(retErr) {
 				eventErr = observability.NormalizeError("LLM.RESPONSE.SCHEMA_INVALID", retErr, "translator", "")
+			} else {
+				eventErr = observability.NormalizeError("LLM.TRANSPORT.UNAVAILABLE", retErr, "translator", "")
 			}
 		}
 		s.emitLifecycle(ctx, llmType, string(llmType), status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
@@ -305,7 +311,7 @@ func translatorResponseError(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"parse", "stdout is empty", "content is empty", "no output", "failed"} {
+	for _, marker := range []string{"parse", "stdout is empty", "content is empty", "no output", "invalid character", "invalid dag"} {
 		if strings.Contains(message, marker) {
 			return true
 		}

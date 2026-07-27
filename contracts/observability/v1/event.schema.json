@@ -21,6 +21,17 @@
     "error",
     "privacy"
   ],
+  "allOf": [
+    {
+      "if": {
+        "properties": { "severity": { "const": "ERROR" } },
+        "required": ["severity"]
+      },
+      "then": {
+        "properties": { "error": { "$ref": "#/$defs/error" } }
+      }
+    }
+  ],
   "properties": {
     "schemaVersion": { "const": "1.0" },
     "eventId": { "type": "string", "pattern": "^evt_[A-Za-z0-9_-]+$" },
@@ -189,7 +200,7 @@
       "required": ["code", "class", "fingerprint", "retryable", "userMessageKey", "suggestedActionKey"],
       "properties": {
         "code": { "type": "string", "pattern": "^[A-Z]+(?:\\.[A-Z_]+){2}$" },
-        "class": { "enum": ["AUTHENTICATION", "TIMEOUT", "VALIDATION", "PROVIDER", "CONNECTION", "NOT_FOUND", "INTEGRITY", "RENDER", "MEDIA"] },
+        "class": { "enum": ["AUTHENTICATION", "TIMEOUT", "VALIDATION", "PROVIDER", "CONNECTION", "NOT_FOUND", "INTEGRITY", "RENDER", "MEDIA", "EXECUTION"] },
         "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "retryable": { "type": "boolean" },
         "causedByEventId": { "type": "string", "pattern": "^evt_[A-Za-z0-9_-]+$" },

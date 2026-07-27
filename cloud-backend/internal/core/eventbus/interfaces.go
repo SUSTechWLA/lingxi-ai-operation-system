@@ -18,7 +18,7 @@ func PublishWithContext(ctx context.Context, publisher EventPublisher, topic, ke
 	if contextual, ok := publisher.(ContextEventPublisher); ok {
 		return contextual.PublishContext(ctx, topic, key, event)
 	}
-	return publisher.Publish(topic, key, eventWithCorrelation(ctx, event))
+	return publisher.Publish(topic, key, EnrichEventFromContext(ctx, event))
 }
 
 // Compile-time check that Producer satisfies EventPublisher.

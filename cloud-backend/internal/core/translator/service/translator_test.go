@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
 	"github.com/tangying-ai/aios-core/internal/core/observability"
@@ -80,6 +82,9 @@ func TestTranslateToDagEmitsPairedFailureWithoutPrompt(t *testing.T) {
 	events := sink.snapshot()
 	var started, failed int
 	for _, event := range events {
+		if err := event.Validate(); err != nil {
+			t.Fatalf("invalid translator event %s: %v", event.EventType, err)
+		}
 		switch event.EventType {
 		case observability.EventTypeLLMCallStarted:
 			started++
@@ -96,5 +101,65 @@ func TestTranslateToDagEmitsPairedFailureWithoutPrompt(t *testing.T) {
 	}
 	if strings.Contains(string(wire), privatePrompt) {
 		t.Fatalf("private translator prompt leaked into events: %s", wire)
+	}
+}
+
+func TestTranslateToDagNormalizesActualFailureModesThroughEmitter(t *testing.T) {
+	tests := []struct {
+		name      string
+		ctx       func() context.Context
+		transport translatorRoundTripper
+		wantCode  string
+	}{
+		{
+			name: "transport", ctx: context.Background,
+			transport: func(*http.Request) (*http.Response, error) { return nil, errors.New("connection unavailable") },
+			wantCode:  "LLM.TRANSPORT.UNAVAILABLE",
+		},
+		{
+			name: "schema", ctx: context.Background,
+			transport: func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{`)), Header: make(http.Header)}, nil
+			},
+			wantCode: "LLM.RESPONSE.SCHEMA_INVALID",
+		},
+		{
+			name: "timeout", ctx: func() context.Context {
+				ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				defer cancel()
+				return ctx
+			},
+			transport: func(req *http.Request) (*http.Response, error) { return nil, req.Context().Err() },
+			wantCode:  "LLM.CALL.TIMEOUT",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sink := &translatorEventSink{}
+			emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "translator", Environment: "test"}, observability.Runtime{}, sink, 16)
+			service := NewNlToDagService(config.OpenAIConfig{}, "http://orchestrator.test", nil).WithObservability(emitter)
+			service.httpClient = &http.Client{Transport: tt.transport}
+			if _, err := service.TranslateToDag(tt.ctx(), "private prompt"); err == nil {
+				t.Fatal("TranslateToDag returned nil error")
+			}
+			if err := emitter.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			var terminal int
+			for _, event := range sink.snapshot() {
+				if err := event.Validate(); err != nil {
+					t.Fatalf("invalid event %s: %v", event.EventType, err)
+				}
+				if event.EventType == observability.EventTypeLLMCallFailed {
+					terminal++
+					if event.Error == nil || event.Error.Code != tt.wantCode {
+						t.Fatalf("terminal error=%+v, want %s", event.Error, tt.wantCode)
+					}
+				}
+			}
+			if terminal != 1 {
+				t.Fatalf("LLM terminal count=%d events=%+v", terminal, sink.snapshot())
+			}
+		})
 	}
 }

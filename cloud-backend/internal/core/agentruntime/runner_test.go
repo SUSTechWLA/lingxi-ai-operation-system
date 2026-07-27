@@ -11,8 +11,56 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/observability"
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
+
+type agentOwnerSink struct {
+	mu     sync.Mutex
+	owners []string
+}
+
+func (s *agentOwnerSink) Write(ctx context.Context, _ observability.Event) error {
+	owner, _ := trustedcontext.UserID(ctx)
+	s.mu.Lock()
+	s.owners = append(s.owners, owner)
+	s.mu.Unlock()
+	return nil
+}
+func (*agentOwnerSink) Close(context.Context) error { return nil }
+
+func TestRunnerStartAsyncPreservesAuthenticatedOwnerForBackgroundEvents(t *testing.T) {
+	store := newMemoryRunStore()
+	sink := &agentOwnerSink{}
+	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"}, observability.Runtime{}, sink, 32)
+	runner := NewRunner(&fakeOrchestrator{}, store, staticPlanner{err: errors.New("planning failed")}, NewPlanGuard(staticToolCatalog{}, nil), NewPlanCompiler(staticToolCatalog{})).WithObservability(emitter)
+	ctx := trustedcontext.WithUserID(context.Background(), "user-1")
+	run, err := runner.StartAsync(ctx, StartRunRequest{UserID: "user-1", Message: "make"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		current, _ := store.FindRun(context.Background(), run.ID)
+		if current != nil && current.Status == RunStatusFailed {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.owners) == 0 {
+		t.Fatal("no async events")
+	}
+	for _, owner := range sink.owners {
+		if owner != "user-1" {
+			t.Fatalf("owners=%v", sink.owners)
+		}
+	}
+}
 
 type agentEventSink struct {
 	mu     sync.Mutex
@@ -89,6 +137,141 @@ func TestRunnerStartEmitsPairedFailureWithoutPrivateRequestText(t *testing.T) {
 	if strings.Contains(string(wire), privateRequest) {
 		t.Fatalf("private request leaked into events: %s", wire)
 	}
+}
+
+func TestRunnerStageBoundariesPairCancellationFailureAndPanic(t *testing.T) {
+	validPlan := &AgentPlan{
+		Goal: "make", Domain: "video_creation", Mode: "dynamic_agent",
+		Steps: []AgentStep{{ID: "script", Tool: "script_tool", Arguments: map[string]interface{}{"stage": "script"}}},
+	}
+	catalog := staticToolCatalog{"script_tool": {Name: "script_tool", Endpoint: "builtin://script"}}
+	tests := []struct {
+		name         string
+		planner      Planner
+		guard        *PlanGuard
+		compiler     *PlanCompiler
+		orchestrator Orchestrator
+		startKey     string
+		terminalKey  string
+		code         string
+		wantPanic    bool
+	}{
+		{
+			name: "planning cancellation", planner: boundaryPlanner{err: context.Canceled},
+			guard: NewPlanGuard(catalog, nil), compiler: NewPlanCompiler(catalog), orchestrator: &fakeOrchestrator{taskID: "task-1"},
+			startKey: "agent.plan.started", terminalKey: "agent.plan.cancelled",
+		},
+		{
+			name: "planning panic", planner: boundaryPlanner{panicValue: "planner panic"},
+			guard: NewPlanGuard(catalog, nil), compiler: NewPlanCompiler(catalog), orchestrator: &fakeOrchestrator{taskID: "task-1"},
+			startKey: "agent.plan.started", terminalKey: "agent.plan.failed", code: "AGENT.RUNTIME.INTERNAL_FAILURE", wantPanic: true,
+		},
+		{
+			name: "guard panic", planner: boundaryPlanner{plan: validPlan},
+			guard: NewPlanGuard(catalog, nil).WithDirectors(panicDirectorRegistry{}), compiler: NewPlanCompiler(catalog), orchestrator: &fakeOrchestrator{taskID: "task-1"},
+			startKey: "agent.plan.validation.started", terminalKey: "agent.plan.validation.failed", code: "AGENT.RUNTIME.INTERNAL_FAILURE", wantPanic: true,
+		},
+		{
+			name: "repair failure", planner: repairFailurePlanner{plan: &AgentPlan{Goal: "make", Steps: []AgentStep{{ID: "bad", Tool: "missing"}}}},
+			guard: NewPlanGuard(catalog, nil), compiler: NewPlanCompiler(catalog), orchestrator: &fakeOrchestrator{taskID: "task-1"},
+			startKey: "correct.operation.started", terminalKey: "correct.operation.failed", code: "AGENT.PLAN.VALIDATION_FAILED",
+		},
+		{
+			name: "compiler panic", planner: boundaryPlanner{plan: validPlan},
+			guard: NewPlanGuard(catalog, nil), compiler: NewPlanCompiler(catalog).WithDirectors(panicDirectorRegistry{}), orchestrator: &fakeOrchestrator{taskID: "task-1"},
+			startKey: "agent.plan.compilation.started", terminalKey: "agent.plan.compilation.failed", code: "AGENT.RUNTIME.INTERNAL_FAILURE", wantPanic: true,
+		},
+		{
+			name: "orchestrator panic", planner: boundaryPlanner{plan: validPlan},
+			guard: NewPlanGuard(catalog, nil), compiler: NewPlanCompiler(catalog), orchestrator: panicOrchestrator{},
+			startKey: "agent.dag.submission.started", terminalKey: "agent.dag.submission.failed", code: "AGENT.RUNTIME.INTERNAL_FAILURE", wantPanic: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sink := &agentEventSink{}
+			emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 64)
+			runner := NewRunner(tt.orchestrator, newMemoryRunStore(), tt.planner, tt.guard, tt.compiler).WithObservability(emitter)
+			panicked := false
+			func() {
+				defer func() { panicked = recover() != nil }()
+				_, _ = runner.Start(context.Background(), StartRunRequest{UserID: "user-1", Message: "make"})
+			}()
+			if panicked != tt.wantPanic {
+				t.Fatalf("panicked=%v, want %v", panicked, tt.wantPanic)
+			}
+			if err := emitter.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			var starts, terminals int
+			for _, event := range sink.snapshot() {
+				if err := event.Validate(); err != nil {
+					t.Fatalf("invalid event %s: %v", event.MessageKey, err)
+				}
+				if event.MessageKey == tt.startKey {
+					starts++
+				}
+				if event.MessageKey == tt.terminalKey {
+					terminals++
+					if tt.code != "" && (event.Error == nil || event.Error.Code != tt.code) {
+						t.Fatalf("terminal error=%+v, want code %s", event.Error, tt.code)
+					}
+				}
+			}
+			if starts != 1 || terminals != 1 {
+				t.Fatalf("boundary pair starts=%d terminals=%d events=%+v", starts, terminals, sink.snapshot())
+			}
+		})
+	}
+}
+
+func TestRunnerDoesNotMutatePlannerOwnedPlan(t *testing.T) {
+	shared := &AgentPlan{Goal: "template", Steps: []AgentStep{{ID: "step", Tool: "tool", Arguments: map[string]interface{}{"value": "original"}}}}
+	catalog := staticToolCatalog{"tool": {Name: "tool", Endpoint: "builtin://tool"}}
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1"}, newMemoryRunStore(), staticPlanner{plan: shared}, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	if _, err := runner.Start(context.Background(), StartRunRequest{UserID: "user-1", Message: "make", Domain: "requested"}); err != nil {
+		t.Fatal(err)
+	}
+	if shared.Domain != "" || shared.Mode != "" || shared.Steps[0].Arguments["value"] != "original" {
+		t.Fatalf("planner-owned plan was mutated: %+v", shared)
+	}
+}
+
+type boundaryPlanner struct {
+	plan       *AgentPlan
+	err        error
+	panicValue any
+}
+
+func (p boundaryPlanner) GeneratePlan(context.Context, StartRunRequest) (*AgentPlan, error) {
+	if p.panicValue != nil {
+		panic(p.panicValue)
+	}
+	return p.plan, p.err
+}
+
+type repairFailurePlanner struct{ plan *AgentPlan }
+
+func (p repairFailurePlanner) GeneratePlan(context.Context, StartRunRequest) (*AgentPlan, error) {
+	return p.plan, nil
+}
+func (repairFailurePlanner) RepairPlanForRequest(context.Context, StartRunRequest, *AgentPlan, string) (*AgentPlan, error) {
+	return nil, errors.New("repair failed")
+}
+
+type panicDirectorRegistry struct{}
+
+func (panicDirectorRegistry) Get(string) StageDirector { panic("director panic") }
+
+type panicOrchestrator struct{}
+
+func (panicOrchestrator) CreateTask(context.Context, string, map[string]interface{}) (*model.Task, error) {
+	panic("orchestrator panic")
+}
+func (panicOrchestrator) SubmitDAG(context.Context, string, *model.DAGRequest) error { return nil }
+func (panicOrchestrator) GetTaskWithDetails(context.Context, string) (map[string]interface{}, error) {
+	return nil, nil
 }
 
 func TestRunnerStart_CreatesTaskScopesDAGAndStoresRun(t *testing.T) {
@@ -668,6 +851,8 @@ func TestRunnerStart_RecordsPlanJudgeWarningsAfterGuardPasses(t *testing.T) {
 
 func TestRunnerStart_BlocksWhenPlanJudgeFails(t *testing.T) {
 	store := newMemoryRunStore()
+	sink := &agentEventSink{}
+	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 32)
 	orch := &fakeOrchestrator{taskID: "task-1"}
 	planner := staticPlanner{plan: &AgentPlan{
 		Goal:   "make video",
@@ -693,7 +878,8 @@ func TestRunnerStart_BlocksWhenPlanJudgeFails(t *testing.T) {
 	}
 
 	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).
-		WithPlanJudge(&judge)
+		WithPlanJudge(&judge).
+		WithObservability(emitter)
 	_, err := runner.Start(context.Background(), StartRunRequest{
 		UserID:  "user-1",
 		Message: "make a video about AI workflows",
@@ -707,6 +893,26 @@ func TestRunnerStart_BlocksWhenPlanJudgeFails(t *testing.T) {
 	}
 	if got := store.Len(); got != 0 {
 		t.Fatalf("failed plan should not be persisted as a run, got %d stored runs", got)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var verifyStarted, verifyFailed, correctionStarted int
+	for _, event := range sink.snapshot() {
+		if err := event.Validate(); err != nil {
+			t.Fatalf("invalid event %s: %v", event.MessageKey, err)
+		}
+		switch event.EventType {
+		case observability.EventTypeVerifyCheckStarted:
+			verifyStarted++
+		case observability.EventTypeVerifyCheckFailed:
+			verifyFailed++
+		case observability.EventTypeCorrectOperationStarted:
+			correctionStarted++
+		}
+	}
+	if verifyStarted != 1 || verifyFailed != 1 || correctionStarted != 0 {
+		t.Fatalf("plan judge lifecycle verifyStarted=%d verifyFailed=%d correctionStarted=%d", verifyStarted, verifyFailed, correctionStarted)
 	}
 }
 

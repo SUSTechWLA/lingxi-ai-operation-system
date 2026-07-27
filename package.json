@@ -13,7 +13,7 @@
     "test:deploy": "python3 -m unittest scripts/test_one_click_deploy.py",
     "test:beta-smoke": "cd frontend && npm run test:director && cd ../cloud-backend && go test ./internal/core/localrunner",
     "test:observability-contract": "node scripts/verify-observability-contract.mjs",
-    "test:observability-foundation": "npm run test:observability-contract && cd cloud-backend && go test ./internal/core/observability ./internal/core/agentruntime ./internal/core/workflow ./internal/core/localrunner ./internal/core/translator/... -count=1",
+    "test:observability-foundation": "npm run test:observability-contract && cd cloud-backend && go test ./internal/core/observability ./internal/core/agentruntime ./internal/core/workflow ./internal/core/localrunner ./internal/core/translator/... ./internal/core/worker/service -count=1",
     "electron:dev": "cd frontend && npm run electron:dev",
     "electron:build": "bash scripts/build-local-desktop.sh"
   }
