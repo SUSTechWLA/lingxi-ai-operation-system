@@ -20,6 +20,8 @@ type EventType string
 
 const (
 	EventTypeRequestAccepted                EventType = "request.accepted"
+	EventTypeRequestCompleted               EventType = "request.completed"
+	EventTypeRequestFailed                  EventType = "request.failed"
 	EventTypeRequestAuthenticationSucceeded EventType = "request.authentication.succeeded"
 	EventTypeRequestAuthenticationFailed    EventType = "request.authentication.failed"
 	EventTypeTaskCreated                    EventType = "task.created"
@@ -206,6 +208,8 @@ var (
 
 var eventTypes = map[EventType]struct{}{
 	EventTypeRequestAccepted:                {},
+	EventTypeRequestCompleted:               {},
+	EventTypeRequestFailed:                  {},
 	EventTypeRequestAuthenticationSucceeded: {},
 	EventTypeRequestAuthenticationFailed:    {},
 	EventTypeTaskCreated:                    {},

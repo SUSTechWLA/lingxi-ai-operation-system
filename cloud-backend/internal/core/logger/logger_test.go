@@ -6,6 +6,7 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
 
@@ -28,6 +29,51 @@ func TestWithCorrelationAddsStructuredFieldsToExistingLogger(t *testing.T) {
 		fields["spanId"] != correlation.SpanID ||
 		fields["parentSpanId"] != correlation.ParentSpanID {
 		t.Fatalf("correlation fields = %#v", fields)
+	}
+}
+
+func TestEventSinkMapsSeverityToZapLevel(t *testing.T) {
+	tests := []struct {
+		severity observability.Severity
+		want     zapcore.Level
+	}{
+		{observability.SeverityDebug, zap.DebugLevel},
+		{observability.SeverityInfo, zap.InfoLevel},
+		{observability.SeverityWarn, zap.WarnLevel},
+		{observability.SeverityError, zap.ErrorLevel},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.severity), func(t *testing.T) {
+			core, logs := observer.New(zap.DebugLevel)
+			sink := NewEventSink(zap.New(core))
+			event := observability.Event{
+				EventID: "evt_level", EventType: observability.EventTypeRequestAccepted,
+				MessageKey: "request.accepted", Severity: tt.severity,
+				Correlation: observability.Correlation{TraceID: "trc_safe", SpanID: "spn_safe"},
+			}
+			if err := sink.Write(context.Background(), event); err != nil {
+				t.Fatal(err)
+			}
+			if logs.Len() != 1 || logs.All()[0].Level != tt.want {
+				t.Fatalf("logs = %#v, want level %v", logs.All(), tt.want)
+			}
+		})
+	}
+}
+
+func TestEventSinkRejectsUnsafeCorrelationBeforeLogging(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	sink := NewEventSink(zap.New(core))
+	event := observability.Event{
+		EventID: "evt_unsafe", EventType: observability.EventTypeRequestAccepted,
+		MessageKey: "request.accepted", Severity: observability.SeverityInfo,
+		Correlation: observability.Correlation{TraceID: "trc_sk_live_Bearer_secret", SpanID: "spn_safe"},
+	}
+	if err := sink.Write(context.Background(), event); err == nil {
+		t.Fatal("Write() accepted unsafe correlation")
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("unsafe event was logged: %#v", logs.All())
 	}
 }
 

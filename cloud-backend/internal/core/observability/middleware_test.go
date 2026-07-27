@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -31,14 +32,17 @@ func TestMiddlewarePreservesIncomingTraceparent(t *testing.T) {
 	}
 
 	events, _ := sink.snapshot()
-	if len(events) != 1 {
-		t.Fatalf("emitted events = %d, want 1", len(events))
+	if len(events) != 2 {
+		t.Fatalf("emitted events = %d, want 2", len(events))
 	}
-	if events[0].Correlation.TraceID != "trc_4bf92f3577b34da6a3ce929d0e0e4736" {
-		t.Fatalf("wire trace ID = %q", events[0].Correlation.TraceID)
+	if events[0].EventType != EventTypeRequestAccepted || events[1].EventType != EventTypeRequestCompleted {
+		t.Fatalf("request event types = %q, %q", events[0].EventType, events[1].EventType)
 	}
-	if events[0].Correlation.ParentSpanID != "spn_00f067aa0ba902b7" {
-		t.Fatalf("wire parent span ID = %q", events[0].Correlation.ParentSpanID)
+	if events[1].Correlation.TraceID != "trc_4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("wire trace ID = %q", events[1].Correlation.TraceID)
+	}
+	if events[1].Correlation.ParentSpanID != "spn_00f067aa0ba902b7" {
+		t.Fatalf("wire parent span ID = %q", events[1].Correlation.ParentSpanID)
 	}
 }
 
@@ -60,13 +64,73 @@ func TestMiddlewareDoesNotEmitQueryOrHeaderSecrets(t *testing.T) {
 	}
 
 	events, _ := sink.snapshot()
-	if len(events) != 1 {
-		t.Fatalf("emitted events = %d, want 1", len(events))
+	if len(events) != 2 {
+		t.Fatalf("emitted events = %d, want 2", len(events))
 	}
-	if ContainsSecret(events[0]) {
-		t.Fatalf("emitted event contains a secret: %#v", events[0])
+	for _, event := range events {
+		if ContainsSecret(event) {
+			t.Fatalf("emitted event contains a secret: %#v", event)
+		}
+		if strings.Contains(event.MessageKey, "secret") {
+			t.Fatalf("message key leaked request data: %q", event.MessageKey)
+		}
 	}
-	if strings.Contains(events[0].MessageKey, "secret") {
-		t.Fatalf("message key leaked request data: %q", events[0].MessageKey)
+}
+
+func TestMiddlewareEmitsExactlyOneFailedTerminalEventOnPanic(t *testing.T) {
+	sink := &memorySink{}
+	emitter := NewEmitter(testSource(), Runtime{}, sink, 4)
+	r := gin.New()
+	r.Use(Middleware(emitter))
+	r.GET("/panic", func(*gin.Context) { panic("Bearer must-not-leak") })
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/panic?token=must-not-leak", nil))
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := sink.snapshot()
+	if len(events) != 2 || events[0].EventType != EventTypeRequestAccepted || events[1].EventType != EventTypeRequestFailed {
+		t.Fatalf("request events = %#v", events)
+	}
+	if events[1].Execution.Status != ExecutionStatusFailed {
+		t.Fatalf("terminal status = %q", events[1].Execution.Status)
+	}
+}
+
+func TestMiddlewareRejectsInvalidTraceparentAndPreservesSamplingFlag(t *testing.T) {
+	tests := []struct {
+		name   string
+		header string
+		valid  bool
+		flag   string
+	}{
+		{"sampled", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", true, "01"},
+		{"uppercase trace", "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01", false, "00"},
+		{"uppercase span", "00-4bf92f3577b34da6a3ce929d0e0e4736-00F067AA0BA902B7-01", false, "00"},
+		{"zero trace", "00-00000000000000000000000000000000-00f067aa0ba902b7-01", false, "00"},
+		{"zero span", "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01", false, "00"},
+		{"malformed", "not-a-traceparent", false, "00"},
+	}
+	hex32 := regexp.MustCompile(`^[0-9a-f]{32}$`)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := gin.New()
+			r.Use(Middleware(nil))
+			r.GET("/x", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+			req := httptest.NewRequest(http.MethodGet, "/x", nil)
+			req.Header.Set("traceparent", tt.header)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+			parts := strings.Split(rec.Header().Get("traceparent"), "-")
+			if len(parts) != 4 || !hex32.MatchString(parts[1]) || parts[3] != tt.flag {
+				t.Fatalf("response traceparent = %q", rec.Header().Get("traceparent"))
+			}
+			if tt.valid && parts[1] != "4bf92f3577b34da6a3ce929d0e0e4736" {
+				t.Fatalf("valid trace ID changed to %q", parts[1])
+			}
+			if !tt.valid && strings.Contains(tt.header, parts[1]) {
+				t.Fatalf("invalid trace ID was preserved: %q", parts[1])
+			}
+		})
 	}
 }

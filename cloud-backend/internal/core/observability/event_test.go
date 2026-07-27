@@ -68,6 +68,14 @@ func TestEventValidateAcceptsContractCompatibleEvent(t *testing.T) {
 	}
 }
 
+func TestRequestTerminalEventTypesAreRegistered(t *testing.T) {
+	for _, eventType := range []EventType{"request.completed", "request.failed"} {
+		if _, ok := eventTypes[eventType]; !ok {
+			t.Errorf("terminal request event type %q is not registered", eventType)
+		}
+	}
+}
+
 func TestEventValidateRejectsInvalidContractFields(t *testing.T) {
 	tests := []struct {
 		name   string

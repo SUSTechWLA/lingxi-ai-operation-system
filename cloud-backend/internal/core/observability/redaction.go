@@ -64,6 +64,20 @@ func containsSecret(value reflect.Value, seen map[visit]struct{}) bool {
 		PrivacyClassification(value.String()) == PrivacySecret {
 		return true
 	}
+	if value.Type() == reflect.TypeOf(Correlation{}) {
+		correlation := value.Interface().(Correlation)
+		for _, field := range []string{
+			correlation.TraceID, correlation.SpanID, correlation.ParentSpanID,
+			correlation.SessionID, correlation.ProjectID, correlation.TaskID,
+			correlation.WorkflowRunID, correlation.AgentRunID, correlation.StageID,
+			correlation.ShotID, correlation.ArtifactID, correlation.ToolCallID,
+			correlation.ProviderJobID,
+		} {
+			if unsafeCorrelationText(field) {
+				return true
+			}
+		}
+	}
 	if value.Type() == reflect.TypeOf(EventError{}) {
 		eventError := value.Interface().(EventError)
 		if eventError.CausedByEventID != "" && !safeCausalEventReference(eventError.CausedByEventID) {

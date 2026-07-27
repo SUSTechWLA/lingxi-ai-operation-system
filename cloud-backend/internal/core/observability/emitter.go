@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -40,24 +41,37 @@ type Emitter struct {
 	closeCtx context.Context
 	firstErr error
 
-	wake      chan struct{}
-	closeWake chan struct{}
-	done      chan struct{}
-	closeOnce sync.Once
+	wake          chan struct{}
+	closeWake     chan struct{}
+	done          chan struct{}
+	closeOnce     sync.Once
+	writeLifetime context.Context
+	cancelWrites  context.CancelFunc
 }
+
+type discardSink struct{}
+
+func (discardSink) Write(context.Context, Event) error { return nil }
+func (discardSink) Close(context.Context) error        { return nil }
 
 func NewEmitter(source Source, runtime Runtime, sink Sink, capacity int) *Emitter {
 	if capacity < 1 {
 		capacity = 1
 	}
+	if sink == nil {
+		sink = discardSink{}
+	}
+	writeLifetime, cancelWrites := context.WithCancel(context.Background())
 	emitter := &Emitter{
-		source:    source,
-		runtime:   runtime,
-		sink:      sink,
-		capacity:  capacity,
-		wake:      make(chan struct{}, 1),
-		closeWake: make(chan struct{}),
-		done:      make(chan struct{}),
+		source:        source,
+		runtime:       runtime,
+		sink:          sink,
+		capacity:      capacity,
+		wake:          make(chan struct{}, 1),
+		closeWake:     make(chan struct{}),
+		done:          make(chan struct{}),
+		writeLifetime: writeLifetime,
+		cancelWrites:  cancelWrites,
 	}
 	go emitter.run()
 	return emitter
@@ -68,8 +82,14 @@ func NewEmitter(source Source, runtime Runtime, sink Sink, capacity int) *Emitte
 // Protected events are never silently lost: if no lower-priority event can be
 // evicted, Emit returns ErrQueueFull.
 func (e *Emitter) Emit(ctx context.Context, event Event) error {
-	if e == nil || e.sink == nil {
+	if e == nil {
 		return errors.New("observability emitter requires a sink")
+	}
+	e.mu.Lock()
+	closed := e.closing
+	e.mu.Unlock()
+	if closed {
+		return ErrEmitterClosed
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -78,7 +98,7 @@ func (e *Emitter) Emit(ctx context.Context, event Event) error {
 	if err != nil {
 		return err
 	}
-	item := queuedEvent{ctx: context.WithoutCancel(ctx), event: prepared}
+	item := queuedEvent{ctx: ctx, event: prepared}
 
 	e.mu.Lock()
 	if e.closing {
@@ -112,6 +132,7 @@ func (e *Emitter) Close(ctx context.Context) error {
 		e.closing = true
 		e.closeCtx = ctx
 		e.mu.Unlock()
+		context.AfterFunc(ctx, e.cancelWrites)
 		close(e.closeWake)
 	})
 
@@ -139,9 +160,7 @@ func (e *Emitter) prepare(ctx context.Context, event Event) (Event, error) {
 	event.Source = e.source
 	event.Runtime = e.runtime
 	event.Correlation = mergeCorrelation(event.Correlation, CorrelationFromContext(ctx))
-	event.Correlation.TraceID = canonicalTraceID(event.Correlation.TraceID)
-	event.Correlation.SpanID = canonicalSpanID(event.Correlation.SpanID)
-	event.Correlation.ParentSpanID = canonicalSpanID(event.Correlation.ParentSpanID)
+	event.Correlation = sanitizeCorrelation(event.Correlation)
 	if event.Execution.Attempt == 0 {
 		event.Execution.Attempt = 1
 	}
@@ -189,13 +208,16 @@ func mergeCorrelation(primary, fallback Correlation) Correlation {
 }
 
 func (e *Emitter) run() {
+	defer e.cancelWrites()
 	defer close(e.done)
 	for {
 		item, ok, closing := e.take()
 		if ok {
-			if err := e.sink.Write(item.ctx, item.event); err != nil {
+			writeCtx, cancel := e.writeContext(item.ctx)
+			if err := e.sink.Write(writeCtx, item.event); err != nil {
 				e.recordError(err)
 			}
+			cancel()
 			continue
 		}
 		if closing {
@@ -214,6 +236,15 @@ func (e *Emitter) run() {
 		case <-e.wake:
 		case <-e.closeWake:
 		}
+	}
+}
+
+func (e *Emitter) writeContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(e.writeLifetime, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
 	}
 }
 
@@ -261,44 +292,72 @@ func evictionCandidate(queue []queuedEvent, incoming Event) int {
 }
 
 func protectedEvent(event Event) bool {
-	if event.Severity == SeverityError || event.EventType == EventTypeWorkflowStageCheckpointed {
-		return true
+	return !(event.EventType == EventTypeWorkflowStageProgress &&
+		(event.Severity == SeverityDebug || event.Severity == SeverityInfo))
+}
+
+// Raw W3C identifiers remain in request and Kafka contexts. Valid W3C IDs get
+// a reversible product prefix on the canonical wire copy. Every other caller
+// value is mapped to a deterministic hash so arbitrary text is never exposed.
+func canonicalTraceID(value string) string {
+	if value == "" {
+		return value
 	}
-	switch event.EventType {
-	case EventTypeRequestAccepted,
-		EventTypeRequestAuthenticationSucceeded,
-		EventTypeRequestAuthenticationFailed,
-		EventTypeAgentDecisionRecorded,
-		EventTypeUserDecisionRecorded:
-		return true
+	if w3cTraceIDPattern.MatchString(value) && !allZero(value) {
+		return "trc_" + value
 	}
-	value := string(event.EventType)
-	for _, suffix := range []string{
-		".queued", ".started", ".completed", ".failed", ".cancelled",
-		".paused", ".resumed", ".created", ".requested",
-	} {
-		if strings.HasSuffix(value, suffix) {
+	return hashedIdentifier("trc_", "trace", value)
+}
+
+func canonicalSpanID(value string) string {
+	if value == "" {
+		return value
+	}
+	if w3cSpanIDPattern.MatchString(value) && !allZero(value) {
+		return "spn_" + value
+	}
+	return hashedIdentifier("spn_", "span", value)
+}
+
+func sanitizeCorrelation(correlation Correlation) Correlation {
+	correlation.TraceID = canonicalTraceID(correlation.TraceID)
+	correlation.SpanID = canonicalSpanID(correlation.SpanID)
+	correlation.ParentSpanID = canonicalSpanID(correlation.ParentSpanID)
+	correlation.SessionID = canonicalProductID(correlation.SessionID, "ses_", sessionIDPattern, "session")
+	correlation.ProjectID = canonicalProductID(correlation.ProjectID, "prj_", projectIDPattern, "project")
+	correlation.TaskID = canonicalProductID(correlation.TaskID, "tsk_", taskIDPattern, "task")
+	correlation.WorkflowRunID = canonicalProductID(correlation.WorkflowRunID, "wfr_", workflowRunIDPattern, "workflow-run")
+	correlation.AgentRunID = canonicalProductID(correlation.AgentRunID, "agr_", agentRunIDPattern, "agent-run")
+	correlation.ShotID = canonicalProductID(correlation.ShotID, "shot_", shotIDPattern, "shot")
+	correlation.ArtifactID = canonicalProductID(correlation.ArtifactID, "art_", artifactIDPattern, "artifact")
+	correlation.ToolCallID = canonicalProductID(correlation.ToolCallID, "call_", toolCallIDPattern, "tool-call")
+	correlation.ProviderJobID = canonicalProductID(correlation.ProviderJobID, "job_", providerJobIDPattern, "provider-job")
+	if unsafeCorrelationText(correlation.StageID) {
+		correlation.StageID = hashedIdentifier("stage_", "stage", correlation.StageID)
+	}
+	return correlation
+}
+
+func canonicalProductID(value, prefix string, pattern interface{ MatchString(string) bool }, kind string) string {
+	if value == "" || pattern.MatchString(value) && !unsafeCorrelationText(value) {
+		return value
+	}
+	return hashedIdentifier(prefix, kind, value)
+}
+
+func unsafeCorrelationText(value string) bool {
+	normalized := strings.ToLower(value)
+	for _, marker := range []string{"bearer", "sk_live", "secret", "password", "token", "api_key", "apikey"} {
+		if strings.Contains(normalized, marker) {
 			return true
 		}
 	}
 	return false
 }
 
-// Raw W3C identifiers remain in request and Kafka contexts. The canonical v1
-// event schema requires product prefixes, so the wire copy receives a
-// deterministic prefix and can be converted back by removing it.
-func canonicalTraceID(value string) string {
-	if strings.HasPrefix(value, "trc_") || value == "" {
-		return value
-	}
-	return "trc_" + strings.ToLower(value)
-}
-
-func canonicalSpanID(value string) string {
-	if strings.HasPrefix(value, "spn_") || value == "" {
-		return value
-	}
-	return "spn_" + strings.ToLower(value)
+func hashedIdentifier(prefix, kind, value string) string {
+	digest := sha256.Sum256([]byte(kind + "\x00" + value))
+	return prefix + hex.EncodeToString(digest[:])
 }
 
 func randomHex(bytes int) string {

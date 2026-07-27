@@ -2,6 +2,8 @@ package eventbus
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 
 	"github.com/IBM/sarama"
@@ -79,6 +81,10 @@ func (p *Producer) Publish(topic, key string, event Event) error {
 
 	zap.L().Info("Event published", zap.String("topic", topic), zap.String("key", key))
 	return nil
+}
+
+func (p *Producer) PublishContext(ctx context.Context, topic, key string, event Event) error {
+	return p.Publish(topic, key, eventWithCorrelation(ctx, event))
 }
 func (p *Producer) Close() error {
 	return p.producer.Close()
@@ -175,9 +181,36 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 func (h *consumerGroupHandler) handleEvent(event Event) error {
 	correlation := observability.Correlation{
 		TraceID:      event.TraceID,
-		SpanID:       event.SpanID,
-		ParentSpanID: event.ParentSpanID,
+		SpanID:       newSpanID(),
+		ParentSpanID: event.SpanID,
 	}
 	ctx := observability.WithCorrelation(context.Background(), correlation)
 	return h.handlerFn(ctx, event)
+}
+
+func eventWithCorrelation(ctx context.Context, event Event) Event {
+	correlation := observability.CorrelationFromContext(ctx)
+	if event.TraceID == "" {
+		event.TraceID = correlation.TraceID
+	}
+	if event.SpanID == "" {
+		event.SpanID = correlation.SpanID
+	}
+	if event.ParentSpanID == "" {
+		event.ParentSpanID = correlation.ParentSpanID
+	}
+	return event
+}
+
+func newSpanID() string {
+	for {
+		data := make([]byte, 8)
+		if _, err := rand.Read(data); err != nil {
+			panic("crypto/rand unavailable: " + err.Error())
+		}
+		value := hex.EncodeToString(data)
+		if value != "0000000000000000" {
+			return value
+		}
+	}
 }

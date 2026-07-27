@@ -34,6 +34,11 @@ func Middleware(emitter *Emitter) gin.HandlerFunc {
 		ctx := WithCorrelation(c.Request.Context(), correlation)
 		c.Request = c.Request.WithContext(ctx)
 		c.Header("traceparent", fmt.Sprintf("00-%s-%s-%s", traceID, spanID, flags))
+		if emitter != nil {
+			if err := emitter.Emit(ctx, requestEvent(EventTypeRequestAccepted, SeverityInfo, ExecutionStatusStarted, correlation, nil)); err != nil {
+				zap.L().Error("Failed to emit HTTP request accepted event", zap.Error(err))
+			}
+		}
 
 		started := time.Now()
 		defer func() {
@@ -45,26 +50,14 @@ func Middleware(emitter *Emitter) gin.HandlerFunc {
 
 			status := ExecutionStatusCompleted
 			severity := SeverityInfo
+			eventType := EventTypeRequestCompleted
 			if c.Writer.Status() >= http.StatusInternalServerError {
 				status = ExecutionStatusFailed
 				severity = SeverityError
+				eventType = EventTypeRequestFailed
 			}
 			if emitter != nil {
-				err := emitter.Emit(ctx, Event{
-					Severity:    severity,
-					EventType:   EventTypeRequestAccepted,
-					MessageKey:  "request.accepted",
-					Correlation: correlation,
-					Execution: Execution{
-						Status:     status,
-						Attempt:    1,
-						DurationMs: &durationMs,
-					},
-					Privacy: Privacy{
-						Classification: PrivacyInternal,
-						RedactedFields: []string{},
-					},
-				})
+				err := emitter.Emit(ctx, requestEvent(eventType, severity, status, correlation, &durationMs))
 				if err != nil {
 					zap.L().Error("Failed to emit HTTP observability event", zap.Error(err))
 				}
@@ -88,8 +81,26 @@ func Middleware(emitter *Emitter) gin.HandlerFunc {
 	}
 }
 
+func requestEvent(eventType EventType, severity Severity, status ExecutionStatus, correlation Correlation, durationMs *int64) Event {
+	return Event{
+		Severity:    severity,
+		EventType:   eventType,
+		MessageKey:  string(eventType),
+		Correlation: correlation,
+		Execution: Execution{
+			Status:     status,
+			Attempt:    1,
+			DurationMs: durationMs,
+		},
+		Privacy: Privacy{
+			Classification: PrivacyInternal,
+			RedactedFields: []string{},
+		},
+	}
+}
+
 func parseTraceparent(value string) (traceID, parentSpanID, flags string, ok bool) {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(value)), "-")
+	parts := strings.Split(value, "-")
 	if len(parts) != 4 || parts[0] != "00" {
 		return "", "", "", false
 	}

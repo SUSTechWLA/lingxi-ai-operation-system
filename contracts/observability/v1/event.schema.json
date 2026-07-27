@@ -31,6 +31,8 @@
     "eventType": {
       "enum": [
         "request.accepted",
+        "request.completed",
+        "request.failed",
         "request.authentication.succeeded",
         "request.authentication.failed",
         "task.created",

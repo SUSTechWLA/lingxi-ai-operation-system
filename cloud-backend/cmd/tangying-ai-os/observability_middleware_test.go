@@ -57,7 +57,7 @@ func TestNewHTTPRouterInstallsRecoveryCORSAndObservability(t *testing.T) {
 	}
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if len(sink.events) != 1 {
-		t.Fatalf("observability events = %d, want 1", len(sink.events))
+	if len(sink.events) != 2 {
+		t.Fatalf("observability events = %d, want 2", len(sink.events))
 	}
 }

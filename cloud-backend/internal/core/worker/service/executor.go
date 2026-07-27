@@ -164,7 +164,7 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	// REVIEW_GATE and CONTROL nodes are synchronization points, not executable tools.
 	// They pause execution and wait for human approval via the review API.
 	if event.Type == string(model.NodeTypeReviewGate) || event.Type == string(model.NodeTypeControl) {
-		ne.publishSuccess(taskID, nodeID, traceID, payload, idempotencyKey)
+		ne.publishSuccess(ctx, taskID, nodeID, traceID, payload, idempotencyKey)
 		return
 	}
 
@@ -180,18 +180,18 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		if resolveErr == nil {
 			resolveErr = fmt.Errorf("exact output reference remains unresolved")
 		}
-		ne.publishFailure(taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
+		ne.publishFailure(ctx, taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
 		return
 	}
 	contractManifest := ne.executionContractManifest(toolName, parameters, manifest)
 	contractArguments := executionContractArguments(payload, parameters, contractManifest)
 	contractArguments, resolveErr = ne.resolveParameters(ctx, taskID, contractArguments)
 	if resolveErr != nil {
-		ne.publishFailure(taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
+		ne.publishFailure(ctx, taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
 		return
 	}
 	if err := validateExecutionInput(contractManifest, contractArguments); err != nil {
-		ne.publishFailure(taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
+		ne.publishFailure(ctx, taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
 		return
 	}
 
@@ -204,7 +204,7 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	if localManifest := ne.localExecutionManifest(toolName, parameters, manifest); localManifest != nil {
 		idempotencyKey = ne.localDispatchIdempotencyKey(ctx, nodeID, idempotencyKey)
 		if err := ne.dispatchLocalNode(ctx, event, localManifest, parameters, idempotencyKey); err != nil {
-			ne.publishFailure(taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
+			ne.publishFailure(ctx, taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
 		}
 		return
 	}
@@ -216,7 +216,7 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		isLongRunning, heartbeatTimeoutSec)
 	defer hbCancel()
 
-	ne.publishEvent(eventbus.TopicNodeResult, idempotencyKey, eventbus.Event{
+	ne.publishEvent(ctx, eventbus.TopicNodeResult, idempotencyKey, eventbus.Event{
 		TaskID: taskID,
 		NodeID: nodeID,
 		Status: "RUNNING",
@@ -244,7 +244,7 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		if result.ResourceUsage != nil {
 			failureData["resourceUsage"] = result.ResourceUsage
 		}
-		ne.publishFailure(taskID, nodeID, traceID, result.Error, idempotencyKey, failureData)
+		ne.publishFailure(ctx, taskID, nodeID, traceID, result.Error, idempotencyKey, failureData)
 		return
 	}
 
@@ -261,7 +261,7 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		data["outputRef"] = result.OutputRef
 	}
 
-	ne.publishSuccess(taskID, nodeID, traceID, data, idempotencyKey)
+	ne.publishSuccess(ctx, taskID, nodeID, traceID, data, idempotencyKey)
 }
 
 // hydratePayloadFromDB reads image_urls and long-running metadata from the node
@@ -350,16 +350,16 @@ func (ne *NodeExecutor) setupLongRunningHeartbeat(
 	)
 
 	// First heartbeat immediately.
-	ne.publishProgress(taskID, nodeID, 0, "started")
-	ne.publishHeartbeat(taskID, nodeID, idempotencyKey)
+	ne.publishProgress(hbCtx, taskID, nodeID, 0, "started")
+	ne.publishHeartbeat(hbCtx, taskID, nodeID, idempotencyKey)
 
 	// Progress callback for the tool.
 	progressCb := func(_ context.Context, update tool.ProgressUpdate) {
 		if update.Progress > 0 {
-			ne.publishProgress(taskID, nodeID, update.Progress, update.Step)
+			ne.publishProgress(hbCtx, taskID, nodeID, update.Progress, update.Step)
 		}
 		if update.Checkpoint != nil {
-			ne.publishCheckpoint(taskID, nodeID, update.Progress, update.Step, update.Checkpoint)
+			ne.publishCheckpoint(hbCtx, taskID, nodeID, update.Progress, update.Step, update.Checkpoint)
 		}
 	}
 
@@ -372,7 +372,7 @@ func (ne *NodeExecutor) setupLongRunningHeartbeat(
 			case <-hbCtx.Done():
 				return
 			case <-ticker.C:
-				ne.publishHeartbeat(taskID, nodeID, idempotencyKey)
+				ne.publishHeartbeat(hbCtx, taskID, nodeID, idempotencyKey)
 			}
 		}
 	}()
@@ -772,7 +772,7 @@ func firstString(primary map[string]interface{}, secondary map[string]interface{
 	return ""
 }
 
-func (ne *NodeExecutor) publishSuccess(taskID, nodeID, traceID string, data map[string]interface{}, idempotencyKey string) {
+func (ne *NodeExecutor) publishSuccess(ctx context.Context, taskID, nodeID, traceID string, data map[string]interface{}, idempotencyKey string) {
 	sanitizedData := repository.SanitizeOutputForPersistence(data)
 	result := model.NodeResultEvent{
 		TaskID:         taskID,
@@ -792,11 +792,11 @@ func (ne *NodeExecutor) publishSuccess(taskID, nodeID, traceID string, data map[
 		IdempotencyKey: result.IdempotencyKey,
 	}
 
-	ne.publishEvent(eventbus.TopicNodeResult, idempotencyKey, event)
+	ne.publishEvent(ctx, eventbus.TopicNodeResult, idempotencyKey, event)
 	zap.L().Info("Node execution succeeded", zap.String("nodeId", nodeID))
 }
 
-func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey string, data map[string]interface{}) {
+func (ne *NodeExecutor) publishFailure(ctx context.Context, taskID, nodeID, traceID, errMsg, idempotencyKey string, data map[string]interface{}) {
 	sanitizedData := repository.SanitizeOutputForPersistence(data)
 	result := model.NodeResultEvent{
 		TaskID:         taskID,
@@ -817,7 +817,7 @@ func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempote
 		IdempotencyKey: result.IdempotencyKey,
 	}
 
-	ne.publishEvent(eventbus.TopicNodeResult, idempotencyKey, event)
+	ne.publishEvent(ctx, eventbus.TopicNodeResult, idempotencyKey, event)
 	zap.L().Info("Node execution failed",
 		zap.String("nodeId", nodeID),
 		zap.String("error", errMsg),
@@ -827,7 +827,7 @@ func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempote
 // ── Long-running task helpers ──
 
 // publishHeartbeat sends a heartbeat event for a long-running node.
-func (ne *NodeExecutor) publishHeartbeat(taskID, nodeID, idempotencyKey string) {
+func (ne *NodeExecutor) publishHeartbeat(ctx context.Context, taskID, nodeID, idempotencyKey string) {
 	hbKey := idempotencyKey + "-hb"
 	event := eventbus.Event{
 		TaskID:         taskID,
@@ -835,11 +835,11 @@ func (ne *NodeExecutor) publishHeartbeat(taskID, nodeID, idempotencyKey string) 
 		Status:         "HEARTBEAT",
 		IdempotencyKey: hbKey,
 	}
-	ne.publishEvent(eventbus.TopicProgress, hbKey, event)
+	ne.publishEvent(ctx, eventbus.TopicProgress, hbKey, event)
 }
 
 // publishProgress sends a progress update event for a long-running node.
-func (ne *NodeExecutor) publishProgress(taskID, nodeID string, progress float64, step string) {
+func (ne *NodeExecutor) publishProgress(ctx context.Context, taskID, nodeID string, progress float64, step string) {
 	event := eventbus.Event{
 		TaskID: taskID,
 		NodeID: nodeID,
@@ -849,11 +849,11 @@ func (ne *NodeExecutor) publishProgress(taskID, nodeID string, progress float64,
 			"step":     step,
 		},
 	}
-	ne.publishEvent(eventbus.TopicProgress, taskID+"-"+nodeID+"-progress", event)
+	ne.publishEvent(ctx, eventbus.TopicProgress, taskID+"-"+nodeID+"-progress", event)
 }
 
 // publishCheckpoint sends a checkpoint event for a long-running node.
-func (ne *NodeExecutor) publishCheckpoint(taskID, nodeID string, progress float64, step string, checkpoint map[string]interface{}) {
+func (ne *NodeExecutor) publishCheckpoint(ctx context.Context, taskID, nodeID string, progress float64, step string, checkpoint map[string]interface{}) {
 	event := eventbus.Event{
 		TaskID: taskID,
 		NodeID: nodeID,
@@ -864,18 +864,18 @@ func (ne *NodeExecutor) publishCheckpoint(taskID, nodeID string, progress float6
 			"checkpoint": checkpoint,
 		},
 	}
-	ne.publishEvent(eventbus.TopicProgress, taskID+"-"+nodeID+"-checkpoint", event)
+	ne.publishEvent(ctx, eventbus.TopicProgress, taskID+"-"+nodeID+"-checkpoint", event)
 	zap.L().Info("Checkpoint saved",
 		zap.String("nodeId", nodeID),
 		zap.Float64("progress", progress),
 	)
 }
 
-func (ne *NodeExecutor) publishEvent(topic, key string, event eventbus.Event) {
+func (ne *NodeExecutor) publishEvent(ctx context.Context, topic, key string, event eventbus.Event) {
 	if ne == nil || ne.producer == nil {
 		return
 	}
-	_ = ne.producer.Publish(topic, key, event)
+	_ = eventbus.PublishWithContext(ctx, ne.producer, topic, key, event)
 }
 
 // resolveNodeReferences scans parameters for {{node_id.output.field}} references,

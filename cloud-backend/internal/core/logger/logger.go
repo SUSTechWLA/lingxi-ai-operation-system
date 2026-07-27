@@ -61,13 +61,24 @@ func (s *EventSink) Write(_ context.Context, event observability.Event) error {
 	if observability.ContainsSecret(event) {
 		return errors.New("refusing to log observability event containing secret material")
 	}
-	WithCorrelation(s.logger, event.Correlation).Info("observability.event",
+	log := WithCorrelation(s.logger, event.Correlation)
+	fields := []zap.Field{
 		zap.String("eventId", event.EventID),
 		zap.String("eventType", string(event.EventType)),
 		zap.String("severity", string(event.Severity)),
 		zap.String("messageKey", event.MessageKey),
 		zap.Any("event", event),
-	)
+	}
+	switch event.Severity {
+	case observability.SeverityDebug:
+		log.Debug("observability.event", fields...)
+	case observability.SeverityWarn:
+		log.Warn("observability.event", fields...)
+	case observability.SeverityError:
+		log.Error("observability.event", fields...)
+	default:
+		log.Info("observability.event", fields...)
+	}
 	return nil
 }
 

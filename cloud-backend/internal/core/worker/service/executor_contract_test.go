@@ -10,9 +10,36 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
 	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
+
+func TestProgressCheckpointAndHeartbeatPublishExecutionCorrelation(t *testing.T) {
+	publisher := &recordingEventPublisher{}
+	nodeExecutor := NewNodeExecutor(tool.NewToolRegistry(), publisher, config.WorkerConfig{}, nil, nil, nil)
+	correlation := observability.Correlation{
+		TraceID:      "4bf92f3577b34da6a3ce929d0e0e4736",
+		SpanID:       "00f067aa0ba902b7",
+		ParentSpanID: "b7ad6b7169203331",
+	}
+	ctx := observability.WithCorrelation(context.Background(), correlation)
+
+	nodeExecutor.publishProgress(ctx, "task", "node", 0.5, "half")
+	nodeExecutor.publishCheckpoint(ctx, "task", "node", 0.5, "half", map[string]interface{}{"frame": 10})
+	nodeExecutor.publishHeartbeat(ctx, "task", "node", "idem")
+
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if len(publisher.events) != 3 {
+		t.Fatalf("published events = %d, want 3", len(publisher.events))
+	}
+	for i, event := range publisher.events {
+		if event.TraceID != correlation.TraceID || event.SpanID != correlation.SpanID || event.ParentSpanID != correlation.ParentSpanID {
+			t.Errorf("event %d correlation = %#v", i, event)
+		}
+	}
+}
 
 func TestExecuteNodeBlocksUnresolvedExactReferenceBeforeToolExecution(t *testing.T) {
 	registry := tool.NewToolRegistry()
