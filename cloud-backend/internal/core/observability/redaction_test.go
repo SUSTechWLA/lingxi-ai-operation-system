@@ -238,3 +238,44 @@ func TestContainsSecretRejectsUnsafeDecodedCausalEventReference(t *testing.T) {
 		t.Fatal("ContainsSecret() accepted unsafe decoded causal reference")
 	}
 }
+
+func TestContainsSecretChecksEveryDecodedCausalEventAlias(t *testing.T) {
+	value := map[string]any{
+		"error": map[string]any{
+			"causedByEventId":    "evt_01j99zstagefailed",
+			"CAUSED_BY_EVENT_ID": "evt_authorization_Bearer_secret-value",
+		},
+	}
+
+	for attempt := 0; attempt < 2048; attempt++ {
+		if !ContainsSecret(value) {
+			t.Fatalf("ContainsSecret() accepted mixed safe/unsafe aliases on attempt %d", attempt)
+		}
+	}
+}
+
+func TestContainsSecretAcceptsOnlySafeDecodedCausalEventAlias(t *testing.T) {
+	value := map[string]any{
+		"error": map[string]any{
+			"CAUSED_BY_EVENT_ID": "evt_01j99zstagefailed",
+		},
+	}
+
+	for attempt := 0; attempt < 128; attempt++ {
+		if ContainsSecret(value) {
+			t.Fatalf("ContainsSecret() rejected safe alias on attempt %d", attempt)
+		}
+	}
+}
+
+func TestContainsSecretRejectsNonStringDecodedCausalEventReference(t *testing.T) {
+	value := map[string]any{
+		"error": map[string]any{
+			"causedByEventId": 42,
+		},
+	}
+
+	if !ContainsSecret(value) {
+		t.Fatal("ContainsSecret() accepted non-string causal reference")
+	}
+}

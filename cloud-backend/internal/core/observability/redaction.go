@@ -169,7 +169,9 @@ func decodedUnsafeCausalEventReference(value reflect.Value) bool {
 			continue
 		}
 		causedBy, ok := stringValue(iter.Value())
-		return ok && causedBy != "" && !safeCausalEventReference(causedBy)
+		if !ok || !safeCausalEventReference(causedBy) {
+			return true
+		}
 	}
 	return false
 }
