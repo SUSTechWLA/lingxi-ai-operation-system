@@ -117,6 +117,100 @@ func TestRunnerBackgroundFailureZapOmitsPlannerPromptAndBody(t *testing.T) {
 	}
 }
 
+func TestRunnerBackgroundPersistsConsistentCancellationAndTimeoutTerminals(t *testing.T) {
+	tests := []struct {
+		name            string
+		plannerErr      error
+		wantRunStatus   RunStatus
+		wantStartPhase  string
+		wantEventType   observability.EventType
+		wantExecStatus  observability.ExecutionStatus
+		wantSeverity    observability.Severity
+		wantErrorCode   string
+		wantCallbackErr bool
+	}{
+		{
+			name: "run cancellation", plannerErr: errRunCancelled,
+			wantRunStatus: RunStatusCancelled, wantStartPhase: "cancelled",
+			wantEventType: "agent.run.cancelled", wantExecStatus: observability.ExecutionStatusCancelled,
+			wantSeverity: observability.SeverityWarn,
+		},
+		{
+			name: "context cancellation", plannerErr: context.Canceled,
+			wantRunStatus: RunStatusCancelled, wantStartPhase: "cancelled",
+			wantEventType: "agent.run.cancelled", wantExecStatus: observability.ExecutionStatusCancelled,
+			wantSeverity: observability.SeverityWarn,
+		},
+		{
+			name: "deadline", plannerErr: context.DeadlineExceeded,
+			wantRunStatus: RunStatusFailed, wantStartPhase: "failed",
+			wantEventType: "agent.run.failed", wantExecStatus: observability.ExecutionStatusFailed,
+			wantSeverity: observability.SeverityError, wantErrorCode: "AGENT.RUN.TIMEOUT", wantCallbackErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newMemoryRunStore()
+			sink := &agentEventSink{}
+			emitter := observability.NewEmitter(
+				observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
+				observability.Runtime{}, sink, 32,
+			)
+			callbacks := make([]RunTerminalEvent, 0, 1)
+			runner := NewRunner(
+				&fakeOrchestrator{}, store, staticPlanner{err: tt.plannerErr},
+				NewPlanGuard(nil, nil), NewPlanCompiler(nil),
+			).WithObservability(emitter).WithTerminalCallback(func(_ context.Context, event RunTerminalEvent) error {
+				callbacks = append(callbacks, event)
+				return nil
+			})
+			req := StartRunRequest{UserID: "user-1", Message: "make"}
+			run := newRunShell(req)
+			if err := store.SaveRun(context.Background(), run); err != nil {
+				t.Fatal(err)
+			}
+
+			runner.completeStartInBackground(req, run, "")
+			if err := emitter.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			stored, err := store.FindRun(context.Background(), run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored == nil || stored.Status != tt.wantRunStatus || stored.Metadata["startPhase"] != tt.wantStartPhase {
+				t.Fatalf("stored run=%+v, want status=%s startPhase=%s", stored, tt.wantRunStatus, tt.wantStartPhase)
+			}
+			if len(callbacks) != 1 || callbacks[0].Status != tt.wantRunStatus {
+				t.Fatalf("callbacks=%+v, want one %s terminal", callbacks, tt.wantRunStatus)
+			}
+			if (callbacks[0].Error != "") != tt.wantCallbackErr {
+				t.Fatalf("callback error=%q, want present=%v", callbacks[0].Error, tt.wantCallbackErr)
+			}
+
+			var terminal *observability.Event
+			for _, event := range sink.snapshot() {
+				if event.EventType == tt.wantEventType {
+					captured := event
+					terminal = &captured
+				}
+			}
+			if terminal == nil || terminal.Execution.Status != tt.wantExecStatus || terminal.Severity != tt.wantSeverity {
+				t.Fatalf("terminal=%+v events=%+v", terminal, sink.snapshot())
+			}
+			if tt.wantErrorCode == "" {
+				if terminal.Error != nil {
+					t.Fatalf("cancellation terminal error=%+v", terminal.Error)
+				}
+			} else if terminal.Error == nil || terminal.Error.Code != tt.wantErrorCode {
+				t.Fatalf("timeout terminal error=%+v, want %s", terminal.Error, tt.wantErrorCode)
+			}
+		})
+	}
+}
+
 type agentEventSink struct {
 	mu     sync.Mutex
 	events []observability.Event
@@ -334,6 +428,47 @@ func TestRunnerRepairCancellationUsesCancelledEventsWithoutError(t *testing.T) {
 		if !found {
 			t.Fatalf("missing cancellation %s events=%+v", key, sink.snapshot())
 		}
+	}
+}
+
+func TestRunnerPlanJudgeCancellationUsesCancelledEventContract(t *testing.T) {
+	sink := &agentEventSink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud", Component: "agent", Environment: "test"},
+		observability.Runtime{}, sink, 32,
+	)
+	catalog := staticToolCatalog{"known": {Name: "known"}}
+	plan := &AgentPlan{
+		Goal: "make", Domain: "general", Mode: "dynamic_agent",
+		Steps: []AgentStep{{ID: "step", Tool: "known", Arguments: map[string]interface{}{}}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	judge := cancellingPlanJudge{cancel: cancel}
+	runner := NewRunner(
+		&fakeOrchestrator{taskID: "task-1"}, newMemoryRunStore(), staticPlanner{plan: plan},
+		NewPlanGuard(catalog, nil), NewPlanCompiler(catalog),
+	).WithPlanJudge(judge).WithObservability(emitter)
+
+	if _, err := runner.Start(ctx, StartRunRequest{UserID: "user-1", Message: "make"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start error=%v, want context.Canceled", err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var cancelled int
+	for _, event := range sink.snapshot() {
+		if event.EventType != observability.EventType("verify.check.cancelled") {
+			continue
+		}
+		cancelled++
+		if event.MessageKey != "verify.check.cancelled" || event.Execution.Status != observability.ExecutionStatusCancelled ||
+			event.Severity != observability.SeverityWarn || event.Error != nil {
+			t.Fatalf("plan judge cancellation event=%+v", event)
+		}
+	}
+	if cancelled != 1 {
+		t.Fatalf("verify cancellation count=%d events=%+v", cancelled, sink.snapshot())
 	}
 }
 
@@ -1463,6 +1598,15 @@ type recordingPlanJudge struct {
 	called   bool
 	passed   bool
 	warnings []PlanJudgeWarning
+}
+
+type cancellingPlanJudge struct {
+	cancel context.CancelFunc
+}
+
+func (j cancellingPlanJudge) Evaluate(*AgentPlan) PlanJudgeReport {
+	j.cancel()
+	return PlanJudgeReport{Passed: true}
 }
 
 func (j *recordingPlanJudge) Evaluate(*AgentPlan) PlanJudgeReport {

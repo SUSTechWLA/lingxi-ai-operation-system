@@ -313,6 +313,8 @@ func translatorBootstrapEvent(event Event) bool {
 		return event.MessageKey == "llm.call.completed"
 	case EventTypeLLMCallFailed:
 		return event.MessageKey == "llm.call.failed"
+	case EventTypeLLMCallCancelled:
+		return event.MessageKey == "llm.call.cancelled"
 	case EventTypeWorkflowStageStarted:
 		return event.MessageKey == "translator.dag.started"
 	case EventTypeWorkflowStageCompleted:

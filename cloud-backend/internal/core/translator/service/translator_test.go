@@ -41,7 +41,7 @@ func (s *translatorEventSink) snapshot() []observability.Event {
 	return append([]observability.Event(nil), s.events...)
 }
 
-func TestTranslateToDagEmitsPairedFailureWithoutPrompt(t *testing.T) {
+func TestTranslateToDagEmitsPairedCancellationWithoutPrompt(t *testing.T) {
 	const privatePrompt = "PRIVATE_TRANSLATOR_PROMPT_SENTINEL"
 	sink := &translatorEventSink{}
 	emitter := observability.NewEmitter(
@@ -80,7 +80,7 @@ func TestTranslateToDagEmitsPairedFailureWithoutPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := sink.snapshot()
-	var started, failed int
+	var started, cancelled int
 	for _, event := range events {
 		if err := event.Validate(); err != nil {
 			t.Fatalf("invalid translator event %s: %v", event.EventType, err)
@@ -88,12 +88,16 @@ func TestTranslateToDagEmitsPairedFailureWithoutPrompt(t *testing.T) {
 		switch event.EventType {
 		case observability.EventTypeLLMCallStarted:
 			started++
-		case observability.EventTypeLLMCallFailed:
-			failed++
+		case observability.EventType("llm.call.cancelled"):
+			cancelled++
+			if event.MessageKey != "llm.call.cancelled" || event.Execution.Status != observability.ExecutionStatusCancelled ||
+				event.Severity != observability.SeverityWarn || event.Error != nil {
+				t.Fatalf("LLM cancellation event=%+v", event)
+			}
 		}
 	}
-	if started != 1 || failed != 1 {
-		t.Fatalf("LLM event pairing started=%d failed=%d events=%+v", started, failed, events)
+	if started != 1 || cancelled != 1 {
+		t.Fatalf("LLM event pairing started=%d cancelled=%d events=%+v", started, cancelled, events)
 	}
 	wire, err := json.Marshal(events)
 	if err != nil {

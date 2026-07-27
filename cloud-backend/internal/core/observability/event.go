@@ -56,6 +56,7 @@ const (
 	EventTypeLLMCallStarted                 EventType = "llm.call.started"
 	EventTypeLLMCallCompleted               EventType = "llm.call.completed"
 	EventTypeLLMCallFailed                  EventType = "llm.call.failed"
+	EventTypeLLMCallCancelled               EventType = "llm.call.cancelled"
 	EventTypeMCPConnectionStarted           EventType = "mcp.connection.started"
 	EventTypeMCPConnectionCompleted         EventType = "mcp.connection.completed"
 	EventTypeMCPConnectionFailed            EventType = "mcp.connection.failed"
@@ -75,6 +76,7 @@ const (
 	EventTypeVerifyCheckPassed              EventType = "verify.check.passed"
 	EventTypeVerifyCheckWarned              EventType = "verify.check.warned"
 	EventTypeVerifyCheckFailed              EventType = "verify.check.failed"
+	EventTypeVerifyCheckCancelled           EventType = "verify.check.cancelled"
 	EventTypeCorrectOperationStarted        EventType = "correct.operation.started"
 	EventTypeCorrectOperationCompleted      EventType = "correct.operation.completed"
 	EventTypeCorrectOperationFailed         EventType = "correct.operation.failed"
@@ -244,6 +246,7 @@ var eventTypes = map[EventType]struct{}{
 	EventTypeLLMCallStarted:                 {},
 	EventTypeLLMCallCompleted:               {},
 	EventTypeLLMCallFailed:                  {},
+	EventTypeLLMCallCancelled:               {},
 	EventTypeMCPConnectionStarted:           {},
 	EventTypeMCPConnectionCompleted:         {},
 	EventTypeMCPConnectionFailed:            {},
@@ -263,6 +266,7 @@ var eventTypes = map[EventType]struct{}{
 	EventTypeVerifyCheckPassed:              {},
 	EventTypeVerifyCheckWarned:              {},
 	EventTypeVerifyCheckFailed:              {},
+	EventTypeVerifyCheckCancelled:           {},
 	EventTypeCorrectOperationStarted:        {},
 	EventTypeCorrectOperationCompleted:      {},
 	EventTypeCorrectOperationFailed:         {},
@@ -349,6 +353,17 @@ func (e Event) Validate() error {
 	if e.Error != nil {
 		if err := e.Error.validate(); err != nil {
 			return err
+		}
+	}
+	if e.EventType == EventTypeLLMCallCancelled || e.EventType == EventTypeVerifyCheckCancelled {
+		if e.Execution.Status != ExecutionStatusCancelled {
+			return fmt.Errorf("execution.status must be CANCELLED for %s", e.EventType)
+		}
+		if e.Severity != SeverityWarn {
+			return fmt.Errorf("severity must be WARN for %s", e.EventType)
+		}
+		if e.Error != nil {
+			return fmt.Errorf("error must be null for %s", e.EventType)
 		}
 	}
 	if _, ok := privacyClassifications[e.Privacy.Classification]; !ok {

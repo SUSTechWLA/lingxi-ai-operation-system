@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1.0",
+  "eventId": "evt_01j99zllmcancelled",
+  "occurredAt": "2026-07-27T12:00:00.000Z",
+  "ingestedAt": "2026-07-27T12:00:00.040Z",
+  "producerSequence": 1843,
+  "severity": "WARN",
+  "eventType": "llm.call.cancelled",
+  "messageKey": "llm.call.cancelled",
+  "source": {
+    "service": "cloud-backend",
+    "component": "translator",
+    "environment": "test"
+  },
+  "correlation": {
+    "traceId": "trc_01j99ztranslator",
+    "spanId": "spn_01j99zllmcall",
+    "stageId": "translator-llm-dag"
+  },
+  "execution": {
+    "status": "CANCELLED",
+    "attempt": 1,
+    "durationMs": 40
+  },
+  "runtime": {},
+  "evidence": {},
+  "error": null,
+  "privacy": {
+    "classification": "INTERNAL",
+    "redactedFields": ["translator.prompt", "translator.fullPrompt", "translator.response"]
+  }
+}

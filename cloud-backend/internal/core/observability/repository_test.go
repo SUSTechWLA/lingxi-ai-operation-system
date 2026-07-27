@@ -70,6 +70,7 @@ func TestEventRunIDAllowsOnlyExactTranslatorBootstrapLifecycle(t *testing.T) {
 		{EventTypeLLMCallStarted, "llm.call.started"},
 		{EventTypeLLMCallCompleted, "llm.call.completed"},
 		{EventTypeLLMCallFailed, "llm.call.failed"},
+		{EventType("llm.call.cancelled"), "llm.call.cancelled"},
 		{EventTypeWorkflowStageStarted, "translator.dag.started"},
 		{EventTypeWorkflowStageCompleted, "translator.dag.completed"},
 		{EventTypeWorkflowStageFailed, "translator.dag.failed"},
@@ -85,6 +86,18 @@ func TestEventRunIDAllowsOnlyExactTranslatorBootstrapLifecycle(t *testing.T) {
 		event.Correlation = Correlation{TraceID: "trc_bootstrap", SpanID: "spn_bootstrap", StageID: "translator-llm-dag"}
 		if runID, err := eventRunID(event); err != nil || runID != "" {
 			t.Errorf("%s/%s runID=%q err=%v", tt.eventType, tt.messageKey, runID, err)
+		}
+	}
+}
+
+func TestEventRunIDDoesNotWidenRunlessAllowlistForCancelledTypes(t *testing.T) {
+	for _, eventType := range []EventType{"llm.call.cancelled", "verify.check.cancelled"} {
+		event := validEvent()
+		event.EventType = eventType
+		event.MessageKey = string(eventType)
+		event.Correlation = Correlation{TraceID: "trc_cancelled", SpanID: "spn_cancelled"}
+		if _, err := eventRunID(event); err == nil {
+			t.Errorf("%s accepted without exact translator bootstrap scope or run identity", eventType)
 		}
 	}
 }

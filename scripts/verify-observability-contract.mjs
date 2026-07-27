@@ -4,6 +4,10 @@ import { readFile } from 'node:fs/promises'
 const schema = JSON.parse(await readFile('contracts/observability/v1/event.schema.json', 'utf8'))
 const errors = JSON.parse(await readFile('contracts/observability/v1/error-codes.json', 'utf8'))
 const fixture = JSON.parse(await readFile('contracts/observability/v1/example-stage-failed.json', 'utf8'))
+const cancellationFixtures = await Promise.all([
+  'contracts/observability/v1/example-llm-call-cancelled.json',
+  'contracts/observability/v1/example-verify-check-cancelled.json'
+].map(async (path) => JSON.parse(await readFile(path, 'utf8'))))
 
 const approvedCodes = [
   'AUTH.SESSION.EXPIRED',
@@ -117,6 +121,9 @@ assert.ok(Array.isArray(schema.properties.eventType.enum), 'eventType must be a 
 for (const eventType of ['request.accepted', 'request.completed', 'request.failed']) {
   assert.ok(schema.properties.eventType.enum.includes(eventType), `${eventType} must remain in the closed v1 enum`)
 }
+for (const eventType of ['llm.call.cancelled', 'verify.check.cancelled']) {
+  assert.ok(schema.properties.eventType.enum.includes(eventType), `${eventType} must be registered in v1`)
+}
 assert.ok(schema.properties.eventType.enum.includes(fixture.eventType), 'fixture eventType must be registered')
 assert.match(schema.$defs.error.properties.developerDetail.pattern, /^\^diagnostic\\\./, 'developerDetail must be a diagnostic key')
 for (const field of schema.required) assert.ok(Object.hasOwn(fixture, field), 'missing ' + field)
@@ -160,6 +167,28 @@ assertInvalidEvent('malformed nested correlation field', invalidTrace)
 const invalidEventType = structuredClone(fixture)
 invalidEventType.eventType = 'workflow.stage.experimental'
 assertInvalidEvent('unregistered event type', invalidEventType)
+
+for (const cancellation of cancellationFixtures) {
+  const eventType = cancellation.eventType
+  assert.ok(['llm.call.cancelled', 'verify.check.cancelled'].includes(eventType), `unexpected cancellation fixture ${eventType}`)
+  assert.equal(cancellation.messageKey, eventType, `${eventType} message key drifted`)
+  assert.equal(cancellation.severity, 'WARN', `${eventType} severity drifted`)
+  assert.equal(cancellation.execution.status, 'CANCELLED', `${eventType} status drifted`)
+  assert.equal(cancellation.error, null, `${eventType} error must be null`)
+  assert.deepEqual(validateEvent(cancellation), [], `${eventType} cancellation fixture was rejected`)
+
+  const failedStatus = structuredClone(cancellation)
+  failedStatus.execution.status = 'FAILED'
+  assertInvalidEvent(`${eventType} with FAILED status`, failedStatus)
+
+  const infoSeverity = structuredClone(cancellation)
+  infoSeverity.severity = 'INFO'
+  assertInvalidEvent(`${eventType} with INFO severity`, infoSeverity)
+
+  const structuredError = structuredClone(cancellation)
+  structuredError.error = structuredClone(fixture.error)
+  assertInvalidEvent(`${eventType} with structured error`, structuredError)
+}
 
 const unknownEvidenceField = structuredClone(fixture)
 unknownEvidenceField.evidence.userInput = 'synthetic-test-value'

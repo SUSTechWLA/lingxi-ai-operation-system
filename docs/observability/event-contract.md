@@ -26,6 +26,13 @@ Agent deadlines are failures, not cancellations: the nested boundary uses
 `WORKFLOW.STAGE.TIMEOUT` and the outer run uses `AGENT.RUN.TIMEOUT`.
 Explicit cancellation and a persisted run-cancellation request remain
 `WARN`/`CANCELLED` terminals without an error object.
+Translator LLM cancellation uses `llm.call.cancelled`, and Agent plan-judge
+cancellation uses `verify.check.cancelled`; both are closed v1 event types with
+`WARN` severity, `CANCELLED` execution status, and `error: null`.
+Canonical examples are
+[`example-llm-call-cancelled.json`](../../contracts/observability/v1/example-llm-call-cancelled.json)
+and
+[`example-verify-check-cancelled.json`](../../contracts/observability/v1/example-verify-check-cancelled.json).
 
 HTTP middleware accepts W3C `traceparent`. Kafka propagation reconstructs the
 same correlation context. Producers may supply existing domain IDs (`wfr-`,

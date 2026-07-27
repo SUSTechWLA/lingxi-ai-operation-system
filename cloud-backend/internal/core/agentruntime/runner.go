@@ -358,25 +358,44 @@ func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run, ownerU
 	ctx, cancel := context.WithTimeout(parent, asyncRunStartTimeout)
 	defer cancel()
 	if _, err := r.completeStart(ctx, req, run); err != nil {
-		if errors.Is(err, errRunCancelled) {
+		cancelled := errors.Is(err, errRunCancelled) || errors.Is(err, context.Canceled)
+		if cancelled {
+			current, findErr := r.store.FindRun(context.Background(), run.ID)
+			if findErr == nil && current != nil && current.Status == RunStatusCancelled {
+				if deliverErr := r.DeliverPendingTerminalEventsOnce(context.Background(), 1); deliverErr != nil {
+					zap.L().Warn("async agent run cancellation reconciliation failed", append([]zap.Field{zap.String("runId", run.ID)}, stableAgentDiagnosticFields("AGENT.RUNTIME.INTERNAL_FAILURE")...)...)
+				}
+				zap.L().Info("async agent run start aborted after cancellation",
+					zap.String("runId", run.ID),
+				)
+				return
+			}
+		}
+		terminal := *run
+		terminal.UpdatedAt = time.Now()
+		terminal.Metadata = copyMap(run.Metadata)
+		event := RunTerminalEvent{
+			RunID: terminal.ID, UserID: terminal.UserID,
+			Context: sanitizedRunContext(req.Context),
+		}
+		if cancelled {
+			terminal.Status = RunStatusCancelled
+			terminal.Metadata["startPhase"] = "cancelled"
+			event.Status = RunStatusCancelled
+			if saveErr := r.persistAndDeliverTerminal(context.Background(), &terminal, event); saveErr != nil {
+				zap.L().Warn("failed to persist or deliver async agent run cancellation", append([]zap.Field{zap.String("runId", run.ID)}, stableAgentDiagnosticFields("AGENT.RUNTIME.INTERNAL_FAILURE")...)...)
+			}
 			zap.L().Info("async agent run start aborted after cancellation",
 				zap.String("runId", run.ID),
 			)
 			return
 		}
-		failed := *run
-		failed.Status = RunStatusFailed
-		failed.UpdatedAt = time.Now()
-		if failed.Metadata == nil {
-			failed.Metadata = map[string]interface{}{}
-		}
-		failed.Metadata["startPhase"] = "failed"
-		failed.Metadata["error"] = err.Error()
-		event := RunTerminalEvent{
-			RunID: failed.ID, UserID: failed.UserID, Status: RunStatusFailed,
-			Context: sanitizedRunContext(req.Context), Error: err.Error(),
-		}
-		if saveErr := r.persistAndDeliverTerminal(context.Background(), &failed, event); saveErr != nil {
+		terminal.Status = RunStatusFailed
+		terminal.Metadata["startPhase"] = "failed"
+		terminal.Metadata["error"] = err.Error()
+		event.Status = RunStatusFailed
+		event.Error = err.Error()
+		if saveErr := r.persistAndDeliverTerminal(context.Background(), &terminal, event); saveErr != nil {
 			zap.L().Warn("failed to persist or deliver async agent run failure", append([]zap.Field{zap.String("runId", run.ID)}, stableAgentDiagnosticFields("AGENT.RUNTIME.INTERNAL_FAILURE")...)...)
 		}
 		zap.L().Warn("async agent run start failed", append([]zap.Field{zap.String("runId", run.ID)}, stableAgentDiagnosticFields(agentErrorCode(err))...)...)
@@ -519,8 +538,14 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 	if r.planJudge != nil {
 		judgeCorrelation := correlation
 		judgeCorrelation.StageID = "agent-plan-judge"
-		err = r.observeAgentBoundary(ctx, judgeCorrelation, agentBoundarySpec{started: observability.EventTypeVerifyCheckStarted, completed: observability.EventTypeVerifyCheckPassed, failed: observability.EventTypeVerifyCheckFailed, cancelled: observability.EventTypeVerifyCheckWarned, startKey: "verify.check.started", completeKey: "verify.check.passed", failKey: "verify.check.failed", cancelKey: "verify.check.cancelled", errorCode: "AGENT.PLAN.VALIDATION_FAILED", component: "agent-plan-judge"}, func() error {
+		err = r.observeAgentBoundary(ctx, judgeCorrelation, agentBoundarySpec{started: observability.EventTypeVerifyCheckStarted, completed: observability.EventTypeVerifyCheckPassed, failed: observability.EventTypeVerifyCheckFailed, cancelled: observability.EventTypeVerifyCheckCancelled, startKey: "verify.check.started", completeKey: "verify.check.passed", failKey: "verify.check.failed", cancelKey: "verify.check.cancelled", errorCode: "AGENT.PLAN.VALIDATION_FAILED", component: "agent-plan-judge"}, func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			judgeReport = r.planJudge.Evaluate(plan)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if !judgeReport.Passed {
 				return errors.New("agent plan judge rejected plan")
 			}

@@ -123,6 +123,7 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (res
 			if errors.Is(retErr, context.Canceled) {
 				severity = observability.SeverityWarn
 				status = observability.ExecutionStatusCancelled
+				llmType = observability.EventTypeLLMCallCancelled
 				stageType = observability.EventTypeWorkflowStageCancelled
 			} else if errors.Is(retErr, context.DeadlineExceeded) {
 				eventErr = observability.NormalizeError("LLM.CALL.TIMEOUT", retErr, "translator", "")

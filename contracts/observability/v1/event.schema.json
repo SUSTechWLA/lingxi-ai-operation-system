@@ -30,6 +30,23 @@
       "then": {
         "properties": { "error": { "$ref": "#/$defs/error" } }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": { "enum": ["llm.call.cancelled", "verify.check.cancelled"] }
+        },
+        "required": ["eventType"]
+      },
+      "then": {
+        "properties": {
+          "severity": { "const": "WARN" },
+          "execution": {
+            "properties": { "status": { "const": "CANCELLED" } }
+          },
+          "error": { "type": "null" }
+        }
+      }
     }
   ],
   "properties": {
@@ -78,6 +95,7 @@
         "llm.call.started",
         "llm.call.completed",
         "llm.call.failed",
+        "llm.call.cancelled",
         "mcp.connection.started",
         "mcp.connection.completed",
         "mcp.connection.failed",
@@ -97,6 +115,7 @@
         "verify.check.passed",
         "verify.check.warned",
         "verify.check.failed",
+        "verify.check.cancelled",
         "correct.operation.started",
         "correct.operation.completed",
         "correct.operation.failed",

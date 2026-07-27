@@ -85,6 +85,50 @@ func TestRequestTerminalEventTypesAreRegistered(t *testing.T) {
 	}
 }
 
+func TestEventValidateAcceptsCancellationTerminalContract(t *testing.T) {
+	for _, eventType := range []EventType{"llm.call.cancelled", "verify.check.cancelled"} {
+		t.Run(string(eventType), func(t *testing.T) {
+			event := validEvent()
+			event.EventType = eventType
+			event.MessageKey = string(eventType)
+			event.Execution.Status = ExecutionStatusCancelled
+			event.Severity = SeverityWarn
+			event.Error = nil
+			if err := event.Validate(); err != nil {
+				t.Fatalf("valid cancellation rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestEventValidateRejectsInvalidCancellationTerminalContract(t *testing.T) {
+	mutations := []struct {
+		name   string
+		mutate func(*Event)
+		want   string
+	}{
+		{"status", func(event *Event) { event.Execution.Status = ExecutionStatusFailed }, "execution.status"},
+		{"severity", func(event *Event) { event.Severity = SeverityInfo }, "severity"},
+		{"error", func(event *Event) { event.Error = validEvent().Error }, "error"},
+	}
+	for _, eventType := range []EventType{"llm.call.cancelled", "verify.check.cancelled"} {
+		for _, mutation := range mutations {
+			t.Run(string(eventType)+"/"+mutation.name, func(t *testing.T) {
+				event := validEvent()
+				event.EventType = eventType
+				event.MessageKey = string(eventType)
+				event.Execution.Status = ExecutionStatusCancelled
+				event.Severity = SeverityWarn
+				event.Error = nil
+				mutation.mutate(&event)
+				if err := event.Validate(); err == nil || !strings.Contains(err.Error(), mutation.want) {
+					t.Fatalf("Validate() error=%v, want %s", err, mutation.want)
+				}
+			})
+		}
+	}
+}
+
 func TestEventValidateRejectsInvalidContractFields(t *testing.T) {
 	tests := []struct {
 		name   string
