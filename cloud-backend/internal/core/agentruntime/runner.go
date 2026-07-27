@@ -293,7 +293,13 @@ func (r *Runner) attachToolSnapshot(ctx context.Context, req *StartRunRequest, r
 	} else if r != nil && r.guard != nil {
 		if provider, ok := r.guard.tools.(ToolListProvider); ok {
 			manifests = provider.ListManifests()
+		} else if r.guard.tools != nil {
+			return fmt.Errorf("build tool registry snapshot: catalog does not support immutable listing")
 		}
+		req.requestToolSnapshot = newRequestToolSnapshot(manifests, nil)
+		manifests = req.requestToolSnapshot.ListManifests()
+	} else {
+		req.requestToolSnapshot = newRequestToolSnapshot(nil, nil)
 	}
 	snapshot, err := BuildToolSnapshot(manifests)
 	if err != nil {
@@ -320,6 +326,9 @@ func (r *Runner) attachToolSnapshot(ctx context.Context, req *StartRunRequest, r
 	}
 	if req.requestToolSnapshot != nil {
 		run.RunManifest.MCPRunnerRevisions = req.requestToolSnapshot.RunnerRevisions()
+	}
+	if err := validateAgentRunManifest(run.RunManifest); err != nil {
+		return fmt.Errorf("validate run manifest: %w", err)
 	}
 	return nil
 }

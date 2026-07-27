@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
@@ -2407,6 +2408,19 @@ type staticToolCatalog map[string]*tool.ToolManifest
 
 func (c staticToolCatalog) GetManifest(name string) *tool.ToolManifest {
 	return c[name]
+}
+
+func (c staticToolCatalog) ListManifests() []*tool.ToolManifest {
+	names := make([]string, 0, len(c))
+	for name := range c {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	manifests := make([]*tool.ToolManifest, 0, len(names))
+	for _, name := range names {
+		manifests = append(manifests, c[name])
+	}
+	return manifests
 }
 
 func findStep(t *testing.T, plan *AgentPlan, id string) AgentStep {

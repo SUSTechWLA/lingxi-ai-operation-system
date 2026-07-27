@@ -11,6 +11,18 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/config"
 )
 
+const (
+	// Run-manifest limits bound durable metadata independently of prompt/tool
+	// payload size. Agent and workflow builders share this persistence contract.
+	RunManifestLimitExceededCode  = "RUN_MANIFEST_LIMIT_EXCEEDED"
+	RunManifestMaxBytes           = 32 * 1024
+	RunManifestMaxRunnerCatalogs  = 128
+	RunManifestMaxIdentifierBytes = 256
+	RunManifestMaxRunnerIDBytes   = 128
+	RunManifestMaxVersionBytes    = 128
+	RunManifestMaxHashBytes       = 128
+)
+
 const localMCPReplanMigrationSQL = `UPDATE local_jobs
 SET status='FAILED',
     error_message='MCP_CATALOG_REPLAN_REQUIRED',
@@ -111,6 +123,13 @@ type migrationExecer interface {
 func ensureVideoProjectConfigRevision(ctx context.Context, execer migrationExecer) error {
 	if _, err := execer.Exec(ctx, videoProjectConfigRevisionMigration); err != nil {
 		return fmt.Errorf("required video project config revision schema: %w", err)
+	}
+	return nil
+}
+
+func ensureRunManifestSchema(ctx context.Context, execer migrationExecer) error {
+	if _, err := execer.Exec(ctx, runManifestMigration); err != nil {
+		return fmt.Errorf("required run manifest schema: %w", err)
 	}
 	return nil
 }
@@ -526,7 +545,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	if _, err := pool.Exec(ctx, workflowRunSchema); err != nil {
 		zap.L().Warn("Failed to run workflow run migrations (non-fatal)", zap.Error(err))
 	}
-	if _, err := pool.Exec(ctx, runManifestMigration); err != nil {
+	if err := ensureRunManifestSchema(ctx, pool); err != nil {
 		zap.L().Fatal("Failed to install required run manifest schema", zap.Error(err))
 	}
 

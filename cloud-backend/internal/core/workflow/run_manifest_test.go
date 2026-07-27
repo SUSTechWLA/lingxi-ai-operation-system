@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/tangying-ai/aios-core/internal/core/database"
 	"github.com/tangying-ai/aios-core/internal/core/observability"
 )
 
@@ -31,6 +34,44 @@ func (r workflowManifestRow) Scan(dest ...interface{}) error {
 		target.Elem().Set(value)
 	}
 	return nil
+}
+
+type workflowRepositoryCall struct {
+	query string
+	args  []interface{}
+}
+
+type fakeWorkflowRows struct {
+	rows  []workflowManifestRow
+	index int
+}
+
+func (r *fakeWorkflowRows) Next() bool { return r.index < len(r.rows) }
+func (r *fakeWorkflowRows) Scan(dest ...interface{}) error {
+	row := r.rows[r.index]
+	r.index++
+	return row.Scan(dest...)
+}
+func (r *fakeWorkflowRows) Close()     {}
+func (r *fakeWorkflowRows) Err() error { return nil }
+
+type fakeWorkflowRunDB struct {
+	execs     []workflowRepositoryCall
+	row       workflowManifestRow
+	queryRows *fakeWorkflowRows
+}
+
+func (db *fakeWorkflowRunDB) Exec(_ context.Context, query string, args ...interface{}) (pgconn.CommandTag, error) {
+	db.execs = append(db.execs, workflowRepositoryCall{query: query, args: append([]interface{}(nil), args...)})
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
+}
+func (db *fakeWorkflowRunDB) QueryRow(_ context.Context, query string, args ...interface{}) workflowRunScanner {
+	db.execs = append(db.execs, workflowRepositoryCall{query: query, args: append([]interface{}(nil), args...)})
+	return db.row
+}
+func (db *fakeWorkflowRunDB) Query(_ context.Context, query string, args ...interface{}) (workflowRunRows, error) {
+	db.execs = append(db.execs, workflowRepositoryCall{query: query, args: append([]interface{}(nil), args...)})
+	return db.queryRows, nil
 }
 
 func TestTraceIDForRunUsesExistingCorrelation(t *testing.T) {
@@ -61,6 +102,23 @@ func TestBuildWorkflowRunManifestExcludesRequestPayloads(t *testing.T) {
 		if strings.Contains(string(wire), forbidden) {
 			t.Fatalf("workflow run manifest leaked %q: %s", forbidden, wire)
 		}
+	}
+}
+
+func TestWorkflowRunManifestUsesSharedBounds(t *testing.T) {
+	manifest := &RunManifest{
+		SchemaVersion: strings.Repeat("v", database.RunManifestMaxVersionBytes),
+		Runtime:       "cloud-workflow",
+		RunID:         strings.Repeat("r", database.RunManifestMaxIdentifierBytes),
+		TraceID:       strings.Repeat("t", database.RunManifestMaxIdentifierBytes),
+		CreatedAt:     time.Now().UTC(),
+	}
+	if err := validateWorkflowRunManifest(manifest); err != nil {
+		t.Fatalf("workflow manifest at bounds failed: %v", err)
+	}
+	manifest.RunID += "x"
+	if err := validateWorkflowRunManifest(manifest); err == nil || !strings.Contains(err.Error(), database.RunManifestLimitExceededCode) {
+		t.Fatalf("workflow manifest overflow error = %v", err)
 	}
 }
 
@@ -97,5 +155,64 @@ func TestScanWorkflowRunPreservesNullManifestAndLineage(t *testing.T) {
 	}
 	if run.RunManifest != nil || run.ParentRunID != nil || run.ReplayFromStageID != nil {
 		t.Fatalf("legacy SQL NULLs were not preserved: %#v", run)
+	}
+}
+
+func TestWorkflowRepositoryCreateFindAndListUseManifestColumns(t *testing.T) {
+	now := time.Now().UTC()
+	parent, replay := "parent-1", "stage-1"
+	row := workflowManifestRow{
+		"wfr-1", "project-1", "user-1", "template-1", "1", "task-1", RunPending, 1,
+		map[string]interface{}{}, map[string]interface{}{}, map[string]StageStatus{}, "trace-1", "snapshot-1",
+		[]byte(`{"schemaVersion":"1","runtime":"cloud-workflow","runId":"wfr-1","traceId":"trace-1","toolRegistrySnapshotId":"snapshot-1","createdAt":"2026-07-27T12:00:00Z"}`),
+		&parent, &replay, (*time.Time)(nil), (*time.Time)(nil), now,
+	}
+	db := &fakeWorkflowRunDB{row: row, queryRows: &fakeWorkflowRows{rows: []workflowManifestRow{row}}}
+	repo := newRunRepositoryWithDB(db)
+	run := &WorkflowRun{
+		ID: "wfr-1", ProjectID: "project-1", UserID: "user-1", TemplateID: "template-1", TemplateVersion: "1",
+		TaskID: "task-1", Status: RunPending, TraceID: "trace-1", ToolRegistrySnapshotID: "snapshot-1",
+		ParentRunID: &parent, ReplayFromStageID: &replay, CreatedAt: now,
+		RunManifest: &RunManifest{SchemaVersion: "1", Runtime: "cloud-workflow", RunID: "wfr-1", CreatedAt: now},
+	}
+	if err := repo.Create(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if db.execs[0].args[11] != "trace-1" || db.execs[0].args[12] != "snapshot-1" || db.execs[0].args[14] != run.ParentRunID || db.execs[0].args[15] != run.ReplayFromStageID {
+		t.Fatalf("Create argument order = %#v", db.execs[0].args)
+	}
+	found, err := repo.FindByID(context.Background(), "wfr-1")
+	if err != nil || found.ParentRunID == nil || found.RunManifest == nil {
+		t.Fatalf("FindByID run=%#v error=%v", found, err)
+	}
+	listed, err := repo.FindByProject(context.Background(), "project-1")
+	if err != nil || len(listed) != 1 || listed[0].ReplayFromStageID == nil {
+		t.Fatalf("FindByProject runs=%#v error=%v", listed, err)
+	}
+	for _, call := range db.execs {
+		compact := strings.Join(strings.Fields(call.query), " ")
+		if !strings.Contains(compact, "tool_registry_snapshot_id") || !strings.Contains(compact, "run_manifest, parent_run_id, replay_from_stage_id") {
+			t.Fatalf("repository query missing manifest columns: %s", call.query)
+		}
+	}
+	malformed := append(workflowManifestRow(nil), row...)
+	malformed[13] = []byte(`{"schemaVersion":`)
+	db.row = malformed
+	if _, err := repo.FindByID(context.Background(), "wfr-malformed"); err == nil {
+		t.Fatal("FindByID accepted malformed run manifest JSON")
+	}
+}
+
+func TestWorkflowRepositoryRejectsOversizedManifestBeforeExec(t *testing.T) {
+	db := &fakeWorkflowRunDB{}
+	repo := newRunRepositoryWithDB(db)
+	run := &WorkflowRun{RunManifest: &RunManifest{
+		SchemaVersion: "1", Runtime: "cloud-workflow", RunID: strings.Repeat("r", database.RunManifestMaxIdentifierBytes+1),
+	}}
+	if err := repo.Create(context.Background(), run); err == nil || !strings.Contains(err.Error(), database.RunManifestLimitExceededCode) {
+		t.Fatalf("Create error = %v", err)
+	}
+	if len(db.execs) != 0 {
+		t.Fatal("oversized workflow manifest reached database")
 	}
 }

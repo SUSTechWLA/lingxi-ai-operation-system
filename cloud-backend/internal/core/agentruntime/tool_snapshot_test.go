@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tangying-ai/aios-core/internal/core/database"
 	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
@@ -94,6 +96,47 @@ func TestBuildToolSnapshotRejectsAmbiguousLogicalNames(t *testing.T) {
 	}
 }
 
+func TestBuildToolSnapshotPreservesNeighboringLargeIntegers(t *testing.T) {
+	build := func(number json.Number) ToolSnapshot {
+		t.Helper()
+		snapshot, err := BuildToolSnapshot([]*tool.ToolManifest{{
+			Name: "large-number",
+			InputSchema: map[string]interface{}{
+				"type": "integer", "maximum": number,
+			},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snapshot
+	}
+
+	left := build(json.Number("9007199254740992"))
+	right := build(json.Number("9007199254740993"))
+	if left.ID == right.ID || bytes.Equal(left.CanonicalJSON, right.CanonicalJSON) {
+		t.Fatalf("neighboring large integers collided:\nleft=%s\nright=%s", left.CanonicalJSON, right.CanonicalJSON)
+	}
+	if !bytes.Contains(right.CanonicalJSON, []byte("9007199254740993")) {
+		t.Fatalf("large integer lost precision: %s", right.CanonicalJSON)
+	}
+}
+
+func TestRequestToolSnapshotPreservesJSONNumberTypeAndIsolation(t *testing.T) {
+	schema := map[string]interface{}{"maximum": json.Number("9007199254740993")}
+	snapshot := newRequestToolSnapshot([]*tool.ToolManifest{{Name: "large-number", InputSchema: schema}}, nil)
+	schema["maximum"] = json.Number("1")
+
+	cloned := snapshot.GetManifest("large-number")
+	maximum, ok := cloned.InputSchema["maximum"].(json.Number)
+	if !ok || maximum.String() != "9007199254740993" {
+		t.Fatalf("snapshot maximum = %#v (%T), want lossless json.Number", cloned.InputSchema["maximum"], cloned.InputSchema["maximum"])
+	}
+	cloned.InputSchema["maximum"] = json.Number("2")
+	if got := snapshot.GetManifest("large-number").InputSchema["maximum"]; got != json.Number("9007199254740993") {
+		t.Fatalf("snapshot mutated through returned manifest: %#v", got)
+	}
+}
+
 func TestRequestToolSnapshotDoesNotExposeMutableManifests(t *testing.T) {
 	snapshot := newRequestToolSnapshot([]*tool.ToolManifest{{Name: "alpha", Version: "1"}}, nil)
 	listed := snapshot.ListManifests()
@@ -112,6 +155,80 @@ func TestRequestToolSnapshotDoesNotExposeMutableManifests(t *testing.T) {
 type mutableSnapshotResolver struct {
 	manifests []*tool.ToolManifest
 	calls     int
+}
+
+type mutableFallbackCatalog struct {
+	manifests []*tool.ToolManifest
+}
+
+func (c *mutableFallbackCatalog) GetManifest(name string) *tool.ToolManifest {
+	for _, manifest := range c.manifests {
+		if manifest != nil && manifest.Name == name {
+			return manifest
+		}
+	}
+	return nil
+}
+
+func (c *mutableFallbackCatalog) ListManifests() []*tool.ToolManifest {
+	return append([]*tool.ToolManifest(nil), c.manifests...)
+}
+
+type fallbackSnapshotPlanner struct {
+	live         *mutableFallbackCatalog
+	seenVersions []string
+}
+
+func (p *fallbackSnapshotPlanner) GeneratePlan(_ context.Context, req StartRunRequest) (*AgentPlan, error) {
+	if req.requestToolSnapshot == nil {
+		return nil, fmt.Errorf("request snapshot missing")
+	}
+	manifest := req.requestToolSnapshot.GetManifest("alpha")
+	if manifest == nil {
+		return nil, fmt.Errorf("alpha missing from request snapshot")
+	}
+	p.seenVersions = append(p.seenVersions, manifest.Version)
+	p.live.manifests[0].Version = "2"
+	p.live.manifests[0].InputSchema = map[string]interface{}{
+		"type": "object", "required": []interface{}{"prompt"},
+		"properties": map[string]interface{}{"prompt": map[string]interface{}{"type": "string"}},
+	}
+	arguments := map[string]interface{}{}
+	if manifest.Version == "2" {
+		arguments["prompt"] = "new run"
+	}
+	return &AgentPlan{Goal: "alpha", Domain: "general", Steps: []AgentStep{{ID: "alpha", Tool: "alpha", Arguments: arguments}}}, nil
+}
+
+func TestRunnerFreezesResolverLessCatalogBeforePlanning(t *testing.T) {
+	live := &mutableFallbackCatalog{manifests: []*tool.ToolManifest{{Name: "alpha", Version: "1", Endpoint: "builtin://alpha"}}}
+	planner := &fallbackSnapshotPlanner{live: live}
+	runner := NewRunner(
+		&fakeOrchestrator{taskID: "task-fallback"}, newMemoryRunStore(), planner,
+		NewPlanGuard(live, nil), NewPlanCompiler(live),
+	)
+
+	first, err := runner.Start(context.Background(), StartRunRequest{RunID: "fallback-one", UserID: "user-a", Message: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(planner.seenVersions) != 1 || planner.seenVersions[0] != "1" {
+		t.Fatalf("planner versions = %#v, want frozen version 1", planner.seenVersions)
+	}
+	if got := first.toolSnapshot.CanonicalJSON; !bytes.Contains(got, []byte(`"version":"1"`)) || bytes.Contains(got, []byte(`"version":"2"`)) {
+		t.Fatalf("current run snapshot changed with live catalog: %s", got)
+	}
+
+	second, err := runner.Start(context.Background(), StartRunRequest{RunID: "fallback-two", UserID: "user-a", Message: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(planner.seenVersions) != 2 || planner.seenVersions[1] != "2" {
+		t.Fatalf("planner versions = %#v, want new run version 2", planner.seenVersions)
+	}
+	if first.ToolRegistrySnapshotID == second.ToolRegistrySnapshotID {
+		t.Fatal("new run did not observe fallback catalog change")
+	}
 }
 
 func (r *mutableSnapshotResolver) Resolve(context.Context, string, string, string) (*RequestToolSnapshot, error) {
@@ -224,5 +341,61 @@ func TestRunManifestContainsOnlyBoundedNonSecretMetadata(t *testing.T) {
 	}
 	if run.ParentRunID == nil || *run.ParentRunID != parent || run.ReplayFromStageID == nil || *run.ReplayFromStageID != replayStage {
 		t.Fatalf("nullable replay lineage was not preserved: %#v", run)
+	}
+}
+
+func TestAgentRunManifestCatalogBounds(t *testing.T) {
+	manifest := &RunManifest{
+		SchemaVersion: runManifestSchemaVersion, Runtime: "cloud-agent", RunID: "run-1",
+		ToolRegistrySnapshotID: "snapshot-1", ToolRegistrySHA256: strings.Repeat("a", 64), CreatedAt: time.Now().UTC(),
+	}
+	for i := 0; i < database.RunManifestMaxRunnerCatalogs; i++ {
+		manifest.MCPRunnerRevisions = append(manifest.MCPRunnerRevisions, RequestMCPRunnerRevision{
+			RunnerID: fmt.Sprintf("runner-%d", i), Revision: strings.Repeat("a", 64),
+		})
+	}
+	if err := validateAgentRunManifest(manifest); err != nil {
+		t.Fatalf("manifest at catalog count bound failed: %v", err)
+	}
+	manifest.MCPRunnerRevisions = append(manifest.MCPRunnerRevisions, RequestMCPRunnerRevision{RunnerID: "overflow", Revision: strings.Repeat("b", 64)})
+	if err := validateAgentRunManifest(manifest); err == nil || !strings.Contains(err.Error(), database.RunManifestLimitExceededCode) {
+		t.Fatalf("catalog overflow error = %v", err)
+	}
+}
+
+func TestAgentRunManifestStringAndSerializedBounds(t *testing.T) {
+	manifest := &RunManifest{
+		SchemaVersion:          strings.Repeat("v", database.RunManifestMaxVersionBytes),
+		Runtime:                "cloud-agent",
+		RunID:                  strings.Repeat("r", database.RunManifestMaxIdentifierBytes),
+		TraceID:                strings.Repeat("t", database.RunManifestMaxIdentifierBytes),
+		ToolRegistrySnapshotID: strings.Repeat("s", database.RunManifestMaxIdentifierBytes),
+		ToolRegistrySHA256:     strings.Repeat("h", database.RunManifestMaxHashBytes),
+		MCPRunnerRevisions: []RequestMCPRunnerRevision{{
+			RunnerID: strings.Repeat("r", database.RunManifestMaxRunnerIDBytes),
+			DeviceID: strings.Repeat("d", database.RunManifestMaxIdentifierBytes),
+			Revision: strings.Repeat("v", database.RunManifestMaxVersionBytes),
+		}},
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := validateAgentRunManifest(manifest); err != nil {
+		t.Fatalf("manifest at string bounds failed: %v", err)
+	}
+
+	manifest.MCPRunnerRevisions[0].RunnerID += "x"
+	if err := validateAgentRunManifest(manifest); err == nil || !strings.Contains(err.Error(), database.RunManifestLimitExceededCode) {
+		t.Fatalf("runner ID overflow error = %v", err)
+	}
+	manifest.MCPRunnerRevisions[0].RunnerID = "runner"
+	manifest.MCPRunnerRevisions = manifest.MCPRunnerRevisions[:0]
+	for i := 0; i < database.RunManifestMaxRunnerCatalogs; i++ {
+		manifest.MCPRunnerRevisions = append(manifest.MCPRunnerRevisions, RequestMCPRunnerRevision{
+			RunnerID: strings.Repeat("r", database.RunManifestMaxRunnerIDBytes),
+			DeviceID: strings.Repeat("d", database.RunManifestMaxIdentifierBytes),
+			Revision: strings.Repeat("v", database.RunManifestMaxVersionBytes),
+		})
+	}
+	if err := validateAgentRunManifest(manifest); err == nil || !strings.Contains(err.Error(), database.RunManifestLimitExceededCode) || !strings.Contains(err.Error(), "serialized bytes") {
+		t.Fatalf("serialized size overflow error = %v", err)
 	}
 }

@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tangying-ai/aios-core/internal/core/database"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -38,6 +40,72 @@ type RunManifest struct {
 	ReplayFromStageID      *string                    `json:"replayFromStageId,omitempty"`
 	MCPRunnerRevisions     []RequestMCPRunnerRevision `json:"mcpRunnerRevisions,omitempty"`
 	CreatedAt              time.Time                  `json:"createdAt"`
+}
+
+func validateAgentRunManifest(manifest *RunManifest) error {
+	if manifest == nil {
+		return nil
+	}
+	if len(manifest.MCPRunnerRevisions) > database.RunManifestMaxRunnerCatalogs {
+		return runManifestLimitError("runner catalog count", len(manifest.MCPRunnerRevisions), database.RunManifestMaxRunnerCatalogs)
+	}
+	for field, value := range map[string]string{
+		"schema version": manifest.SchemaVersion,
+	} {
+		if err := validateRunManifestString(field, value, database.RunManifestMaxVersionBytes); err != nil {
+			return err
+		}
+	}
+	for field, value := range map[string]string{
+		"runtime": manifest.Runtime, "run ID": manifest.RunID, "trace ID": manifest.TraceID,
+		"tool snapshot ID": manifest.ToolRegistrySnapshotID,
+	} {
+		if err := validateRunManifestString(field, value, database.RunManifestMaxIdentifierBytes); err != nil {
+			return err
+		}
+	}
+	if err := validateRunManifestString("tool snapshot hash", manifest.ToolRegistrySHA256, database.RunManifestMaxHashBytes); err != nil {
+		return err
+	}
+	for field, value := range map[string]*string{
+		"parent run ID": manifest.ParentRunID, "replay stage ID": manifest.ReplayFromStageID,
+	} {
+		if value != nil {
+			if err := validateRunManifestString(field, *value, database.RunManifestMaxIdentifierBytes); err != nil {
+				return err
+			}
+		}
+	}
+	for index, runner := range manifest.MCPRunnerRevisions {
+		if err := validateRunManifestString(fmt.Sprintf("runner catalog %d runner ID", index), runner.RunnerID, database.RunManifestMaxRunnerIDBytes); err != nil {
+			return err
+		}
+		if err := validateRunManifestString(fmt.Sprintf("runner catalog %d device ID", index), runner.DeviceID, database.RunManifestMaxIdentifierBytes); err != nil {
+			return err
+		}
+		if err := validateRunManifestString(fmt.Sprintf("runner catalog %d revision", index), runner.Revision, database.RunManifestMaxVersionBytes); err != nil {
+			return err
+		}
+	}
+	wire, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("marshal run manifest for limits: %w", err)
+	}
+	if len(wire) > database.RunManifestMaxBytes {
+		return runManifestLimitError("serialized bytes", len(wire), database.RunManifestMaxBytes)
+	}
+	return nil
+}
+
+func validateRunManifestString(field, value string, maximum int) error {
+	if len(value) > maximum {
+		return runManifestLimitError(field+" bytes", len(value), maximum)
+	}
+	return nil
+}
+
+func runManifestLimitError(field string, actual, maximum int) error {
+	return fmt.Errorf("%s: %s %d exceeds %d", database.RunManifestLimitExceededCode, field, actual, maximum)
 }
 
 // BuildToolSnapshot returns a deterministic snapshot without modifying the
@@ -88,7 +156,7 @@ func BuildToolSnapshot(manifests []*tool.ToolManifest) (ToolSnapshot, error) {
 			return ToolSnapshot{}, fmt.Errorf("marshal tool manifest %q: %w", name, err)
 		}
 		var value map[string]interface{}
-		if err := json.Unmarshal(wire, &value); err != nil {
+		if err := decodeSnapshotJSON(wire, &value); err != nil {
 			return ToolSnapshot{}, fmt.Errorf("decode tool manifest %q: %w", name, err)
 		}
 		normalized = append(normalized, canonicalizeSnapshotMap(value))
@@ -117,10 +185,16 @@ func cloneManifestForSnapshot(manifest *tool.ToolManifest) (*tool.ToolManifest, 
 		return nil, err
 	}
 	var clone tool.ToolManifest
-	if err := json.Unmarshal(wire, &clone); err != nil {
+	if err := decodeSnapshotJSON(wire, &clone); err != nil {
 		return nil, err
 	}
 	return &clone, nil
+}
+
+func decodeSnapshotJSON(wire []byte, target interface{}) error {
+	decoder := json.NewDecoder(bytes.NewReader(wire))
+	decoder.UseNumber()
+	return decoder.Decode(target)
 }
 
 func canonicalizeSnapshotMap(value map[string]interface{}) map[string]interface{} {

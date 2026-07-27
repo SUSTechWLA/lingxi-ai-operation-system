@@ -6,24 +6,57 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // RunRepository provides data access for WorkflowRun and StageRun.
 type RunRepository struct {
-	pool *pgxpool.Pool
+	db workflowRunDB
+}
+
+type workflowRunRows interface {
+	Next() bool
+	Scan(dest ...interface{}) error
+	Close()
+	Err() error
+}
+
+type workflowRunDB interface {
+	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...interface{}) workflowRunScanner
+	Query(ctx context.Context, sql string, args ...interface{}) (workflowRunRows, error)
+}
+
+type pgxWorkflowRunDB struct{ pool *pgxpool.Pool }
+
+func (db pgxWorkflowRunDB) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {
+	return db.pool.Exec(ctx, sql, arguments...)
+}
+func (db pgxWorkflowRunDB) QueryRow(ctx context.Context, sql string, args ...interface{}) workflowRunScanner {
+	return db.pool.QueryRow(ctx, sql, args...)
+}
+func (db pgxWorkflowRunDB) Query(ctx context.Context, sql string, args ...interface{}) (workflowRunRows, error) {
+	return db.pool.Query(ctx, sql, args...)
 }
 
 func NewRunRepository(pool *pgxpool.Pool) *RunRepository {
-	return &RunRepository{pool: pool}
+	return newRunRepositoryWithDB(pgxWorkflowRunDB{pool: pool})
+}
+
+func newRunRepositoryWithDB(db workflowRunDB) *RunRepository {
+	return &RunRepository{db: db}
 }
 
 // Create inserts a new WorkflowRun.
 func (r *RunRepository) Create(ctx context.Context, run *WorkflowRun) error {
+	if err := validateWorkflowRunManifest(run.RunManifest); err != nil {
+		return err
+	}
 	if run.ID == "" {
 		run.ID = "wfr-" + uuid.NewString()[:8]
 	}
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`INSERT INTO workflow_runs (id, project_id, user_id, template_id, template_version,
 		 task_id, status, attempt, input, output, stage_statuses, trace_id, tool_registry_snapshot_id,
 		 run_manifest, parent_run_id, replay_from_stage_id, started_at, finished_at, created_at)
@@ -38,7 +71,7 @@ func (r *RunRepository) Create(ctx context.Context, run *WorkflowRun) error {
 
 // FindByID returns a WorkflowRun by ID.
 func (r *RunRepository) FindByID(ctx context.Context, id string) (*WorkflowRun, error) {
-	return scanWorkflowRun(r.pool.QueryRow(ctx,
+	return scanWorkflowRun(r.db.QueryRow(ctx,
 		`SELECT id, project_id, COALESCE(user_id, 'default'), template_id, template_version,
 		        task_id, status, attempt, input, output, stage_statuses,
 		        COALESCE(trace_id, ''), COALESCE(tool_registry_snapshot_id, ''), run_manifest,
@@ -49,7 +82,7 @@ func (r *RunRepository) FindByID(ctx context.Context, id string) (*WorkflowRun, 
 
 // FindByTaskID returns the WorkflowRun associated with the given orchestrator task.
 func (r *RunRepository) FindByTaskID(ctx context.Context, taskID string) (*WorkflowRun, error) {
-	return scanWorkflowRun(r.pool.QueryRow(ctx,
+	return scanWorkflowRun(r.db.QueryRow(ctx,
 		`SELECT id, project_id, COALESCE(user_id, 'default'), template_id, template_version,
 		        task_id, status, attempt, input, output, stage_statuses,
 		        COALESCE(trace_id, ''), COALESCE(tool_registry_snapshot_id, ''), run_manifest,
@@ -60,7 +93,7 @@ func (r *RunRepository) FindByTaskID(ctx context.Context, taskID string) (*Workf
 
 // FindByProject returns all runs for a project, newest first.
 func (r *RunRepository) FindByProject(ctx context.Context, projectID string) ([]*WorkflowRun, error) {
-	rows, err := r.pool.Query(ctx,
+	rows, err := r.db.Query(ctx,
 		`SELECT id, project_id, COALESCE(user_id, 'default'), template_id, template_version,
 		        task_id, status, attempt, input, output, stage_statuses,
 		        COALESCE(trace_id, ''), COALESCE(tool_registry_snapshot_id, ''), run_manifest,
@@ -111,7 +144,7 @@ func scanWorkflowRun(row workflowRunScanner) (*WorkflowRun, error) {
 // UpdateStatus updates the run's status.
 func (r *RunRepository) UpdateStatus(ctx context.Context, runID string, status RunStatus) error {
 	now := time.Now()
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`UPDATE workflow_runs SET status=$2, started_at=COALESCE(started_at,$3),
 		 finished_at=CASE WHEN $2 IN ('COMPLETED','FAILED','CANCELLED') THEN $3 ELSE finished_at END
 		 WHERE id=$1`, runID, string(status), now,
@@ -122,7 +155,7 @@ func (r *RunRepository) UpdateStatus(ctx context.Context, runID string, status R
 // FindRunIDByTaskID returns the run ID associated with a given task ID.
 func (r *RunRepository) FindRunIDByTaskID(ctx context.Context, taskID string) (string, error) {
 	var id string
-	err := r.pool.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id=$1`, taskID).Scan(&id)
+	err := r.db.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id=$1`, taskID).Scan(&id)
 	if err != nil {
 		return "", err
 	}
@@ -131,7 +164,7 @@ func (r *RunRepository) FindRunIDByTaskID(ctx context.Context, taskID string) (s
 
 // UpdateStageStatus updates a single stage's status in the run's stage_statuses JSONB.
 func (r *RunRepository) UpdateStageStatus(ctx context.Context, runID, stageName string, status StageStatus) error {
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`UPDATE workflow_runs SET stage_statuses = jsonb_set(stage_statuses, $2::text[], to_jsonb($3::text), true)
 		 WHERE id=$1`, runID, stageStatusJSONBPath(stageName), string(status),
 	)
@@ -147,7 +180,7 @@ func (r *RunRepository) SaveAttempt(ctx context.Context, attempt *Attempt) error
 	if attempt.ID == "" {
 		attempt.ID = "att-" + uuid.NewString()[:8]
 	}
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`INSERT INTO workflow_attempts (id, stage_run_id, number, trigger_type, node_ids, status, error_message, created_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		attempt.ID, attempt.StageRunID, attempt.Number, attempt.TriggerType,

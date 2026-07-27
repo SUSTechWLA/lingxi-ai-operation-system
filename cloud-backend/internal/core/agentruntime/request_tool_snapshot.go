@@ -213,7 +213,7 @@ func cloneToolManifest(manifest *tool.ToolManifest) *tool.ToolManifest {
 		return nil
 	}
 	var cloned tool.ToolManifest
-	if err := json.Unmarshal(wire, &cloned); err != nil {
+	if err := decodeSnapshotJSON(wire, &cloned); err != nil {
 		return nil
 	}
 	return &cloned
@@ -228,7 +228,7 @@ func cloneSnapshotJSONMap(value map[string]interface{}) map[string]interface{} {
 		return nil
 	}
 	var cloned map[string]interface{}
-	if err := json.Unmarshal(wire, &cloned); err != nil {
+	if err := decodeSnapshotJSON(wire, &cloned); err != nil {
 		return nil
 	}
 	return cloned
