@@ -41,6 +41,7 @@
     "fingerprint": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
     "retryable": false,
     "userMessageKey": "error.render.ffmpeg.codec.unsupported",
+    "developerDetail": "diagnostic.render.ffmpeg.codec.unsupported",
     "suggestedActionKey": "action.render.select.codec"
   },
   "privacy": {
