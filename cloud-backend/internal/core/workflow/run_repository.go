@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,51 +25,37 @@ func (r *RunRepository) Create(ctx context.Context, run *WorkflowRun) error {
 	}
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO workflow_runs (id, project_id, user_id, template_id, template_version,
-		 task_id, status, attempt, input, output, stage_statuses, trace_id, started_at, finished_at, created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		 task_id, status, attempt, input, output, stage_statuses, trace_id, tool_registry_snapshot_id,
+		 run_manifest, parent_run_id, replay_from_stage_id, started_at, finished_at, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 		run.ID, run.ProjectID, run.UserID, run.TemplateID, run.TemplateVersion,
 		run.TaskID, string(run.Status), run.Attempt, run.Input, run.Output,
-		run.StageStatuses, run.TraceID, run.StartedAt, run.FinishedAt, run.CreatedAt,
+		run.StageStatuses, run.TraceID, run.ToolRegistrySnapshotID, run.RunManifest,
+		run.ParentRunID, run.ReplayFromStageID, run.StartedAt, run.FinishedAt, run.CreatedAt,
 	)
 	return err
 }
 
 // FindByID returns a WorkflowRun by ID.
 func (r *RunRepository) FindByID(ctx context.Context, id string) (*WorkflowRun, error) {
-	var run WorkflowRun
-	err := r.pool.QueryRow(ctx,
+	return scanWorkflowRun(r.pool.QueryRow(ctx,
 		`SELECT id, project_id, COALESCE(user_id, 'default'), template_id, template_version,
 		        task_id, status, attempt, input, output, stage_statuses,
-		        trace_id, started_at, finished_at, created_at
+		        COALESCE(trace_id, ''), COALESCE(tool_registry_snapshot_id, ''), run_manifest,
+		        parent_run_id, replay_from_stage_id, started_at, finished_at, created_at
 		 FROM workflow_runs WHERE id=$1`, id,
-	).Scan(
-		&run.ID, &run.ProjectID, &run.UserID, &run.TemplateID, &run.TemplateVersion,
-		&run.TaskID, &run.Status, &run.Attempt, &run.Input, &run.Output,
-		&run.StageStatuses, &run.TraceID, &run.StartedAt, &run.FinishedAt, &run.CreatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &run, nil
+	))
 }
 
 // FindByTaskID returns the WorkflowRun associated with the given orchestrator task.
 func (r *RunRepository) FindByTaskID(ctx context.Context, taskID string) (*WorkflowRun, error) {
-	var run WorkflowRun
-	err := r.pool.QueryRow(ctx,
+	return scanWorkflowRun(r.pool.QueryRow(ctx,
 		`SELECT id, project_id, COALESCE(user_id, 'default'), template_id, template_version,
 		        task_id, status, attempt, input, output, stage_statuses,
-		        trace_id, started_at, finished_at, created_at
+		        COALESCE(trace_id, ''), COALESCE(tool_registry_snapshot_id, ''), run_manifest,
+		        parent_run_id, replay_from_stage_id, started_at, finished_at, created_at
 		 FROM workflow_runs WHERE task_id=$1`, taskID,
-	).Scan(
-		&run.ID, &run.ProjectID, &run.UserID, &run.TemplateID, &run.TemplateVersion,
-		&run.TaskID, &run.Status, &run.Attempt, &run.Input, &run.Output,
-		&run.StageStatuses, &run.TraceID, &run.StartedAt, &run.FinishedAt, &run.CreatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &run, nil
+	))
 }
 
 // FindByProject returns all runs for a project, newest first.
@@ -76,7 +63,8 @@ func (r *RunRepository) FindByProject(ctx context.Context, projectID string) ([]
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, project_id, COALESCE(user_id, 'default'), template_id, template_version,
 		        task_id, status, attempt, input, output, stage_statuses,
-		        trace_id, started_at, finished_at, created_at
+		        COALESCE(trace_id, ''), COALESCE(tool_registry_snapshot_id, ''), run_manifest,
+		        parent_run_id, replay_from_stage_id, started_at, finished_at, created_at
 		 FROM workflow_runs WHERE project_id=$1 ORDER BY created_at DESC`, projectID,
 	)
 	if err != nil {
@@ -86,17 +74,38 @@ func (r *RunRepository) FindByProject(ctx context.Context, projectID string) ([]
 
 	var runs []*WorkflowRun
 	for rows.Next() {
-		var run WorkflowRun
-		if err := rows.Scan(
-			&run.ID, &run.ProjectID, &run.UserID, &run.TemplateID, &run.TemplateVersion,
-			&run.TaskID, &run.Status, &run.Attempt, &run.Input, &run.Output,
-			&run.StageStatuses, &run.TraceID, &run.StartedAt, &run.FinishedAt, &run.CreatedAt,
-		); err != nil {
+		run, err := scanWorkflowRun(rows)
+		if err != nil {
 			return nil, err
 		}
-		runs = append(runs, &run)
+		runs = append(runs, run)
 	}
 	return runs, nil
+}
+
+type workflowRunScanner interface {
+	Scan(dest ...interface{}) error
+}
+
+func scanWorkflowRun(row workflowRunScanner) (*WorkflowRun, error) {
+	var run WorkflowRun
+	var runManifestJSON []byte
+	if err := row.Scan(
+		&run.ID, &run.ProjectID, &run.UserID, &run.TemplateID, &run.TemplateVersion,
+		&run.TaskID, &run.Status, &run.Attempt, &run.Input, &run.Output,
+		&run.StageStatuses, &run.TraceID, &run.ToolRegistrySnapshotID, &runManifestJSON,
+		&run.ParentRunID, &run.ReplayFromStageID, &run.StartedAt, &run.FinishedAt, &run.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+	if len(runManifestJSON) > 0 && string(runManifestJSON) != "null" {
+		var manifest RunManifest
+		if err := json.Unmarshal(runManifestJSON, &manifest); err != nil {
+			return nil, err
+		}
+		run.RunManifest = &manifest
+	}
+	return &run, nil
 }
 
 // UpdateStatus updates the run's status.

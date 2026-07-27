@@ -13,6 +13,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
 type RunStatus string
@@ -42,21 +44,29 @@ type StartRunRequest struct {
 	IdempotencyFingerprint string                 `json:"-"`
 	DeviceID               string                 `json:"-"`
 	TargetRunnerID         string                 `json:"-"`
+	ParentRunID            *string                `json:"parentRunId,omitempty"`
+	ReplayFromStageID      *string                `json:"replayFromStageId,omitempty"`
 	requestToolSnapshot    *RequestToolSnapshot
 }
 
 type Run struct {
-	ID        string                 `json:"id"`
-	TaskID    string                 `json:"taskId,omitempty"`
-	UserID    string                 `json:"userId,omitempty"`
-	Domain    string                 `json:"domain,omitempty"`
-	Message   string                 `json:"message"`
-	Plan      *AgentPlan             `json:"plan,omitempty"`
-	Status    RunStatus              `json:"status"`
-	Budget    AgentBudget            `json:"budget,omitempty"`
-	CreatedAt time.Time              `json:"createdAt"`
-	UpdatedAt time.Time              `json:"updatedAt"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	ID                     string                 `json:"id"`
+	TaskID                 string                 `json:"taskId,omitempty"`
+	UserID                 string                 `json:"userId,omitempty"`
+	Domain                 string                 `json:"domain,omitempty"`
+	Message                string                 `json:"message"`
+	Plan                   *AgentPlan             `json:"plan,omitempty"`
+	Status                 RunStatus              `json:"status"`
+	Budget                 AgentBudget            `json:"budget,omitempty"`
+	TraceID                string                 `json:"traceId,omitempty"`
+	ToolRegistrySnapshotID string                 `json:"toolRegistrySnapshotId,omitempty"`
+	RunManifest            *RunManifest           `json:"runManifest,omitempty"`
+	ParentRunID            *string                `json:"parentRunId,omitempty"`
+	ReplayFromStageID      *string                `json:"replayFromStageId,omitempty"`
+	CreatedAt              time.Time              `json:"createdAt"`
+	UpdatedAt              time.Time              `json:"updatedAt"`
+	Metadata               map[string]interface{} `json:"metadata,omitempty"`
+	toolSnapshot           ToolSnapshot
 }
 
 type RunTerminalEvent struct {
@@ -173,7 +183,11 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 	if err := r.validateStartRequest(req); err != nil {
 		return nil, err
 	}
-	return r.completeStart(ctx, req, newRunShell(req))
+	run := newRunShell(req)
+	if err := r.attachToolSnapshot(ctx, &req, run); err != nil {
+		return nil, err
+	}
+	return r.completeStart(ctx, req, run)
 }
 
 func (r *Runner) StartAsync(ctx context.Context, req StartRunRequest) (*Run, error) {
@@ -181,6 +195,9 @@ func (r *Runner) StartAsync(ctx context.Context, req StartRunRequest) (*Run, err
 		return nil, err
 	}
 	run := newRunShell(req)
+	if err := r.attachToolSnapshot(ctx, &req, run); err != nil {
+		return nil, err
+	}
 	created, err := r.store.CreateRun(ctx, run)
 	if err != nil {
 		return nil, fmt.Errorf("store agent run: %w", err)
@@ -237,15 +254,74 @@ func newRunShell(req StartRunRequest) *Run {
 		metadata["idempotencyFingerprint"] = req.IdempotencyFingerprint
 	}
 	return &Run{
-		ID:        runID,
-		UserID:    req.UserID,
-		Domain:    domain,
-		Message:   req.Message,
-		Status:    RunStatusCreated,
-		CreatedAt: now,
-		UpdatedAt: now,
-		Metadata:  metadata,
+		ID:                runID,
+		UserID:            req.UserID,
+		Domain:            domain,
+		Message:           req.Message,
+		Status:            RunStatusCreated,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		Metadata:          metadata,
+		ParentRunID:       cloneStringPointer(req.ParentRunID),
+		ReplayFromStageID: cloneStringPointer(req.ReplayFromStageID),
 	}
+}
+
+func cloneStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func (r *Runner) attachToolSnapshot(ctx context.Context, req *StartRunRequest, run *Run) error {
+	if run == nil || req == nil || run.ToolRegistrySnapshotID != "" {
+		return nil
+	}
+	if req.requestToolSnapshot == nil && r.toolResolver != nil {
+		snapshot, err := r.toolResolver.Resolve(ctx, req.UserID, req.DeviceID, req.TargetRunnerID)
+		if err != nil {
+			return fmt.Errorf("resolve request tool snapshot: %w", err)
+		}
+		req.requestToolSnapshot = snapshot
+	}
+
+	var manifests []*tool.ToolManifest
+	if req.requestToolSnapshot != nil {
+		manifests = req.requestToolSnapshot.ListManifests()
+	} else if r != nil && r.guard != nil {
+		if provider, ok := r.guard.tools.(ToolListProvider); ok {
+			manifests = provider.ListManifests()
+		}
+	}
+	snapshot, err := BuildToolSnapshot(manifests)
+	if err != nil {
+		return fmt.Errorf("build tool registry snapshot: %w", err)
+	}
+	correlation := observability.CorrelationFromContext(ctx)
+	run.TraceID = correlation.TraceID
+	run.ToolRegistrySnapshotID = snapshot.ID
+	run.toolSnapshot = snapshot
+	if run.Metadata == nil {
+		run.Metadata = map[string]interface{}{}
+	}
+	run.Metadata["toolRegistrySnapshotId"] = snapshot.ID
+	run.RunManifest = &RunManifest{
+		SchemaVersion:          runManifestSchemaVersion,
+		Runtime:                "cloud-agent",
+		RunID:                  run.ID,
+		TraceID:                run.TraceID,
+		ToolRegistrySnapshotID: snapshot.ID,
+		ToolRegistrySHA256:     snapshot.SHA256,
+		ParentRunID:            cloneStringPointer(run.ParentRunID),
+		ReplayFromStageID:      cloneStringPointer(run.ReplayFromStageID),
+		CreatedAt:              run.CreatedAt,
+	}
+	if req.requestToolSnapshot != nil {
+		run.RunManifest.MCPRunnerRevisions = req.requestToolSnapshot.RunnerRevisions()
+	}
+	return nil
 }
 
 func existingIdempotencyFingerprint(run *Run) string {
@@ -292,15 +368,11 @@ func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
 }
 
 func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Run) (*Run, error) {
-	if err := r.abortIfCancelled(ctx, run); err != nil {
+	if err := r.attachToolSnapshot(ctx, &req, run); err != nil {
 		return nil, err
 	}
-	if r.toolResolver != nil {
-		snapshot, resolveErr := r.toolResolver.Resolve(ctx, req.UserID, req.DeviceID, req.TargetRunnerID)
-		if resolveErr != nil {
-			return nil, fmt.Errorf("resolve request tool snapshot: %w", resolveErr)
-		}
-		req.requestToolSnapshot = snapshot
+	if err := r.abortIfCancelled(ctx, run); err != nil {
+		return nil, err
 	}
 	guard := r.guard
 	compiler := r.compiler
@@ -398,6 +470,7 @@ planOK:
 	run.UpdatedAt = now
 	run.Metadata = map[string]interface{}{
 		"mode": plan.Mode, "agentToolTrace": agentToolTrace, "requestContext": sanitizedRunContext(req.Context),
+		"toolRegistrySnapshotId": run.ToolRegistrySnapshotID,
 	}
 	if req.requestToolSnapshot != nil && len(req.requestToolSnapshot.runners) > 0 {
 		run.Metadata["mcpCatalogSnapshot"] = req.requestToolSnapshot.RunnerRevisions()

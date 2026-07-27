@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 )
 
@@ -77,9 +78,10 @@ func (s *RunService) CreateRun(ctx context.Context, userID, projectID, templateI
 		Attempt:         1,
 		Input:           input,
 		StageStatuses:   stageMap,
-		TraceID:         task.ID, // reuse task ID as trace ID
+		TraceID:         traceIDForRun(ctx, task.ID),
 		CreatedAt:       now,
 	}
+	run.RunManifest = buildWorkflowRunManifest(run)
 
 	if err := s.runRepo.Create(ctx, run); err != nil {
 		return nil, fmt.Errorf("failed to create run: %w", err)
@@ -91,6 +93,13 @@ func (s *RunService) CreateRun(ctx context.Context, userID, projectID, templateI
 		zap.String("taskId", task.ID),
 	)
 	return run, nil
+}
+
+func traceIDForRun(ctx context.Context, fallback string) string {
+	if traceID := observability.CorrelationFromContext(ctx).TraceID; traceID != "" {
+		return traceID
+	}
+	return fallback
 }
 
 func applyRunInputToDAG(dag *model.DAGRequest, input map[string]interface{}) {

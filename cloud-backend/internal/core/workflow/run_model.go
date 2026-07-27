@@ -27,23 +27,65 @@ const (
 	StageInvalidated     StageStatus = "INVALIDATED"
 )
 
+// RunManifest intentionally admits only versioned identifiers and hashes.
+// Prompts, arguments, credentials, and arbitrary request metadata are excluded.
+type RunManifest struct {
+	SchemaVersion          string    `json:"schemaVersion"`
+	Runtime                string    `json:"runtime"`
+	RunID                  string    `json:"runId"`
+	TraceID                string    `json:"traceId,omitempty"`
+	ToolRegistrySnapshotID string    `json:"toolRegistrySnapshotId,omitempty"`
+	ToolRegistrySHA256     string    `json:"toolRegistrySha256,omitempty"`
+	ParentRunID            *string   `json:"parentRunId,omitempty"`
+	ReplayFromStageID      *string   `json:"replayFromStageId,omitempty"`
+	CreatedAt              time.Time `json:"createdAt"`
+}
+
+func buildWorkflowRunManifest(run *WorkflowRun) *RunManifest {
+	if run == nil {
+		return nil
+	}
+	return &RunManifest{
+		SchemaVersion:          "1",
+		Runtime:                "cloud-workflow",
+		RunID:                  run.ID,
+		TraceID:                run.TraceID,
+		ToolRegistrySnapshotID: run.ToolRegistrySnapshotID,
+		ParentRunID:            cloneWorkflowStringPointer(run.ParentRunID),
+		ReplayFromStageID:      cloneWorkflowStringPointer(run.ReplayFromStageID),
+		CreatedAt:              run.CreatedAt,
+	}
+}
+
+func cloneWorkflowStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
 // WorkflowRun links a video project to an orchestrator task and tracks stage-level progress.
 type WorkflowRun struct {
-	ID              string                 `json:"id"`
-	ProjectID       string                 `json:"projectId"`
-	UserID          string                 `json:"userId"`
-	TemplateID      string                 `json:"templateId"`
-	TemplateVersion string                 `json:"templateVersion"`
-	TaskID          string                 `json:"taskId"`
-	Status          RunStatus              `json:"status"`
-	Attempt         int                    `json:"attempt"`
-	Input           map[string]interface{} `json:"input,omitempty"`
-	Output          map[string]interface{} `json:"output,omitempty"`
-	StageStatuses   map[string]StageStatus `json:"stageStatuses"`
-	TraceID         string                 `json:"traceId"`
-	StartedAt       *time.Time             `json:"startedAt,omitempty"`
-	FinishedAt      *time.Time             `json:"finishedAt,omitempty"`
-	CreatedAt       time.Time              `json:"createdAt"`
+	ID                     string                 `json:"id"`
+	ProjectID              string                 `json:"projectId"`
+	UserID                 string                 `json:"userId"`
+	TemplateID             string                 `json:"templateId"`
+	TemplateVersion        string                 `json:"templateVersion"`
+	TaskID                 string                 `json:"taskId"`
+	Status                 RunStatus              `json:"status"`
+	Attempt                int                    `json:"attempt"`
+	Input                  map[string]interface{} `json:"input,omitempty"`
+	Output                 map[string]interface{} `json:"output,omitempty"`
+	StageStatuses          map[string]StageStatus `json:"stageStatuses"`
+	TraceID                string                 `json:"traceId"`
+	ToolRegistrySnapshotID string                 `json:"toolRegistrySnapshotId,omitempty"`
+	RunManifest            *RunManifest           `json:"runManifest,omitempty"`
+	ParentRunID            *string                `json:"parentRunId,omitempty"`
+	ReplayFromStageID      *string                `json:"replayFromStageId,omitempty"`
+	StartedAt              *time.Time             `json:"startedAt,omitempty"`
+	FinishedAt             *time.Time             `json:"finishedAt,omitempty"`
+	CreatedAt              time.Time              `json:"createdAt"`
 }
 
 // StageRun tracks the execution of a single stage within a workflow run.

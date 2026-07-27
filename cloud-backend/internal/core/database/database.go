@@ -91,6 +91,19 @@ const localJobCallbackOutboxMigration = `
 	ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS followup_callback_lease_until TIMESTAMPTZ;
 `
 
+const runManifestMigration = `
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS trace_id VARCHAR(128);
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS tool_registry_snapshot_id VARCHAR(160);
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS run_manifest JSONB;
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS parent_run_id VARCHAR(64);
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS replay_from_stage_id VARCHAR(128);
+	ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS trace_id VARCHAR(128);
+	ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS tool_registry_snapshot_id VARCHAR(160);
+	ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS run_manifest JSONB;
+	ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS parent_run_id VARCHAR(64);
+	ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS replay_from_stage_id VARCHAR(128);
+`
+
 type migrationExecer interface {
 	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
 }
@@ -512,6 +525,9 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	`
 	if _, err := pool.Exec(ctx, workflowRunSchema); err != nil {
 		zap.L().Warn("Failed to run workflow run migrations (non-fatal)", zap.Error(err))
+	}
+	if _, err := pool.Exec(ctx, runManifestMigration); err != nil {
+		zap.L().Fatal("Failed to install required run manifest schema", zap.Error(err))
 	}
 
 	// Local Runner tables (video creation upgrade P7)
