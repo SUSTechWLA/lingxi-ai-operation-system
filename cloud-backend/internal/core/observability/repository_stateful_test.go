@@ -387,3 +387,60 @@ func TestStatefulRelayBoundsAndSortsErrorFingerprints(t *testing.T) {
 		t.Fatalf("fingerprints count=%d sorted=%v", len(summary.ErrorFingerprints), sort.StringsAreSorted(summary.ErrorFingerprints))
 	}
 }
+
+func TestStatefulRelayCursorHistoryCoversEventAgePlusRelayLifetime(t *testing.T) {
+	acceptedAt := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	oldestAcceptedOccurrence := acceptedAt.Add(-maxEventAge)
+	clock := acceptedAt
+	db := newStatefulRelayDB(func() time.Time { return clock })
+	repo := newRepositoryWithRelayDBAndClock(db, func() time.Time { return clock })
+	event := validEvent()
+	event.EventID = "evt_z"
+	event.OccurredAt = oldestAcceptedOccurrence
+	if err := repo.SaveSummary(context.Background(), "user_a", event); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := encodeCursor(oldestAcceptedOccurrence, "evt_a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clock = acceptedAt.Add(relayLifetime - time.Microsecond)
+	page, err := repo.Pull(context.Background(), "user_a", cursor, 10)
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != "evt_z" {
+		t.Fatalf("pre-expiry cursor page=%#v error=%v", page, err)
+	}
+
+	// Cursor history is inclusive at maxEventAge+relayLifetime. At the exact
+	// boundary the row is expired by expires_at > NOW(), but the cursor remains
+	// structurally valid and returns an empty page.
+	clock = acceptedAt.Add(relayLifetime)
+	page, err = repo.Pull(context.Background(), "user_a", cursor, 10)
+	if err != nil || len(page.Events) != 0 {
+		t.Fatalf("exact-expiry cursor page=%#v error=%v", page, err)
+	}
+
+	clock = acceptedAt.Add(relayLifetime + time.Microsecond)
+	if _, err := repo.Pull(context.Background(), "user_a", cursor, 10); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("post-history cursor error=%v", err)
+	}
+}
+
+func TestStatefulFingerprintNormalizationMatchesMigrationPolicy(t *testing.T) {
+	if normalized := boundedFingerprints(nil); len(normalized) != 0 {
+		t.Fatalf("nil normalization = %v", normalized)
+	}
+	values := []string{"invalid", strings.Repeat("a", 64), strings.Repeat("a", 64)}
+	for index := maxRunErrorFingerprints + 1; index >= 1; index-- {
+		values = append(values, fmt.Sprintf("%064x", index))
+	}
+	normalized := boundedFingerprints(values)
+	if len(normalized) != maxRunErrorFingerprints || !sort.StringsAreSorted(normalized) {
+		t.Fatalf("normalized count=%d sorted=%v", len(normalized), sort.StringsAreSorted(normalized))
+	}
+	for index := 1; index < len(normalized); index++ {
+		if normalized[index] == normalized[index-1] || !hashPattern.MatchString(normalized[index]) {
+			t.Fatalf("normalized fingerprints = %v", normalized)
+		}
+	}
+}

@@ -33,6 +33,10 @@ const (
 	// cloud acceptance, independent of producer-provided ingest timestamps.
 	maxEventAge        = 7 * 24 * time.Hour
 	maxEventFutureSkew = 5 * time.Minute
+	// Cursor history includes the oldest accepted producer event for its full
+	// relay lifetime. The lower boundary is inclusive; the row itself expires
+	// at expires_at <= NOW(), so accepting that boundary cannot expose it.
+	maxCursorAge = maxEventAge + relayLifetime
 )
 
 var (
@@ -423,7 +427,7 @@ func decodeCursorAt(value string, now time.Time) (decodedRelayCursor, error) {
 		return decodedRelayCursor{}, ErrInvalidCursor
 	}
 	occurredAt, err := time.Parse(time.RFC3339Nano, cursor.OccurredAt)
-	if err != nil || cursor.Version != 1 || !validRelayEventID(cursor.EventID) || !relayTimeInWindow(occurredAt, now) {
+	if err != nil || cursor.Version != 1 || !validRelayEventID(cursor.EventID) || !cursorTimeInWindow(occurredAt, now) {
 		return decodedRelayCursor{}, ErrInvalidCursor
 	}
 	return decodedRelayCursor{OccurredAt: normalizeRelayTime(occurredAt), EventID: cursor.EventID}, nil
@@ -441,6 +445,13 @@ func relayTimeInWindow(value, now time.Time) bool {
 		return false
 	}
 	return !value.Before(now.Add(-maxEventAge)) && !value.After(now.Add(maxEventFutureSkew))
+}
+
+func cursorTimeInWindow(value, now time.Time) bool {
+	if value.IsZero() || now.IsZero() {
+		return false
+	}
+	return !value.Before(now.Add(-maxCursorAge)) && !value.After(now.Add(maxEventFutureSkew))
 }
 
 func decodePersistedEvent(payload []byte) (Event, error) {

@@ -73,12 +73,13 @@ func BuildCloudSpec() *Spec {
 
 	// ── Observability ──
 	minRelayLimit, maxRelayLimit := float64(1), float64(500)
-	maxCursorLength, maxRelayIDLength := 2048, 128
+	minCursorLength, maxCursorLength, maxRelayIDLength := 1, 2048, 128
 	b.Route("GET", "/api/observability/events", "Pull undelivered redacted observability events").
 		Tags("Observability").
 		creatorAuth(false).
 		QueryParam("cursor", "Opaque versioned continuation cursor", &Schema{
-			Type: "string", MaxLength: &maxCursorLength,
+			Type: "string", MinLength: &minCursorLength, MaxLength: &maxCursorLength,
+			Pattern: `^[A-Za-z0-9_-]+$`,
 		}, false).
 		QueryParam("limit", "Maximum events to return", &Schema{
 			Type: "integer", Minimum: &minRelayLimit, Maximum: &maxRelayLimit, Default: 100,

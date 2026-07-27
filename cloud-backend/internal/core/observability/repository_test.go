@@ -178,13 +178,13 @@ func TestRepositoryRejectsOccurredAtOutsideAcceptanceWindow(t *testing.T) {
 	}
 }
 
-func TestRepositoryPullRejectsCursorOutsideAcceptanceWindow(t *testing.T) {
+func TestRepositoryPullRejectsCursorOutsideCursorHistoryWindow(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	repo := newRepositoryWithRelayDBAndClock(&fakeRelayDB{rows: &relayRows{}}, func() time.Time { return now })
 	for _, occurredAt := range []time.Time{
 		{},
 		now.Add(maxEventFutureSkew + time.Microsecond),
-		now.Add(-maxEventAge - time.Microsecond),
+		now.Add(-maxCursorAge - time.Microsecond),
 	} {
 		cursor, err := encodeCursor(occurredAt, "evt_one")
 		if err != nil {

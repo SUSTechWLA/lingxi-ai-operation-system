@@ -29,6 +29,30 @@ func TestObservabilityRelayMigrationIsIdempotentAndOwnershipScoped(t *testing.T)
 	}
 }
 
+func TestObservabilityRelayMigrationNormalizesFingerprintsBeforeConstraintValidation(t *testing.T) {
+	for _, fragment := range []string{
+		"UPDATE observability_run_summaries AS summaries",
+		"unnest(COALESCE(summaries.error_fingerprints, ARRAY[]::TEXT[]))",
+		"SELECT DISTINCT fingerprint",
+		"WHERE fingerprint ~ '^[a-f0-9]{64}$'",
+		"ORDER BY fingerprint",
+		"LIMIT 128",
+		"ADD CONSTRAINT observability_run_summary_fingerprint_limit",
+		"NOT VALID",
+		"VALIDATE CONSTRAINT observability_run_summary_fingerprint_limit",
+	} {
+		if !strings.Contains(observabilityRelayMigration, fragment) {
+			t.Errorf("migration missing %q: %s", fragment, observabilityRelayMigration)
+		}
+	}
+	cleanup := strings.Index(observabilityRelayMigration, "UPDATE observability_run_summaries AS summaries")
+	add := strings.Index(observabilityRelayMigration, "ADD CONSTRAINT observability_run_summary_fingerprint_limit")
+	validate := strings.Index(observabilityRelayMigration, "VALIDATE CONSTRAINT observability_run_summary_fingerprint_limit")
+	if cleanup < 0 || add < 0 || validate < 0 || !(cleanup < add && add < validate) {
+		t.Fatalf("migration order cleanup=%d add=%d validate=%d", cleanup, add, validate)
+	}
+}
+
 type recordingObservabilityMigrationExecer struct{ calls []string }
 
 func (execer *recordingObservabilityMigrationExecer) Exec(_ context.Context, query string, _ ...interface{}) (pgconn.CommandTag, error) {

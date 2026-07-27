@@ -204,6 +204,14 @@ const observabilityRelayMigration = `
 	);
 	ALTER TABLE observability_run_summaries
 		ADD COLUMN IF NOT EXISTS last_event_id VARCHAR(128) NOT NULL DEFAULT '';
+	UPDATE observability_run_summaries AS summaries
+	SET error_fingerprints=ARRAY(
+		SELECT DISTINCT fingerprint
+		FROM unnest(COALESCE(summaries.error_fingerprints, ARRAY[]::TEXT[])) AS fingerprint
+		WHERE fingerprint ~ '^[a-f0-9]{64}$'
+		ORDER BY fingerprint
+		LIMIT 128
+	);
 	DO $$ BEGIN
 		IF NOT EXISTS (
 			SELECT 1 FROM pg_constraint
@@ -211,9 +219,11 @@ const observabilityRelayMigration = `
 		) THEN
 			ALTER TABLE observability_run_summaries
 				ADD CONSTRAINT observability_run_summary_fingerprint_limit
-				CHECK (cardinality(error_fingerprints) <= 128);
+				CHECK (cardinality(error_fingerprints) <= 128) NOT VALID;
 		END IF;
 	END $$;
+	ALTER TABLE observability_run_summaries
+		VALIDATE CONSTRAINT observability_run_summary_fingerprint_limit;
 	CREATE INDEX IF NOT EXISTS idx_observability_run_summaries_user_updated
 		ON observability_run_summaries(user_id, updated_at DESC);
 `

@@ -844,8 +844,32 @@ func TestBuildCloudSpecExposesAuthenticatedObservabilityRelay(t *testing.T) {
 		t.Fatalf("ack eventId schema = %#v", eventIDs.Items)
 	}
 	cursor := inlineParameterSchema(findParameter(pull, "query", "cursor"))
-	if cursor == nil || cursor.MaxLength == nil || *cursor.MaxLength != 2048 {
+	if cursor == nil || cursor.MinLength == nil || *cursor.MinLength != 1 ||
+		cursor.MaxLength == nil || *cursor.MaxLength != 2048 || cursor.Pattern != `^[A-Za-z0-9_-]+$` {
 		t.Fatalf("cursor schema = %#v", cursor)
+	}
+	encoded, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	paths := document["paths"].(map[string]any)
+	operation := paths["/api/observability/events"].(map[string]any)["get"].(map[string]any)
+	parameters := operation["parameters"].([]any)
+	var cursorJSON map[string]any
+	for _, raw := range parameters {
+		parameter := raw.(map[string]any)
+		if parameter["in"] == "query" && parameter["name"] == "cursor" {
+			cursorJSON = parameter["schema"].(map[string]any)
+			break
+		}
+	}
+	if cursorJSON == nil || cursorJSON["minLength"] != float64(1) ||
+		cursorJSON["maxLength"] != float64(2048) || cursorJSON["pattern"] != `^[A-Za-z0-9_-]+$` {
+		t.Fatalf("serialized cursor schema = %#v", cursorJSON)
 	}
 	runOp := operationForMethod(t, spec.Paths["/api/observability/runs/:runId/summary"], "GET")
 	runID := inlineParameterSchema(findParameter(runOp, "path", "runId"))
