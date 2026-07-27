@@ -36,6 +36,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/model/repository"
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/fake"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	orchestratorHandler "github.com/tangying-ai/aios-core/internal/core/orchestrator/handler"
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 	"github.com/tangying-ai/aios-core/internal/core/outbox"
@@ -76,6 +77,23 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var backgroundWorkers sync.WaitGroup
+	observabilityEmitter := observability.NewEmitter(
+		observability.Source{
+			Service:     "cloud-backend",
+			Component:   "http-server",
+			Environment: mode,
+		},
+		observability.Runtime{},
+		logger.NewEventSink(zap.L()),
+		1024,
+	)
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		if err := observabilityEmitter.Close(closeCtx); err != nil {
+			zap.L().Error("Failed to close observability emitter", zap.Error(err))
+		}
+	}()
 
 	// Infrastructure
 	pool := database.NewPool(ctx, cfg.Postgres)
@@ -193,8 +211,8 @@ func main() {
 	// Kafka consumers
 	workerConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-worker-group",
 		[]string{eventbus.TopicNodeReady},
-		func(event eventbus.Event) error {
-			go nodeExecutor.ExecuteNode(ctx, event)
+		func(eventCtx context.Context, event eventbus.Event) error {
+			go nodeExecutor.ExecuteNode(eventCtx, event)
 			return nil
 		},
 	)
@@ -203,19 +221,19 @@ func main() {
 
 	orchestratorConsumer := eventbus.NewConsumer(cfg.Kafka, "orchestrator-group",
 		[]string{eventbus.TopicNodeResult},
-		func(event eventbus.Event) error {
+		func(eventCtx context.Context, event eventbus.Event) error {
 			switch event.Status {
 			case "RUNNING":
-				if _, err := stateService.TransitionNode(ctx, event.NodeID, model.NodeRunning, nil, ""); err != nil {
+				if _, err := stateService.TransitionNode(eventCtx, event.NodeID, model.NodeRunning, nil, ""); err != nil {
 					zap.L().Error("Failed to set node RUNNING", zap.Error(err))
 				}
 			case "SUCCESS":
-				if err := stateMachine.OnSuccess(ctx, event.NodeID, event.Output); err != nil {
+				if err := stateMachine.OnSuccess(eventCtx, event.NodeID, event.Output); err != nil {
 					zap.L().Error("Failed to handle node success", zap.Error(err))
 				}
-				dependencyChecker.OnNodeExecuted(ctx, event.NodeID, event.TaskID)
+				dependencyChecker.OnNodeExecuted(eventCtx, event.NodeID, event.TaskID)
 			case "FAILED":
-				if err := stateMachine.OnFailure(ctx, event.NodeID, event.ErrorMessage); err != nil {
+				if err := stateMachine.OnFailure(eventCtx, event.NodeID, event.ErrorMessage); err != nil {
 					zap.L().Error("Failed to handle node failure", zap.Error(err))
 				}
 			}
@@ -228,11 +246,11 @@ func main() {
 	// Progress consumer — handles heartbeat and progress events from long-running nodes
 	progressConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-progress-group",
 		[]string{eventbus.TopicProgress},
-		func(event eventbus.Event) error {
+		func(eventCtx context.Context, event eventbus.Event) error {
 			switch event.Status {
 			case "HEARTBEAT":
 				// Update heartbeat timestamp in DB
-				if err := nodeRepo.UpdateHeartbeat(ctx, event.NodeID, -1, ""); err != nil {
+				if err := nodeRepo.UpdateHeartbeat(eventCtx, event.NodeID, -1, ""); err != nil {
 					zap.L().Error("Failed to update heartbeat", zap.Error(err))
 				}
 			case "PROGRESS":
@@ -247,7 +265,7 @@ func main() {
 						step = s
 					}
 				}
-				if err := nodeRepo.UpdateHeartbeat(ctx, event.NodeID, progress, step); err != nil {
+				if err := nodeRepo.UpdateHeartbeat(eventCtx, event.NodeID, progress, step); err != nil {
 					zap.L().Error("Failed to update progress", zap.Error(err))
 				}
 				// Also record context for auditing
@@ -260,7 +278,7 @@ func main() {
 						Message:      fmt.Sprintf("Progress: %.0f%% — %s", progress*100, step),
 						Metadata:     map[string]interface{}{"progress": progress, "step": step},
 					}
-					_ = contextRepo.Save(ctx, c)
+					_ = contextRepo.Save(eventCtx, c)
 				}
 			case "CHECKPOINT":
 				// Persist checkpoint data
@@ -278,7 +296,7 @@ func main() {
 						checkpointData = cp
 					}
 				}
-				if err := nodeRepo.UpdateHeartbeat(ctx, event.NodeID, progress, step); err != nil {
+				if err := nodeRepo.UpdateHeartbeat(eventCtx, event.NodeID, progress, step); err != nil {
 					zap.L().Error("Failed to update checkpoint heartbeat", zap.Error(err))
 				}
 				c := &model.Context{
@@ -290,7 +308,7 @@ func main() {
 					SnapshotData: checkpointData,
 					Metadata:     map[string]interface{}{"progress": progress, "step": step},
 				}
-				_ = contextRepo.Save(ctx, c)
+				_ = contextRepo.Save(eventCtx, c)
 				zap.L().Info("Checkpoint persisted",
 					zap.String("nodeId", event.NodeID),
 					zap.Float64("progress", progress),
@@ -304,8 +322,8 @@ func main() {
 
 	contextConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-context-group",
 		[]string{eventbus.TopicNodeResult, eventbus.TopicNodeFailed},
-		func(event eventbus.Event) error {
-			return contextService.HandleEvent(ctx, event)
+		func(eventCtx context.Context, event eventbus.Event) error {
+			return contextService.HandleEvent(eventCtx, event)
 		},
 	)
 	contextConsumer.Start()
@@ -316,11 +334,8 @@ func main() {
 	defer scheduler.Stop()
 
 	// HTTP server
-	r := gin.Default()
 	allowedCORSOrigins := configuredCORSOrigins(cfg.Server.CORSAllowedOrigins)
-
-	// CORS middleware
-	r.Use(corsMiddleware(allowedCORSOrigins))
+	r := newHTTPRouter(allowedCORSOrigins, observabilityEmitter)
 
 	auth.NewHandler(authService).RegisterRoutes(r)
 	orchestratorHandler.NewOrchestratorHandler(orchestratorService, stateMachine, taskExecutionCtrl, contextService).RegisterRoutes(r, requireAuth)
@@ -671,6 +686,14 @@ func main() {
 	}
 
 	zap.L().Info("Server exited")
+}
+
+func newHTTPRouter(allowedCORSOrigins []string, emitter *observability.Emitter) *gin.Engine {
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(corsMiddleware(allowedCORSOrigins))
+	router.Use(observability.Middleware(emitter))
+	return router
 }
 
 func buildAgentPlanner(cfg *config.Config, toolRegistry *tool.ToolRegistry) agentruntime.Planner {

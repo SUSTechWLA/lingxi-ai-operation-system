@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 )
 
 const (
@@ -30,6 +31,8 @@ type Event struct {
 	Payload        map[string]interface{} `json:"payload,omitempty"`
 	Output         map[string]interface{} `json:"output,omitempty"`
 	TraceID        string                 `json:"traceId,omitempty"`
+	SpanID         string                 `json:"spanId,omitempty"`
+	ParentSpanID   string                 `json:"parentSpanId,omitempty"`
 	IdempotencyKey string                 `json:"idempotencyKey,omitempty"`
 	ErrorMessage   string                 `json:"errorMessage,omitempty"`
 }
@@ -81,7 +84,7 @@ func (p *Producer) Close() error {
 	return p.producer.Close()
 }
 
-type HandlerFunc func(event Event) error
+type HandlerFunc func(context.Context, Event) error
 
 type Consumer struct {
 	consumer sarama.ConsumerGroup
@@ -157,7 +160,7 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 		}
 		event.Topic = msg.Topic
 
-		if err := h.handlerFn(event); err != nil {
+		if err := h.handleEvent(event); err != nil {
 			zap.L().Error("Failed to handle event",
 				zap.String("topic", msg.Topic),
 				zap.Error(err),
@@ -167,4 +170,14 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 		session.MarkMessage(msg, "")
 	}
 	return nil
+}
+
+func (h *consumerGroupHandler) handleEvent(event Event) error {
+	correlation := observability.Correlation{
+		TraceID:      event.TraceID,
+		SpanID:       event.SpanID,
+		ParentSpanID: event.ParentSpanID,
+	}
+	ctx := observability.WithCorrelation(context.Background(), correlation)
+	return h.handlerFn(ctx, event)
 }
