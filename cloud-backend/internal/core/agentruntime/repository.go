@@ -118,7 +118,8 @@ func (r *Repository) SaveRunTerminal(ctx context.Context, run *Run, event RunTer
 		   tool_registry_snapshot_id=$11, run_manifest=$12, parent_run_id=$13,
 		   replay_from_stage_id=$14, updated_at=$16,
 		   terminal_event_json=$17, terminal_event_id=$18, terminal_event_delivered_at=NULL,
-		   terminal_event_attempts=0, terminal_event_lease_until=NULL, terminal_event_claim_token=NULL`,
+		   terminal_event_attempts=0, terminal_event_lease_until=NULL, terminal_event_claim_token=NULL
+		 WHERE agent_runs.terminal_event_json IS NULL`,
 		run.ID, run.TaskID, run.UserID, run.Domain, run.Message, planJSON,
 		string(run.Status), budgetJSON, metadataJSON, run.TraceID, run.ToolRegistrySnapshotID,
 		runManifestJSON, run.ParentRunID, run.ReplayFromStageID, run.CreatedAt, run.UpdatedAt, eventJSON, event.EventID,

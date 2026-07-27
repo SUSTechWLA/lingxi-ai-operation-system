@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -85,7 +86,7 @@ func main() {
 	observabilityRepository := observability.NewRepository(pool)
 	observabilityEmitter := observability.NewEmitter(
 		observability.Source{Service: "cloud-backend", Component: "http-server", Environment: mode},
-		observability.Runtime{},
+		cloudObservabilityRuntime(),
 		observability.NewCompositeSink(logger.NewEventSink(zap.L()), observability.NewRepositorySink(observabilityRepository)),
 		1024,
 	)
@@ -519,14 +520,10 @@ func main() {
 			return failShotRegenerationFromAgentTerminal(ctx, videoCreationSvc, videoProjectRepo, event)
 		})
 		shotRegenerationReconciler := videoSvc.NewShotRegenerationReconciler(videoProjectRepo, videoCreationSvc, 5*time.Second, 50)
-		backgroundWorkers.Add(2)
+		backgroundWorkers.Add(1)
 		go func() {
 			defer backgroundWorkers.Done()
 			shotRegenerationReconciler.Run(ctx)
-		}()
-		go func() {
-			defer backgroundWorkers.Done()
-			agentRunner.RunTerminalDelivery(ctx, 5*time.Second, 50)
 		}()
 		videoHandler.NewCreationHandler(videoCreationSvc, requireAuth).RegisterRoutes(r)
 		videoAssistant.NewHandler(requireAuth).RegisterRoutes(r)
@@ -536,7 +533,8 @@ func main() {
 		// Wire the state machine to sync node statuses to the workflow run's
 		// stage_statuses JSONB so the frontend progress panel shows live status.
 		workflowRunSvc := workflow.NewRunService(workflowRepo, workflowRunRepo, orchestratorService).
-			WithObservability(observabilityEmitter.ForComponent(observability.ComponentWorkflow))
+			WithObservability(observabilityEmitter.ForComponent(observability.ComponentWorkflow)).
+			WithToolRegistrySnapshotProvider(workflowToolSnapshotProvider{registry: toolRegistry})
 		stateMachine.SetStageStatusSyncer(&runStatusSyncer{service: workflowRunSvc, resolver: workflowRunRepo})
 		stageApprovalSvc := workflow.NewStageApprovalService(workflowRunRepo, nodeRepo, stateMachine)
 
@@ -656,6 +654,12 @@ func main() {
 		zap.L().Info("Video project and watch workflow run services registered")
 	}
 
+	backgroundWorkers.Add(1)
+	go func() {
+		defer backgroundWorkers.Done()
+		agentRunner.RunTerminalDelivery(ctx, 5*time.Second, 50)
+	}()
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler: r,
@@ -688,6 +692,65 @@ func main() {
 	}
 
 	zap.L().Info("Server exited")
+}
+
+var (
+	buildAppVersion = "0.2.1"
+	buildGitCommit  string
+)
+
+func cloudObservabilityRuntime() observability.Runtime {
+	appVersion := strings.TrimSpace(os.Getenv("APP_VERSION"))
+	if appVersion == "" {
+		appVersion = strings.TrimSpace(buildAppVersion)
+	}
+	gitCommit := strings.TrimSpace(os.Getenv("GIT_COMMIT"))
+	if gitCommit == "" {
+		gitCommit = strings.TrimSpace(buildGitCommit)
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if appVersion == "" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			appVersion = info.Main.Version
+		}
+		if gitCommit == "" {
+			for _, setting := range info.Settings {
+				if setting.Key == "vcs.revision" {
+					gitCommit = strings.TrimSpace(setting.Value)
+					break
+				}
+			}
+		}
+	}
+	if appVersion == "" {
+		appVersion = "development"
+	}
+	return observability.Runtime{
+		AppVersion:            appVersion,
+		GitCommit:             gitCommit,
+		WorkflowVersion:       "cloud-workflow-v1",
+		PromptTemplateVersion: "translator-dag-v1",
+	}
+}
+
+type workflowToolSnapshotProvider struct {
+	registry interface {
+		ListManifests() []*tool.ToolManifest
+	}
+}
+
+func (p workflowToolSnapshotProvider) Snapshot(context.Context) (workflow.ToolRegistrySnapshot, error) {
+	if p.registry == nil {
+		return workflow.ToolRegistrySnapshot{}, fmt.Errorf("tool registry is required")
+	}
+	snapshot, err := agentruntime.BuildToolSnapshot(p.registry.ListManifests())
+	if err != nil {
+		return workflow.ToolRegistrySnapshot{}, err
+	}
+	return workflow.ToolRegistrySnapshot{
+		ID:            snapshot.ID,
+		SHA256:        snapshot.SHA256,
+		CanonicalJSON: append(json.RawMessage(nil), snapshot.CanonicalJSON...),
+	}, nil
 }
 
 func newHTTPRouter(allowedCORSOrigins []string, emitter *observability.Emitter) *gin.Engine {

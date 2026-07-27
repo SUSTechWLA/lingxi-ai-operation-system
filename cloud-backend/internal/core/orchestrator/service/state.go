@@ -444,7 +444,6 @@ func (s *StateService) InitializeNodeReady(ctx context.Context, node *model.Node
 		NodeID:         node.ID,
 		Type:           string(node.Type),
 		Payload:        payload,
-		TraceID:        node.TaskID + "-" + node.ID,
 		IdempotencyKey: node.IdempotencyKey,
 	}
 	if node.Type != model.NodeTypeControl && node.Type != model.NodeTypeReviewGate {

@@ -193,6 +193,7 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (res
 		return nil, fmt.Errorf("failed to create DAG submit request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq = observability.WithOutboundTraceparent(httpReq)
 
 	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
@@ -232,6 +233,7 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (res
 			time.Sleep(pollInterval)
 			continue
 		}
+		httpReq = observability.WithOutboundTraceparent(httpReq)
 
 		httpResp, err := s.httpClient.Do(httpReq)
 		if err != nil {
@@ -349,6 +351,7 @@ func (s *NlToDagService) emitLifecycle(ctx context.Context, eventType observabil
 // TranslateAndSubmit translates natural language to DAG and submits the resulting DAG to the orchestrator.
 // The translation itself goes through the DAG pipeline, and the result is submitted as a new task.
 func (s *NlToDagService) TranslateAndSubmit(ctx context.Context, prompt string) (map[string]interface{}, error) {
+	ctx = observability.EnsureCorrelation(ctx)
 	dag, err := s.TranslateToDag(ctx, prompt)
 	if err != nil {
 		return nil, err
@@ -360,6 +363,7 @@ func (s *NlToDagService) TranslateAndSubmit(ctx context.Context, prompt string) 
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req = observability.WithOutboundTraceparent(req)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -379,12 +383,14 @@ func (s *NlToDagService) TranslateAndSubmit(ctx context.Context, prompt string) 
 }
 
 func (s *NlToDagService) GetTaskStatus(ctx context.Context, taskID string) (map[string]interface{}, error) {
+	ctx = observability.EnsureCorrelation(ctx)
 	url := s.orchestratorURL + "/api/task/" + taskID
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
+	req = observability.WithOutboundTraceparent(req)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {

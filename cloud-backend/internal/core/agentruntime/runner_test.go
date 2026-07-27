@@ -31,6 +31,32 @@ func (s *agentOwnerSink) Write(ctx context.Context, _ observability.Event) error
 }
 func (*agentOwnerSink) Close(context.Context) error { return nil }
 
+type agentTerminalObservation struct {
+	event observability.Event
+	owner string
+}
+
+type agentTerminalSink struct {
+	mu           sync.Mutex
+	observations []agentTerminalObservation
+}
+
+func (s *agentTerminalSink) Write(ctx context.Context, event observability.Event) error {
+	owner, _ := trustedcontext.UserID(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observations = append(s.observations, agentTerminalObservation{event: event, owner: owner})
+	return nil
+}
+
+func (*agentTerminalSink) Close(context.Context) error { return nil }
+
+func (s *agentTerminalSink) snapshot() []agentTerminalObservation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]agentTerminalObservation(nil), s.observations...)
+}
+
 func TestRunnerStartAsyncPreservesAuthenticatedOwnerForBackgroundEvents(t *testing.T) {
 	store := newMemoryRunStore()
 	sink := &agentOwnerSink{}
@@ -231,7 +257,7 @@ func (s *agentEventSink) snapshot() []observability.Event {
 	return append([]observability.Event(nil), s.events...)
 }
 
-func TestRunnerStartEmitsPairedFailureWithoutPrivateRequestText(t *testing.T) {
+func TestRunnerStartEmitsBootstrapFailureWithoutPrivateRequestText(t *testing.T) {
 	const privateRequest = "PRIVATE_AGENT_REQUEST_SENTINEL"
 	sink := &agentEventSink{}
 	emitter := observability.NewEmitter(
@@ -261,13 +287,19 @@ func TestRunnerStartEmitsPairedFailureWithoutPrivateRequestText(t *testing.T) {
 	}
 
 	events := sink.snapshot()
-	var started, failed int
+	var bootstrapStarted, bootstrapFailed int
 	for _, event := range events {
-		switch event.EventType {
-		case observability.EventTypeAgentRunStarted:
-			started++
-		case observability.EventTypeAgentRunFailed:
-			failed++
+		switch event.MessageKey {
+		case "agent.bootstrap.started":
+			bootstrapStarted++
+		case "agent.bootstrap.failed":
+			bootstrapFailed++
+		}
+		if event.EventType == observability.EventTypeAgentRunStarted ||
+			event.EventType == observability.EventTypeAgentRunCompleted ||
+			event.EventType == observability.EventTypeAgentRunFailed ||
+			event.EventType == observability.EventTypeAgentRunCancelled {
+			t.Fatalf("non-durable bootstrap failure emitted agent lifecycle event: %+v", event)
 		}
 		if err := event.Validate(); err != nil {
 			t.Fatalf("invalid captured event: %v", err)
@@ -276,8 +308,8 @@ func TestRunnerStartEmitsPairedFailureWithoutPrivateRequestText(t *testing.T) {
 			t.Fatalf("ERROR event lacks stable normalized error: %+v", event)
 		}
 	}
-	if started != 1 || failed != 1 {
-		t.Fatalf("agent event pairing started=%d failed=%d events=%+v", started, failed, events)
+	if bootstrapStarted != 1 || bootstrapFailed != 1 {
+		t.Fatalf("bootstrap event pairing started=%d failed=%d events=%+v", bootstrapStarted, bootstrapFailed, events)
 	}
 	wire, err := json.Marshal(events)
 	if err != nil {
@@ -285,6 +317,219 @@ func TestRunnerStartEmitsPairedFailureWithoutPrivateRequestText(t *testing.T) {
 	}
 	if strings.Contains(string(wire), privateRequest) {
 		t.Fatalf("private request leaked into events: %s", wire)
+	}
+}
+
+func TestRunnerDAGSubmissionCompletesBootstrapWithoutAgentTerminal(t *testing.T) {
+	sink := &agentEventSink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
+		observability.Runtime{}, sink, 32,
+	)
+	catalog := staticToolCatalog{"known": {Name: "known"}}
+	runner := NewRunner(
+		&fakeOrchestrator{taskID: "task-1"},
+		newMemoryRunStore(),
+		staticPlanner{plan: &AgentPlan{
+			Goal: "make", Domain: "general", Mode: "dynamic_agent",
+			Steps: []AgentStep{{ID: "step", Tool: "known", Arguments: map[string]interface{}{}}},
+		}},
+		NewPlanGuard(catalog, nil),
+		NewPlanCompiler(catalog),
+	).WithObservability(emitter)
+
+	run, err := runner.Start(context.Background(), StartRunRequest{UserID: "user-1", Message: "make"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != RunStatusRunning {
+		t.Fatalf("run status=%s, want RUNNING", run.Status)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var bootstrapStarted, bootstrapCompleted, agentStarted int
+	for _, event := range sink.snapshot() {
+		switch event.MessageKey {
+		case "agent.bootstrap.started":
+			bootstrapStarted++
+		case "agent.bootstrap.completed":
+			bootstrapCompleted++
+		}
+		switch event.EventType {
+		case observability.EventTypeAgentRunStarted:
+			agentStarted++
+		case observability.EventTypeAgentRunCompleted, observability.EventTypeAgentRunFailed, observability.EventTypeAgentRunCancelled:
+			t.Fatalf("DAG submission emitted false agent terminal: %+v", event)
+		}
+	}
+	if bootstrapStarted != 1 || bootstrapCompleted != 1 || agentStarted != 1 {
+		t.Fatalf("bootstrap started=%d completed=%d agent started=%d events=%+v",
+			bootstrapStarted, bootstrapCompleted, agentStarted, sink.snapshot())
+	}
+}
+
+func TestRunnerDurableTerminalOutboxEmitsExactlyOneTrueAgentTerminal(t *testing.T) {
+	tests := []struct {
+		name       string
+		taskStatus model.TaskStatus
+		wantRun    RunStatus
+		wantType   observability.EventType
+		wantExec   observability.ExecutionStatus
+		terminal   func(*Runner, context.Context, string) error
+	}{
+		{
+			name: "completed", taskStatus: model.TaskSuccess, wantRun: RunStatusSuccess,
+			wantType: observability.EventTypeAgentRunCompleted, wantExec: observability.ExecutionStatusCompleted,
+			terminal: func(r *Runner, ctx context.Context, id string) error {
+				_, _, err := r.Get(ctx, id)
+				return err
+			},
+		},
+		{
+			name: "failed", taskStatus: model.TaskFailed, wantRun: RunStatusFailed,
+			wantType: observability.EventTypeAgentRunFailed, wantExec: observability.ExecutionStatusFailed,
+			terminal: func(r *Runner, ctx context.Context, id string) error {
+				_, _, err := r.Get(ctx, id)
+				return err
+			},
+		},
+		{
+			name: "cancelled", wantRun: RunStatusCancelled,
+			wantType: observability.EventTypeAgentRunCancelled, wantExec: observability.ExecutionStatusCancelled,
+			terminal: func(r *Runner, ctx context.Context, id string) error {
+				_, err := r.Cancel(ctx, id)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newMemoryRunStore()
+			run := &Run{
+				ID: "agr_terminal1", TaskID: "tsk_terminal1", UserID: "user-1",
+				Status: RunStatusRunning, TraceID: "4bf92f3577b34da6a3ce929d0e0e4736",
+				ToolRegistrySnapshotID: "tool-snapshot-1",
+				Metadata:               map[string]interface{}{"requestContext": map[string]interface{}{"projectId": "prj_terminal1"}},
+			}
+			if err := store.SaveRun(context.Background(), run); err != nil {
+				t.Fatal(err)
+			}
+			sink := &agentTerminalSink{}
+			emitter := observability.NewEmitter(
+				observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
+				observability.Runtime{AppVersion: "app-1"}, sink, 16,
+			)
+			callbacks := 0
+			runner := (&Runner{
+				orchestrator: &fakeOrchestrator{taskStatus: tt.taskStatus},
+				store:        store,
+			}).WithObservability(emitter).WithTerminalCallback(func(_ context.Context, event RunTerminalEvent) error {
+				callbacks++
+				if event.RunID != run.ID || event.UserID != run.UserID || event.Status != tt.wantRun {
+					t.Fatalf("callback event=%+v", event)
+				}
+				return nil
+			})
+
+			if err := tt.terminal(runner, context.Background(), run.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := tt.terminal(runner, context.Background(), run.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := runner.DeliverPendingTerminalEventsOnce(context.Background(), 10); err != nil {
+				t.Fatal(err)
+			}
+			if err := emitter.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			if callbacks != 1 {
+				t.Fatalf("terminal callbacks=%d, want exactly 1", callbacks)
+			}
+			var terminals []agentTerminalObservation
+			for _, observed := range sink.snapshot() {
+				if observed.event.EventType == tt.wantType {
+					terminals = append(terminals, observed)
+				}
+			}
+			if len(terminals) != 1 {
+				t.Fatalf("terminal observations=%d, want exactly 1: %+v", len(terminals), sink.snapshot())
+			}
+			got := terminals[0]
+			if !strings.HasPrefix(got.event.EventID, "evt_") ||
+				got.event.Execution.Status != tt.wantExec ||
+				got.owner != run.UserID ||
+				got.event.Correlation.TraceID != "trc_"+run.TraceID ||
+				got.event.Correlation.TaskID != run.TaskID ||
+				got.event.Correlation.AgentRunID != run.ID ||
+				got.event.Runtime.ToolRegistrySnapshotID != run.ToolRegistrySnapshotID ||
+				got.event.Runtime.AppVersion != "app-1" {
+				t.Fatalf("durable terminal observation=%+v", got)
+			}
+			if tt.wantRun == RunStatusFailed && (got.event.Error == nil || got.event.Error.Code == "") {
+				t.Fatalf("failed terminal lacks stable error: %+v", got.event)
+			}
+		})
+	}
+}
+
+func TestRunnerTerminalCallbackRetryEmitsOneIdempotentObservabilityEvent(t *testing.T) {
+	store := newMemoryRunStore()
+	run := &Run{
+		ID: "agr_retry", TaskID: "tsk_retry", UserID: "owner-retry",
+		Status: RunStatusRunning, TraceID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	if err := store.SaveRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	sink := &agentTerminalSink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
+		observability.Runtime{}, sink, 8,
+	)
+	attempts := 0
+	runner := (&Runner{
+		orchestrator: &fakeOrchestrator{taskStatus: model.TaskSuccess},
+		store:        store,
+	}).WithObservability(emitter).WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("callback unavailable")
+		}
+		return nil
+	})
+
+	if _, _, err := runner.Get(context.Background(), run.ID); err == nil {
+		t.Fatal("first terminal delivery succeeded despite callback failure")
+	}
+	if !store.hasPendingTerminal(run.ID) {
+		t.Fatal("callback failure did not keep durable terminal pending")
+	}
+	if err := runner.DeliverPendingTerminalEventsOnce(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.DeliverPendingTerminalEventsOnce(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if attempts != 2 {
+		t.Fatalf("callback attempts=%d, want retry then success", attempts)
+	}
+	var terminalEvents []observability.Event
+	for _, observed := range sink.snapshot() {
+		if observed.event.EventType == observability.EventTypeAgentRunCompleted {
+			terminalEvents = append(terminalEvents, observed.event)
+		}
+	}
+	if len(terminalEvents) != 1 {
+		t.Fatalf("completed observability terminals=%d, want 1: %+v", len(terminalEvents), sink.snapshot())
 	}
 }
 
@@ -386,7 +631,7 @@ func TestRunnerDeadlineFailsInnerAndOuterWithTimeoutCodes(t *testing.T) {
 	if err := emitter.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"agent.plan.failed": "WORKFLOW.STAGE.TIMEOUT", "agent.run.failed": "AGENT.RUN.TIMEOUT"}
+	want := map[string]string{"agent.plan.failed": "WORKFLOW.STAGE.TIMEOUT", "agent.bootstrap.failed": "WORKFLOW.STAGE.TIMEOUT"}
 	for _, event := range sink.snapshot() {
 		if code, ok := want[event.MessageKey]; ok {
 			if event.Execution.Status != observability.ExecutionStatusFailed || event.Severity != observability.SeverityError || event.Error == nil || event.Error.Code != code {
@@ -415,7 +660,7 @@ func TestRunnerRepairCancellationUsesCancelledEventsWithoutError(t *testing.T) {
 	if err := emitter.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"correct.operation.cancelled": false, "agent.plan.validation.cancelled": false, "agent.run.cancelled": false}
+	want := map[string]bool{"correct.operation.cancelled": false, "agent.plan.validation.cancelled": false, "agent.bootstrap.cancelled": false}
 	for _, event := range sink.snapshot() {
 		if _, ok := want[event.MessageKey]; ok {
 			want[event.MessageKey] = true
@@ -1504,6 +1749,9 @@ func (s *memoryRunStore) SaveRunTerminal(_ context.Context, run *Run, event RunT
 	defer s.mu.Unlock()
 	if s.saveTerminalErr != nil {
 		return s.saveTerminalErr
+	}
+	if _, exists := s.terminal[run.ID]; exists {
+		return nil
 	}
 	s.runs[run.ID] = run
 	s.terminal[run.ID] = event

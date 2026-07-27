@@ -197,13 +197,13 @@ func (h *consumerGroupHandler) handleEvent(event Event) error {
 // before an event crosses either the direct Kafka or transactional outbox boundary.
 func EnrichEventFromContext(ctx context.Context, event Event) Event {
 	correlation := observability.CorrelationFromContext(ctx)
-	if event.TraceID == "" {
+	if correlation.TraceID != "" {
 		event.TraceID = correlation.TraceID
 	}
-	if event.SpanID == "" {
+	if correlation.SpanID != "" {
 		event.SpanID = correlation.SpanID
 	}
-	if event.ParentSpanID == "" {
+	if correlation.ParentSpanID != "" {
 		event.ParentSpanID = correlation.ParentSpanID
 	}
 	if event.OwnerUserID == "" {

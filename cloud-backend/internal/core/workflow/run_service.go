@@ -2,6 +2,8 @@ package workflow
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -17,14 +19,47 @@ import (
 
 // RunService manages WorkflowRun lifecycle — creation, stage tracking, and status aggregation.
 type RunService struct {
-	repo        *Repository
-	runRepo     *RunRepository
-	orchService *service.OrchestratorService
-	events      observability.EventEmitter
+	repo          workflowTemplateStore
+	runRepo       workflowRunStore
+	orchService   workflowOrchestrator
+	toolSnapshots ToolRegistrySnapshotProvider
+	events        observability.EventEmitter
+}
+
+type workflowTemplateStore interface {
+	FindByID(context.Context, string) (*Template, error)
+}
+
+type workflowRunStore interface {
+	Create(context.Context, *WorkflowRun) error
+	FindByID(context.Context, string) (*WorkflowRun, error)
+	FindByProject(context.Context, string) ([]*WorkflowRun, error)
+	UpdateStatus(context.Context, string, RunStatus) error
+	UpdateStageStatus(context.Context, string, string, StageStatus) error
+}
+
+type workflowOrchestrator interface {
+	CreateTask(context.Context, string, map[string]interface{}) (*model.Task, error)
+	SubmitDAG(context.Context, string, *model.DAGRequest) error
+}
+
+type ToolRegistrySnapshot struct {
+	ID            string
+	SHA256        string
+	CanonicalJSON json.RawMessage
+}
+
+type ToolRegistrySnapshotProvider interface {
+	Snapshot(context.Context) (ToolRegistrySnapshot, error)
 }
 
 func (s *RunService) WithObservability(emitter observability.EventEmitter) *RunService {
 	s.events = emitter
+	return s
+}
+
+func (s *RunService) WithToolRegistrySnapshotProvider(provider ToolRegistrySnapshotProvider) *RunService {
+	s.toolSnapshots = provider
 	return s
 }
 
@@ -51,13 +86,20 @@ func (s *RunService) CreateRun(ctx context.Context, userID, projectID, templateI
 		return nil, fmt.Errorf("invalid DAG in template: %w", err)
 	}
 
+	snapshot, err := s.freezeToolRegistrySnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
 	applyRunInputToDAG(&dag, input)
+	applyToolRegistrySnapshotToDAG(&dag, snapshot)
 
 	// Create orchestrator task
 	task, err := s.orchService.CreateTask(ctx, userID, map[string]interface{}{
-		"source":      "video-workflow",
-		"template_id": templateID,
-		"project_id":  projectID,
+		"source":                 "video-workflow",
+		"template_id":            templateID,
+		"project_id":             projectID,
+		"toolRegistrySnapshotId": snapshot.ID,
+		"toolRegistrySha256":     snapshot.SHA256,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create task: %w", err)
@@ -65,7 +107,11 @@ func (s *RunService) CreateRun(ctx context.Context, userID, projectID, templateI
 	taskCorrelation := observability.CorrelationFromContext(ctx)
 	taskCorrelation.ProjectID = projectID
 	taskCorrelation.TaskID = task.ID
-	s.emitRunTransition(ctx, observability.EventTypeTaskCreated, observability.ExecutionStatusCompleted, observability.SeverityInfo, taskCorrelation, 1, nil)
+	runtime := observability.Runtime{
+		WorkflowVersion:        version,
+		ToolRegistrySnapshotID: snapshot.ID,
+	}
+	s.emitRunTransition(ctx, observability.EventTypeTaskCreated, observability.ExecutionStatusCompleted, observability.SeverityInfo, taskCorrelation, runtime, 1, nil)
 
 	// Submit DAG
 	if err := s.orchService.SubmitDAG(ctx, task.ID, &dag); err != nil {
@@ -80,20 +126,22 @@ func (s *RunService) CreateRun(ctx context.Context, userID, projectID, templateI
 
 	now := time.Now()
 	run := &WorkflowRun{
-		ID:              "wfr-" + uuid.NewString()[:8],
-		ProjectID:       projectID,
-		UserID:          userID,
-		TemplateID:      templateID,
-		TemplateVersion: version,
-		TaskID:          task.ID,
-		Status:          RunPending,
-		Attempt:         1,
-		Input:           input,
-		StageStatuses:   stageMap,
-		TraceID:         traceIDForRun(ctx, task.ID),
-		CreatedAt:       now,
+		ID:                     "wfr-" + uuid.NewString()[:8],
+		ProjectID:              projectID,
+		UserID:                 userID,
+		TemplateID:             templateID,
+		TemplateVersion:        version,
+		TaskID:                 task.ID,
+		Status:                 RunPending,
+		Attempt:                1,
+		Input:                  input,
+		StageStatuses:          stageMap,
+		TraceID:                traceIDForRun(ctx, task.ID),
+		ToolRegistrySnapshotID: snapshot.ID,
+		CreatedAt:              now,
 	}
 	run.RunManifest = buildWorkflowRunManifest(run)
+	run.RunManifest.ToolRegistrySHA256 = snapshot.SHA256
 
 	if err := s.runRepo.Create(ctx, run); err != nil {
 		return nil, fmt.Errorf("failed to create run: %w", err)
@@ -103,11 +151,12 @@ func (s *RunService) CreateRun(ctx context.Context, userID, projectID, templateI
 	correlation.WorkflowRunID = run.ID
 	correlation.ProjectID = run.ProjectID
 	correlation.TaskID = run.TaskID
-	s.emitRunTransition(eventCtx, observability.EventTypeWorkflowRunQueued, observability.ExecutionStatusQueued, observability.SeverityInfo, correlation, int64(run.Attempt), nil)
+	runtime = workflowRuntime(run)
+	s.emitRunTransition(eventCtx, observability.EventTypeWorkflowRunQueued, observability.ExecutionStatusQueued, observability.SeverityInfo, correlation, runtime, int64(run.Attempt), nil)
 	for stageName := range run.StageStatuses {
 		stageCorrelation := correlation
 		stageCorrelation.StageID = stageName
-		s.emitRunTransition(eventCtx, observability.EventTypeWorkflowStageQueued, observability.ExecutionStatusQueued, observability.SeverityInfo, stageCorrelation, int64(run.Attempt), nil)
+		s.emitRunTransition(eventCtx, observability.EventTypeWorkflowStageQueued, observability.ExecutionStatusQueued, observability.SeverityInfo, stageCorrelation, runtime, int64(run.Attempt), nil)
 	}
 
 	zap.L().Info("WorkflowRun created",
@@ -116,6 +165,43 @@ func (s *RunService) CreateRun(ctx context.Context, userID, projectID, templateI
 		zap.String("taskId", task.ID),
 	)
 	return run, nil
+}
+
+func (s *RunService) freezeToolRegistrySnapshot(ctx context.Context) (ToolRegistrySnapshot, error) {
+	if s == nil || s.toolSnapshots == nil {
+		return ToolRegistrySnapshot{}, fmt.Errorf("tool registry snapshot provider is required")
+	}
+	snapshot, err := s.toolSnapshots.Snapshot(ctx)
+	if err != nil {
+		return ToolRegistrySnapshot{}, fmt.Errorf("freeze tool registry snapshot: %w", err)
+	}
+	hashBytes, err := hex.DecodeString(snapshot.SHA256)
+	if err != nil || len(hashBytes) != sha256.Size {
+		return ToolRegistrySnapshot{}, fmt.Errorf("freeze tool registry snapshot: invalid SHA-256")
+	}
+	digest := sha256.Sum256(snapshot.CanonicalJSON)
+	if hex.EncodeToString(digest[:]) != snapshot.SHA256 || snapshot.ID != "tool_snapshot_"+snapshot.SHA256 {
+		return ToolRegistrySnapshot{}, fmt.Errorf("freeze tool registry snapshot: identity does not match canonical registry")
+	}
+	snapshot.CanonicalJSON = append(json.RawMessage(nil), snapshot.CanonicalJSON...)
+	return snapshot, nil
+}
+
+func applyToolRegistrySnapshotToDAG(dag *model.DAGRequest, snapshot ToolRegistrySnapshot) {
+	if dag == nil {
+		return
+	}
+	for i := range dag.Nodes {
+		if dag.Nodes[i].Input == nil {
+			dag.Nodes[i].Input = map[string]interface{}{}
+		}
+		dag.Nodes[i].Input["toolRegistrySnapshotId"] = snapshot.ID
+		dag.Nodes[i].Input["toolRegistrySha256"] = snapshot.SHA256
+		if parameters, ok := dag.Nodes[i].Input["parameters"].(map[string]interface{}); ok {
+			parameters["toolRegistrySnapshotId"] = snapshot.ID
+			parameters["toolRegistrySha256"] = snapshot.SHA256
+		}
+	}
 }
 
 func traceIDForRun(ctx context.Context, fallback string) string {
@@ -171,7 +257,9 @@ func (s *RunService) UpdateRunStatus(ctx context.Context, runID string, status R
 	correlation := observability.CorrelationFromContext(ctx)
 	correlation.WorkflowRunID = runID
 	durationMs := time.Since(startedAt).Milliseconds()
-	s.emitRunTransition(ctx, eventType, executionStatus, severity, correlation, 1, &durationMs)
+	run, _ := s.runRepo.FindByID(ctx, runID)
+	enrichWorkflowCorrelation(&correlation, run)
+	s.emitRunTransition(ctx, eventType, executionStatus, severity, correlation, workflowRuntime(run), 1, &durationMs)
 	return nil
 }
 
@@ -190,7 +278,9 @@ func (s *RunService) UpdateStageStatus(ctx context.Context, runID, stageName str
 	correlation.WorkflowRunID = runID
 	correlation.StageID = stageName
 	durationMs := time.Since(startedAt).Milliseconds()
-	s.emitRunTransition(ctx, eventType, executionStatus, severity, correlation, 1, &durationMs)
+	run, _ := s.runRepo.FindByID(ctx, runID)
+	enrichWorkflowCorrelation(&correlation, run)
+	s.emitRunTransition(ctx, eventType, executionStatus, severity, correlation, workflowRuntime(run), 1, &durationMs)
 	return nil
 }
 
@@ -238,7 +328,7 @@ func stageStatusEvent(status StageStatus) (observability.EventType, observabilit
 	}
 }
 
-func (s *RunService) emitRunTransition(ctx context.Context, eventType observability.EventType, status observability.ExecutionStatus, severity observability.Severity, correlation observability.Correlation, attempt int64, durationMs *int64) {
+func (s *RunService) emitRunTransition(ctx context.Context, eventType observability.EventType, status observability.ExecutionStatus, severity observability.Severity, correlation observability.Correlation, runtime observability.Runtime, attempt int64, durationMs *int64) {
 	if s == nil {
 		return
 	}
@@ -258,12 +348,35 @@ func (s *RunService) emitRunTransition(ctx context.Context, eventType observabil
 		Execution: observability.Execution{
 			Status: status, Attempt: attempt, DurationMs: durationMs,
 		},
-		Error: eventErr,
+		Runtime: runtime,
+		Error:   eventErr,
 		Privacy: observability.Privacy{
 			Classification: observability.PrivacyInternal,
 			RedactedFields: []string{"workflow.input", "workflow.output", "workflow.stage.payload"},
 		},
 	})
+}
+
+func workflowRuntime(run *WorkflowRun) observability.Runtime {
+	if run == nil {
+		return observability.Runtime{}
+	}
+	return observability.Runtime{
+		WorkflowVersion:        run.TemplateVersion,
+		ToolRegistrySnapshotID: run.ToolRegistrySnapshotID,
+	}
+}
+
+func enrichWorkflowCorrelation(correlation *observability.Correlation, run *WorkflowRun) {
+	if correlation == nil || run == nil {
+		return
+	}
+	if run.TraceID != "" {
+		correlation.TraceID = run.TraceID
+	}
+	correlation.WorkflowRunID = run.ID
+	correlation.ProjectID = run.ProjectID
+	correlation.TaskID = run.TaskID
 }
 
 // jsonUnmarshal is a helper to unmarshal json.RawMessage.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/outbox"
 )
 
@@ -231,12 +232,13 @@ func newMockEventSaver() *mockEventSaver {
 	return &mockEventSaver{readyEventKeys: map[string]bool{}}
 }
 
-func (m *mockEventSaver) SaveNodeReadyEvent(_ context.Context, nodeID, idempotencyKey string, event eventbus.Event) (bool, error) {
+func (m *mockEventSaver) SaveNodeReadyEvent(ctx context.Context, nodeID, idempotencyKey string, event eventbus.Event) (bool, error) {
 	key := nodeID + "\x00" + idempotencyKey
 	if m.readyEventKeys[key] {
 		return false, nil
 	}
 	m.readyEventKeys[key] = true
+	event = eventbus.EnrichEventFromContext(ctx, event)
 	m.events = append(m.events, savedEvent{
 		aggregateType: "node", aggregateID: nodeID, eventType: eventbus.TopicNodeReady, event: event,
 	})
@@ -244,6 +246,7 @@ func (m *mockEventSaver) SaveNodeReadyEvent(_ context.Context, nodeID, idempoten
 }
 
 func (m *mockEventSaver) SaveEvent(ctx context.Context, aggregateType, aggregateID, eventType string, event eventbus.Event) error {
+	event = eventbus.EnrichEventFromContext(ctx, event)
 	m.events = append(m.events, savedEvent{
 		aggregateType: aggregateType,
 		aggregateID:   aggregateID,
@@ -1440,6 +1443,71 @@ func TestDependencyChecker_OnNodeExecuted_ChildBecomesReady(t *testing.T) {
 	// Child should now be READY
 	if nodeRepoWithChildren.nodes["child"].Status != model.NodeReady {
 		t.Errorf("Expected child READY, got %s", nodeRepoWithChildren.nodes["child"].Status)
+	}
+}
+
+func TestNodeReadyEventsPreserveOneAuthoritativeTraceFromInitialToChild(t *testing.T) {
+	nodeRepo := newMockNodeRepo()
+	taskRepo := newMockTaskRepo()
+	depRepo := newMockDepRepo()
+	ctxRepo := newMockContextRepo()
+	eventSaver := newMockEventSaver()
+
+	initial := &model.Node{
+		ID: "initial", TaskID: "task-1", Status: model.NodeCreated,
+		Type: model.NodeTypeLLM, Name: "initial",
+	}
+	child := &model.Node{
+		ID: "child", TaskID: "task-1", Status: model.NodeCreated,
+		Type: model.NodeTypeLLM, Name: "child",
+	}
+	nodeRepo.nodes[initial.ID] = initial
+	nodeRepo.nodes[child.ID] = child
+	depRepo.deps[child.ID] = []*model.NodeDependency{{
+		ParentNodeID: initial.ID,
+		ChildNodeID:  child.ID,
+	}}
+	nodeRepoWithChildren := &mockNodeRepoWithChildren{
+		mockNodeRepo: nodeRepo,
+		children:     map[string][]*model.Node{initial.ID: {child}},
+	}
+	stateService := NewStateService(nodeRepoWithChildren, taskRepo, depRepo, ctxRepo, eventSaver)
+	checker := NewDependencyChecker(nodeRepoWithChildren, stateService, eventSaver)
+
+	initialCtx := observability.WithCorrelation(context.Background(), observability.Correlation{
+		TraceID: "4bf92f3577b34da6a3ce929d0e0e4736",
+		SpanID:  "00f067aa0ba902b7",
+	})
+	if err := stateService.InitializeNodeReady(initialCtx, initial); err != nil {
+		t.Fatal(err)
+	}
+	if len(eventSaver.events) != 1 {
+		t.Fatalf("initial ready events = %d, want 1", len(eventSaver.events))
+	}
+	initialEvent := eventSaver.events[0].event
+
+	initial.Status = model.NodeSuccess
+	childCtx := observability.WithCorrelation(context.Background(), observability.Correlation{
+		TraceID:      initialEvent.TraceID,
+		SpanID:       "1111111111111111",
+		ParentSpanID: initialEvent.SpanID,
+	})
+	checker.OnNodeExecuted(childCtx, initial.ID, initial.TaskID)
+
+	if len(eventSaver.events) < 2 {
+		t.Fatalf("ready events = %d, want initial and child events", len(eventSaver.events))
+	}
+	for _, saved := range eventSaver.events {
+		if saved.eventType != eventbus.TopicNodeReady {
+			continue
+		}
+		if saved.event.TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" {
+			t.Fatalf("node %s trace=%q, want request trace", saved.event.NodeID, saved.event.TraceID)
+		}
+	}
+	childEvent := eventSaver.events[len(eventSaver.events)-1].event
+	if childEvent.SpanID != "1111111111111111" || childEvent.ParentSpanID != initialEvent.SpanID {
+		t.Fatalf("child correlation=%#v, want child span with initial parent", childEvent)
 	}
 }
 

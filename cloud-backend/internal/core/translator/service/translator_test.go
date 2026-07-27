@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -165,5 +166,97 @@ func TestTranslateToDagNormalizesActualFailureModesThroughEmitter(t *testing.T) 
 				t.Fatalf("LLM terminal count=%d events=%+v", terminal, sink.snapshot())
 			}
 		})
+	}
+}
+
+func TestTranslatorOutboundRequestsPropagateW3CChildTraceparent(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		requests []*http.Request
+		nodeID   string
+		post     int
+	)
+	transport := translatorRoundTripper(func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		requests = append(requests, req.Clone(req.Context()))
+		mu.Unlock()
+
+		var body string
+		switch {
+		case req.Method == http.MethodPost && req.URL.Path == "/api/node":
+			post++
+			if post == 1 {
+				var payload struct {
+					Nodes []struct {
+						ID string `json:"id"`
+					} `json:"nodes"`
+				}
+				if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+					return nil, err
+				}
+				nodeID = payload.Nodes[0].ID
+				body = `{"taskId":"task-translate"}`
+			} else {
+				body = `{"taskId":"task-final"}`
+			}
+		case req.Method == http.MethodGet && req.URL.Path == "/api/task/task-translate":
+			toolOutput, _ := json.Marshal(map[string]interface{}{
+				"content": `{"nodes":[],"edges":[]}`,
+			})
+			bodyBytes, _ := json.Marshal(map[string]interface{}{
+				"nodes": []map[string]interface{}{{
+					"id": nodeID, "status": "SUCCESS",
+					"output": map[string]interface{}{"stdout": string(toolOutput)},
+				}},
+			})
+			body = string(bodyBytes)
+		case req.Method == http.MethodGet && req.URL.Path == "/api/task/task-final":
+			body = `{"status":"RUNNING"}`
+		default:
+			return nil, errors.New("unexpected translator request")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+		}, nil
+	})
+	service := NewNlToDagService(config.OpenAIConfig{}, "http://orchestrator.test", nil)
+	service.httpClient = &http.Client{Transport: transport}
+	parent := observability.Correlation{
+		TraceID: "4bf92f3577b34da6a3ce929d0e0e4736",
+		SpanID:  "00f067aa0ba902b7",
+	}
+	ctx := observability.WithCorrelation(context.Background(), parent)
+
+	if _, err := service.TranslateAndSubmit(ctx, "make a DAG"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.GetTaskStatus(ctx, "task-final"); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	captured := append([]*http.Request(nil), requests...)
+	mu.Unlock()
+	if len(captured) != 4 {
+		t.Fatalf("outbound requests = %d, want submit, poll, final submit, and status", len(captured))
+	}
+	traceparentPattern := regexp.MustCompile(`^00-4bf92f3577b34da6a3ce929d0e0e4736-([0-9a-f]{16})-01$`)
+	seenSpans := map[string]bool{}
+	for _, req := range captured {
+		match := traceparentPattern.FindStringSubmatch(req.Header.Get("traceparent"))
+		if match == nil {
+			t.Fatalf("%s %s traceparent=%q", req.Method, req.URL.Path, req.Header.Get("traceparent"))
+		}
+		childSpan := match[1]
+		if childSpan == parent.SpanID || seenSpans[childSpan] {
+			t.Fatalf("%s %s reused non-child span %q", req.Method, req.URL.Path, childSpan)
+		}
+		seenSpans[childSpan] = true
+		got := observability.CorrelationFromContext(req.Context())
+		if got.TraceID != parent.TraceID || got.SpanID != childSpan || got.ParentSpanID != parent.SpanID {
+			t.Fatalf("%s %s child correlation=%#v", req.Method, req.URL.Path, got)
+		}
 	}
 }

@@ -57,6 +57,33 @@ func TestPublishWithContextPopulatesMissingCorrelationWithoutStaleValues(t *test
 	}
 }
 
+func TestPublishWithContextTreatsPresentContextCorrelationAsAuthoritative(t *testing.T) {
+	publisher := &recordingLegacyPublisher{}
+	ctx := observability.WithCorrelation(context.Background(), observability.Correlation{
+		TraceID:      "4bf92f3577b34da6a3ce929d0e0e4736",
+		SpanID:       "00f067aa0ba902b7",
+		ParentSpanID: "b7ad6b7169203331",
+	})
+	stale := Event{
+		TraceID:      "node-specific-trace-root",
+		SpanID:       "node-specific-span",
+		ParentSpanID: "node-specific-parent",
+	}
+
+	if err := PublishWithContext(ctx, publisher, TopicNodeReady, "node-1", stale); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(publisher.events))
+	}
+	got := publisher.events[0]
+	if got.TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" ||
+		got.SpanID != "00f067aa0ba902b7" ||
+		got.ParentSpanID != "b7ad6b7169203331" {
+		t.Fatalf("published correlation = %#v, want authoritative context correlation", got)
+	}
+}
+
 func TestConsumerHandlerReceivesReconstructedCorrelationContext(t *testing.T) {
 	event := Event{
 		TraceID:      "4bf92f3577b34da6a3ce929d0e0e4736",

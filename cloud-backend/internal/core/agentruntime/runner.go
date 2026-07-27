@@ -71,12 +71,17 @@ type Run struct {
 }
 
 type RunTerminalEvent struct {
-	EventID string                 `json:"eventId"`
-	RunID   string                 `json:"runId"`
-	UserID  string                 `json:"userId,omitempty"`
-	Status  RunStatus              `json:"status"`
-	Context map[string]interface{} `json:"context,omitempty"`
-	Error   string                 `json:"error,omitempty"`
+	EventID                string                 `json:"eventId"`
+	RunID                  string                 `json:"runId"`
+	TaskID                 string                 `json:"taskId,omitempty"`
+	UserID                 string                 `json:"userId,omitempty"`
+	TraceID                string                 `json:"traceId,omitempty"`
+	ToolRegistrySnapshotID string                 `json:"toolRegistrySnapshotId,omitempty"`
+	Status                 RunStatus              `json:"status"`
+	Context                map[string]interface{} `json:"context,omitempty"`
+	ErrorCode              string                 `json:"errorCode,omitempty"`
+	Error                  string                 `json:"error,omitempty"`
+	OccurredAt             time.Time              `json:"occurredAt"`
 }
 
 type RunTerminalCallback func(ctx context.Context, event RunTerminalEvent) error
@@ -394,6 +399,7 @@ func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run, ownerU
 		terminal.Metadata["startPhase"] = "failed"
 		terminal.Metadata["error"] = err.Error()
 		event.Status = RunStatusFailed
+		event.ErrorCode = agentErrorCode(err)
 		event.Error = err.Error()
 		if saveErr := r.persistAndDeliverTerminal(context.Background(), &terminal, event); saveErr != nil {
 			zap.L().Warn("failed to persist or deliver async agent run failure", append([]zap.Field{zap.String("runId", run.ID)}, stableAgentDiagnosticFields("AGENT.RUNTIME.INTERNAL_FAILURE")...)...)
@@ -409,48 +415,50 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 	}
 	correlation := observability.CorrelationFromContext(ctx)
 	correlation.AgentRunID = run.ID
+	bootstrapCorrelation := correlation
+	bootstrapCorrelation.StageID = "agent-bootstrap"
 	startedAt := time.Now()
-	r.emitLifecycle(ctx, observability.EventTypeAgentRunStarted, "agent.run.started",
-		observability.ExecutionStatusStarted, observability.SeverityInfo, correlation, nil, nil,
+	r.emitLifecycle(ctx, observability.EventTypeWorkflowStageStarted, "agent.bootstrap.started",
+		observability.ExecutionStatusStarted, observability.SeverityInfo, bootstrapCorrelation, nil, nil,
 		observability.Evidence{
 			InputHash: observability.HashText(req.Message),
 			SizeBytes: observability.ByteSize(req.Message),
 		})
 	defer func() {
 		durationMs := time.Since(startedAt).Milliseconds()
-		eventType := observability.EventTypeAgentRunCompleted
-		messageKey := "agent.run.completed"
+		eventType := observability.EventTypeWorkflowStageCompleted
+		messageKey := "agent.bootstrap.completed"
 		status := observability.ExecutionStatusCompleted
 		severity := observability.SeverityInfo
 		var eventErr *observability.EventError
 		if recovered := recover(); recovered != nil {
-			eventType = observability.EventTypeAgentRunFailed
-			messageKey = "agent.run.failed"
+			eventType = observability.EventTypeWorkflowStageFailed
+			messageKey = "agent.bootstrap.failed"
 			status = observability.ExecutionStatusFailed
 			severity = observability.SeverityError
 			eventErr = observability.NormalizeError("AGENT.RUNTIME.INTERNAL_FAILURE", errors.New("agent run panic"), "agent-runtime", "")
-			r.emitLifecycle(ctx, eventType, messageKey, status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
+			r.emitLifecycle(ctx, eventType, messageKey, status, severity, bootstrapCorrelation, &durationMs, eventErr, observability.Evidence{})
 			panic(recovered)
 		}
 		if retErr != nil {
 			if errors.Is(retErr, errRunCancelled) || errors.Is(retErr, context.Canceled) {
-				eventType = observability.EventTypeAgentRunCancelled
-				messageKey = "agent.run.cancelled"
+				eventType = observability.EventTypeWorkflowStageCancelled
+				messageKey = "agent.bootstrap.cancelled"
 				status = observability.ExecutionStatusCancelled
 				severity = observability.SeverityWarn
 			} else {
-				eventType = observability.EventTypeAgentRunFailed
-				messageKey = "agent.run.failed"
+				eventType = observability.EventTypeWorkflowStageFailed
+				messageKey = "agent.bootstrap.failed"
 				status = observability.ExecutionStatusFailed
 				severity = observability.SeverityError
 				code := agentErrorCode(retErr)
 				if errors.Is(retErr, context.DeadlineExceeded) {
-					code = "AGENT.RUN.TIMEOUT"
+					code = "WORKFLOW.STAGE.TIMEOUT"
 				}
 				eventErr = observability.NormalizeError(code, retErr, "agent-runtime", "")
 			}
 		}
-		r.emitLifecycle(ctx, eventType, messageKey, status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
+		r.emitLifecycle(ctx, eventType, messageKey, status, severity, bootstrapCorrelation, &durationMs, eventErr, observability.Evidence{})
 	}()
 	if err := r.attachToolSnapshot(ctx, &req, run); err != nil {
 		return nil, err
@@ -652,6 +660,7 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 	if err := r.store.SaveRun(ctx, run); err != nil {
 		return nil, fmt.Errorf("store agent run: %w", err)
 	}
+	r.emitAgentRunStarted(ctx, run, correlation)
 	return run, nil
 }
 
@@ -749,6 +758,31 @@ func (r *Runner) emitLifecycle(ctx context.Context, eventType observability.Even
 		},
 		Evidence: evidence,
 		Error:    eventErr,
+		Privacy: observability.Privacy{
+			Classification: observability.PrivacyInternal,
+			RedactedFields: []string{"request.message", "request.context", "plan.arguments"},
+		},
+	})
+}
+
+func (r *Runner) emitAgentRunStarted(ctx context.Context, run *Run, correlation observability.Correlation) {
+	if r == nil || run == nil {
+		return
+	}
+	correlation.AgentRunID = run.ID
+	correlation.TaskID = run.TaskID
+	observability.EmitSafely(ctx, r.events, "agent-runtime", observability.Event{
+		EventType:   observability.EventTypeAgentRunStarted,
+		MessageKey:  "agent.run.started",
+		Severity:    observability.SeverityInfo,
+		Correlation: correlation,
+		Execution: observability.Execution{
+			Status:  observability.ExecutionStatusStarted,
+			Attempt: 1,
+		},
+		Runtime: observability.Runtime{
+			ToolRegistrySnapshotID: run.ToolRegistrySnapshotID,
+		},
 		Privacy: observability.Privacy{
 			Classification: observability.PrivacyInternal,
 			RedactedFields: []string{"request.message", "request.context", "plan.arguments"},
@@ -1196,6 +1230,12 @@ func (r *Runner) Cancel(ctx context.Context, id string) (*Run, error) {
 	if run == nil {
 		return nil, nil
 	}
+	if terminalRunStatus(run.Status) {
+		if err := r.DeliverPendingTerminalEventsOnce(ctx, 1); err != nil {
+			return run, err
+		}
+		return run, nil
+	}
 	run.Status = RunStatusCancelled
 	run.UpdatedAt = time.Now()
 	if run.Metadata == nil {
@@ -1212,8 +1252,26 @@ func (r *Runner) persistAndDeliverTerminal(ctx context.Context, run *Run, event 
 	if r == nil || r.store == nil {
 		return fmt.Errorf("agent runner is not configured")
 	}
+	if run == nil || !terminalRunStatus(run.Status) {
+		return fmt.Errorf("persist agent terminal event requires a terminal run")
+	}
 	if strings.TrimSpace(event.EventID) == "" {
-		event.EventID = "agent_terminal_" + uuid.NewString()
+		event.EventID = "evt_agent_terminal_" + uuid.NewString()
+	}
+	event.RunID = run.ID
+	event.TaskID = run.TaskID
+	event.UserID = run.UserID
+	event.TraceID = run.TraceID
+	event.ToolRegistrySnapshotID = run.ToolRegistrySnapshotID
+	event.Status = run.Status
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = run.UpdatedAt
+		if event.OccurredAt.IsZero() {
+			event.OccurredAt = time.Now().UTC()
+		}
+	}
+	if run.Status == RunStatusFailed && event.ErrorCode == "" {
+		event.ErrorCode = "AGENT.RUNTIME.INTERNAL_FAILURE"
 	}
 	if err := r.store.SaveRunTerminal(ctx, run, event); err != nil {
 		return fmt.Errorf("persist agent terminal event: %w", err)
@@ -1222,7 +1280,7 @@ func (r *Runner) persistAndDeliverTerminal(ctx context.Context, run *Run, event 
 }
 
 func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int) error {
-	if r == nil || r.store == nil || r.terminal == nil || limit <= 0 {
+	if r == nil || r.store == nil || limit <= 0 || (r.terminal == nil && r.events == nil) {
 		return nil
 	}
 	claimToken := "agent_terminal_claim_" + uuid.NewString()
@@ -1232,9 +1290,17 @@ func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int
 	}
 	var deliveryErrors []error
 	for _, delivery := range deliveries {
-		if callbackErr := r.terminal(ctx, delivery.Event); callbackErr != nil {
+		deliveryCtx := terminalDeliveryContext(ctx, delivery.Event)
+		if r.terminal != nil {
+			if callbackErr := r.terminal(deliveryCtx, delivery.Event); callbackErr != nil {
+				_, _ = r.store.ReleaseTerminalEvent(ctx, delivery)
+				deliveryErrors = append(deliveryErrors, fmt.Errorf("deliver terminal event for %s: %w", delivery.RunID, callbackErr))
+				continue
+			}
+		}
+		if emitErr := r.emitDurableTerminal(deliveryCtx, delivery.Event); emitErr != nil {
 			_, _ = r.store.ReleaseTerminalEvent(ctx, delivery)
-			deliveryErrors = append(deliveryErrors, fmt.Errorf("deliver terminal event for %s: %w", delivery.RunID, callbackErr))
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("emit terminal observability for %s: %w", delivery.RunID, emitErr))
 			continue
 		}
 		if _, ackErr := r.store.AckTerminalEvent(ctx, delivery); ackErr != nil {
@@ -1242,6 +1308,84 @@ func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int
 		}
 	}
 	return errors.Join(deliveryErrors...)
+}
+
+func terminalDeliveryContext(ctx context.Context, event RunTerminalEvent) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	existing := observability.CorrelationFromContext(ctx)
+	correlation := observability.Correlation{
+		TraceID:    event.TraceID,
+		AgentRunID: event.RunID,
+		TaskID:     event.TaskID,
+	}
+	if existing.TraceID == event.TraceID {
+		correlation.ParentSpanID = existing.SpanID
+	}
+	for _, key := range []string{"projectId", "videoProjectId"} {
+		if value := strings.TrimSpace(fmt.Sprint(event.Context[key])); value != "" && value != "<nil>" {
+			correlation.ProjectID = value
+			break
+		}
+	}
+	ctx = observability.EnsureCorrelation(observability.WithCorrelation(ctx, correlation))
+	if event.UserID != "" {
+		ctx = trustedcontext.WithUserID(ctx, event.UserID)
+	}
+	return ctx
+}
+
+func (r *Runner) emitDurableTerminal(ctx context.Context, terminal RunTerminalEvent) error {
+	if r == nil || r.events == nil {
+		return nil
+	}
+	eventType := observability.EventTypeAgentRunCompleted
+	status := observability.ExecutionStatusCompleted
+	severity := observability.SeverityInfo
+	var eventErr *observability.EventError
+	switch terminal.Status {
+	case RunStatusSuccess:
+	case RunStatusFailed:
+		eventType = observability.EventTypeAgentRunFailed
+		status = observability.ExecutionStatusFailed
+		severity = observability.SeverityError
+		code := terminal.ErrorCode
+		if code == "" {
+			code = "AGENT.RUNTIME.INTERNAL_FAILURE"
+		}
+		eventErr = observability.NormalizeError(code, errors.New("agent run failed"), "agent-runtime", "")
+	case RunStatusCancelled:
+		eventType = observability.EventTypeAgentRunCancelled
+		status = observability.ExecutionStatusCancelled
+		severity = observability.SeverityWarn
+	default:
+		return fmt.Errorf("terminal outbox event has non-terminal status %s", terminal.Status)
+	}
+	event := observability.Event{
+		EventID:     terminal.EventID,
+		OccurredAt:  terminal.OccurredAt,
+		EventType:   eventType,
+		MessageKey:  string(eventType),
+		Severity:    severity,
+		Correlation: observability.CorrelationFromContext(ctx),
+		Execution: observability.Execution{
+			Status:  status,
+			Attempt: 1,
+		},
+		Runtime: observability.Runtime{
+			ToolRegistrySnapshotID: terminal.ToolRegistrySnapshotID,
+		},
+		Error: eventErr,
+		Privacy: observability.Privacy{
+			Classification: observability.PrivacyInternal,
+			RedactedFields: []string{"terminal.context", "terminal.error"},
+		},
+	}
+	if durable, ok := r.events.(observability.DurableEventEmitter); ok {
+		return durable.EmitAndWait(ctx, event)
+	}
+	return r.events.Emit(ctx, event)
 }
 
 func (r *Runner) RunTerminalDelivery(ctx context.Context, interval time.Duration, batchSize int) {
@@ -1273,6 +1417,15 @@ func terminalEventFromRun(run *Run, errorMessage string) RunTerminalEvent {
 		event.Context, _ = run.Metadata["requestContext"].(map[string]interface{})
 	}
 	return event
+}
+
+func terminalRunStatus(status RunStatus) bool {
+	switch status {
+	case RunStatusSuccess, RunStatusFailed, RunStatusCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 func taskErrorString(task map[string]interface{}) string {

@@ -219,7 +219,7 @@ func (e *Emitter) prepare(ctx context.Context, event Event) (Event, error) {
 	event.IngestedAt = now
 	event.ProducerSequence = e.sequence.Add(1) - 1
 	event.Source = e.source
-	event.Runtime = e.runtime
+	event.Runtime = mergeRuntime(event.Runtime, e.runtime)
 	event.Correlation = mergeCorrelation(event.Correlation, CorrelationFromContext(ctx))
 	event.Correlation = sanitizeCorrelation(event.Correlation)
 	if event.Execution.Attempt == 0 {
@@ -239,6 +239,27 @@ func (e *Emitter) prepare(ctx context.Context, event Event) (Event, error) {
 		return Event{}, fmt.Errorf("validate observability event: %w", err)
 	}
 	return event, nil
+}
+
+func mergeRuntime(primary, fallback Runtime) Runtime {
+	fields := []struct {
+		primary  *string
+		fallback string
+	}{
+		{&primary.AppVersion, fallback.AppVersion},
+		{&primary.GitCommit, fallback.GitCommit},
+		{&primary.WorkflowVersion, fallback.WorkflowVersion},
+		{&primary.ToolRegistrySnapshotID, fallback.ToolRegistrySnapshotID},
+		{&primary.PromptTemplateVersion, fallback.PromptTemplateVersion},
+		{&primary.Provider, fallback.Provider},
+		{&primary.Model, fallback.Model},
+	}
+	for _, field := range fields {
+		if *field.primary == "" {
+			*field.primary = field.fallback
+		}
+	}
+	return primary
 }
 
 func mergeCorrelation(primary, fallback Correlation) Correlation {

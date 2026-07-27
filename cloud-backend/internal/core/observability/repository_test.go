@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 )
 
 type relayCall struct {
@@ -235,6 +236,49 @@ func TestRepositorySaveSummaryRedactsValidatesAndUsesFixedExpiry(t *testing.T) {
 	}
 	if strings.Contains(call.query, "error_message") || strings.Contains(call.query, "prompt") {
 		t.Fatalf("save SQL exposes forbidden columns: %s", call.query)
+	}
+}
+
+func TestEmitterAndRelayPreserveEventRuntimeVersionsWhileGlobalFillsMissing(t *testing.T) {
+	event := validEvent()
+	event.Runtime = Runtime{
+		AppVersion:             "event-app-v2",
+		WorkflowVersion:        "workflow-v7",
+		ToolRegistrySnapshotID: "snapshot-real-123",
+		PromptTemplateVersion:  "prompt-v3",
+	}
+	db := &fakeRelayDB{row: relayRow{true}}
+	repo := newRepositoryWithRelayDBAndClock(db, func() time.Time { return event.OccurredAt.Add(time.Minute) })
+	emitter := NewEmitter(
+		testSource(),
+		Runtime{AppVersion: "global-app-must-not-overwrite", GitCommit: "git-global"},
+		NewRepositorySink(repo),
+		4,
+	)
+	ctx := trustedcontext.WithUserID(context.Background(), "user_a")
+
+	if err := emitter.EmitAndWait(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.calls) != 1 {
+		t.Fatalf("relay calls=%d, want 1", len(db.calls))
+	}
+	var versions RunVersions
+	if err := json.Unmarshal(db.calls[0].args[12].([]byte), &versions); err != nil {
+		t.Fatal(err)
+	}
+	want := RunVersions{
+		AppVersion:             "event-app-v2",
+		GitCommit:              "git-global",
+		WorkflowVersion:        "workflow-v7",
+		ToolRegistrySnapshotID: "snapshot-real-123",
+		PromptTemplateVersion:  "prompt-v3",
+	}
+	if versions != want {
+		t.Fatalf("relay summary versions=%+v, want %+v", versions, want)
 	}
 }
 

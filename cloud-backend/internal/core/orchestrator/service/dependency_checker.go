@@ -85,7 +85,6 @@ func (dc *DependencyChecker) OnNodeExecuted(ctx context.Context, nodeID, taskID 
 			NodeID:         child.ID,
 			Type:           string(child.Type),
 			Payload:        childPayload,
-			TraceID:        child.TaskID + "-" + child.ID,
 			IdempotencyKey: child.IdempotencyKey,
 		})
 		zap.L().Info("Child node is now READY and published", zap.String("nodeId", child.ID))
