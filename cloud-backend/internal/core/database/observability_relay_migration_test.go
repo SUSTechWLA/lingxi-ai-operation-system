@@ -53,6 +53,22 @@ func TestObservabilityRelayMigrationNormalizesFingerprintsBeforeConstraintValida
 	}
 }
 
+func TestObservabilityRelayConstraintLookupIsScopedToTargetRelation(t *testing.T) {
+	lookup := "conrelid = 'observability_run_summaries'::regclass"
+	if !strings.Contains(observabilityRelayMigration, lookup) {
+		t.Fatalf("constraint lookup is not relation-scoped; a same-name constraint on another table could suppress ADD: %s", observabilityRelayMigration)
+	}
+	create := strings.Index(observabilityRelayMigration, "CREATE TABLE IF NOT EXISTS observability_run_summaries")
+	cast := strings.Index(observabilityRelayMigration, lookup)
+	if create < 0 || cast < 0 || create >= cast {
+		t.Fatalf("target table must exist before regclass lookup: create=%d lookup=%d", create, cast)
+	}
+	compact := strings.Join(strings.Fields(observabilityRelayMigration), " ")
+	if !strings.Contains(compact, "WHERE conname='observability_run_summary_fingerprint_limit' AND "+lookup) {
+		t.Fatalf("constraint name and relation are not checked together: %s", compact)
+	}
+}
+
 type recordingObservabilityMigrationExecer struct{ calls []string }
 
 func (execer *recordingObservabilityMigrationExecer) Exec(_ context.Context, query string, _ ...interface{}) (pgconn.CommandTag, error) {

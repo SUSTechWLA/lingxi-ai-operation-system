@@ -216,6 +216,7 @@ const observabilityRelayMigration = `
 		IF NOT EXISTS (
 			SELECT 1 FROM pg_constraint
 			WHERE conname='observability_run_summary_fingerprint_limit'
+			  AND conrelid = 'observability_run_summaries'::regclass
 		) THEN
 			ALTER TABLE observability_run_summaries
 				ADD CONSTRAINT observability_run_summary_fingerprint_limit
