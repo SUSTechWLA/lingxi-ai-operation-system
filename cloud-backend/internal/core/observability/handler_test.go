@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -81,7 +82,11 @@ func TestPullEventsRejectsMalformedCursorAndLimit(t *testing.T) {
 	repo := &fakeRelayRepository{}
 	router := gin.New()
 	router.GET("/events", authenticated("user_a"), NewHandler(repo).Pull)
-	for _, target := range []string{"/events?cursor=bad", "/events?limit=nope", "/events?limit=0"} {
+	futureCursor, err := encodeCursor(time.Now().UTC().Add(maxEventFutureSkew+time.Hour), "evt_future")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"/events?cursor=bad", "/events?cursor=" + futureCursor, "/events?limit=nope", "/events?limit=0"} {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
 		if recorder.Code != http.StatusBadRequest {

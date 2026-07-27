@@ -11,6 +11,7 @@ import (
 // removed, never masked into reusable text.
 func Redact(event Event) Event {
 	redacted := event
+	redacted.Execution.DurationMs = cloneInt64(event.Execution.DurationMs)
 	redacted.Evidence.InputRefs = cloneStrings(event.Evidence.InputRefs)
 	redacted.Evidence.OutputRefs = cloneStrings(event.Evidence.OutputRefs)
 	redacted.Evidence.SizeBytes = cloneInt64(event.Evidence.SizeBytes)

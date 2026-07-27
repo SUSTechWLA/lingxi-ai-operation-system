@@ -521,7 +521,7 @@ export interface ObservabilityRunSummary {
 // ObservabilityRunSummaryResponse
 export interface ObservabilityRunSummaryResponse {
   code: number;
-  data: { correlation: { agentRunId?: string; artifactId?: string; parentSpanId?: string; projectId?: string; providerJobId?: string; sessionId?: string; shotId?: string; spanId: string; stageId?: string; taskId?: string; toolCallId?: string; traceId: string; workflowRunId?: string }; durationMs?: number | null; errorFingerprints: string[]; runId: string; status: string; updatedAt: string; versions: { appVersion?: string; gitCommit?: string; promptTemplateVersion?: string; toolRegistrySnapshotId?: string; workflowVersion?: string } };
+  data: ObservabilityRunSummary;
   message: string;
 }
 

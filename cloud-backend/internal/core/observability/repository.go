@@ -24,6 +24,15 @@ const (
 	maxCursorBytes   = 2048
 	relayLifetime    = 72 * time.Hour
 	maxRelayIDBytes  = 128
+	// Run summaries retain at most 128 unique SHA-256 fingerprints. SQL keeps
+	// the lexicographically smallest values so the cap is deterministic across
+	// retries and out-of-order delivery.
+	maxRunErrorFingerprints = 128
+	// Cloud accepts delayed events for seven days and permits five minutes of
+	// producer clock lead. The relay itself remains available for 72 hours from
+	// cloud acceptance, independent of producer-provided ingest timestamps.
+	maxEventAge        = 7 * 24 * time.Hour
+	maxEventFutureSkew = 5 * time.Minute
 )
 
 var (
@@ -88,14 +97,24 @@ func (db pgxRelayDB) Exec(ctx context.Context, query string, args ...interface{}
 	return db.pool.Exec(ctx, query, args...)
 }
 
-type Repository struct{ db relayDB }
+type Repository struct {
+	db  relayDB
+	now func() time.Time
+}
 
 func NewRepository(pool *pgxpool.Pool) *Repository {
-	return newRepositoryWithRelayDB(pgxRelayDB{pool: pool})
+	return newRepositoryWithRelayDBAndClock(pgxRelayDB{pool: pool}, time.Now)
 }
 
 func newRepositoryWithRelayDB(db relayDB) *Repository {
-	return &Repository{db: db}
+	return newRepositoryWithRelayDBAndClock(db, time.Now)
+}
+
+func newRepositoryWithRelayDBAndClock(db relayDB, now func() time.Time) *Repository {
+	if now == nil {
+		now = time.Now
+	}
+	return &Repository{db: db, now: now}
 }
 
 const saveSummarySQL = `
@@ -105,27 +124,66 @@ WITH accepted AS (
 	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 	ON CONFLICT (event_id) DO UPDATE SET event_id=observability_event_outbox.event_id
 	WHERE observability_event_outbox.user_id=EXCLUDED.user_id
-	  AND observability_event_outbox.redacted_payload=EXCLUDED.redacted_payload
-	RETURNING event_id
+	  AND (observability_event_outbox.redacted_payload - 'ingestedAt')
+	      = (EXCLUDED.redacted_payload - 'ingestedAt')
+	RETURNING (xmax = 0) AS inserted
 ), summary AS (
 	INSERT INTO observability_run_summaries (
-		user_id, run_id, status, duration_ms, error_fingerprints, correlation, versions, updated_at
+		user_id, run_id, status, duration_ms, error_fingerprints, correlation, versions, updated_at, last_event_id
 	)
-	SELECT $2,$3,$9,$10,$11,$12,$13,$5 WHERE EXISTS (SELECT 1 FROM accepted)
+	SELECT $2,$3,$9,$10,$11,$12,$13,$5,$1
+	WHERE EXISTS (SELECT 1 FROM accepted WHERE inserted)
 	ON CONFLICT (user_id, run_id) DO UPDATE SET
-		status=CASE WHEN EXCLUDED.updated_at >= observability_run_summaries.updated_at
+		status=CASE WHEN
+			(observability_run_summaries.status NOT IN ('COMPLETED','FAILED','CANCELLED','SKIPPED')
+			 OR EXCLUDED.status IN ('COMPLETED','FAILED','CANCELLED','SKIPPED'))
+			AND (EXCLUDED.updated_at > observability_run_summaries.updated_at
+			 OR (EXCLUDED.updated_at = observability_run_summaries.updated_at
+			  AND EXCLUDED.last_event_id > observability_run_summaries.last_event_id))
 			THEN EXCLUDED.status ELSE observability_run_summaries.status END,
-		duration_ms=CASE WHEN EXCLUDED.updated_at >= observability_run_summaries.updated_at
-			THEN EXCLUDED.duration_ms ELSE observability_run_summaries.duration_ms END,
-		error_fingerprints=(
-			SELECT COALESCE(array_agg(DISTINCT fingerprint), ARRAY[]::TEXT[])
+		duration_ms=CASE WHEN
+			(observability_run_summaries.status NOT IN ('COMPLETED','FAILED','CANCELLED','SKIPPED')
+			 OR EXCLUDED.status IN ('COMPLETED','FAILED','CANCELLED','SKIPPED'))
+			AND (EXCLUDED.updated_at > observability_run_summaries.updated_at
+			 OR (EXCLUDED.updated_at = observability_run_summaries.updated_at
+			  AND EXCLUDED.last_event_id > observability_run_summaries.last_event_id))
+			THEN COALESCE(EXCLUDED.duration_ms, observability_run_summaries.duration_ms)
+			ELSE observability_run_summaries.duration_ms END,
+		error_fingerprints=ARRAY(
+			SELECT DISTINCT fingerprint
 			FROM unnest(observability_run_summaries.error_fingerprints || EXCLUDED.error_fingerprints) AS fingerprint
+			WHERE fingerprint ~ '^[a-f0-9]{64}$'
+			ORDER BY fingerprint
+			LIMIT 128
 		),
-		correlation=CASE WHEN EXCLUDED.updated_at >= observability_run_summaries.updated_at
+		correlation=CASE WHEN
+			(observability_run_summaries.status NOT IN ('COMPLETED','FAILED','CANCELLED','SKIPPED')
+			 OR EXCLUDED.status IN ('COMPLETED','FAILED','CANCELLED','SKIPPED'))
+			AND (EXCLUDED.updated_at > observability_run_summaries.updated_at
+			 OR (EXCLUDED.updated_at = observability_run_summaries.updated_at
+			  AND EXCLUDED.last_event_id > observability_run_summaries.last_event_id))
 			THEN EXCLUDED.correlation ELSE observability_run_summaries.correlation END,
-		versions=CASE WHEN EXCLUDED.updated_at >= observability_run_summaries.updated_at
+		versions=CASE WHEN
+			(observability_run_summaries.status NOT IN ('COMPLETED','FAILED','CANCELLED','SKIPPED')
+			 OR EXCLUDED.status IN ('COMPLETED','FAILED','CANCELLED','SKIPPED'))
+			AND (EXCLUDED.updated_at > observability_run_summaries.updated_at
+			 OR (EXCLUDED.updated_at = observability_run_summaries.updated_at
+			  AND EXCLUDED.last_event_id > observability_run_summaries.last_event_id))
 			THEN EXCLUDED.versions ELSE observability_run_summaries.versions END,
-		updated_at=GREATEST(observability_run_summaries.updated_at, EXCLUDED.updated_at)
+		updated_at=CASE WHEN
+			(observability_run_summaries.status NOT IN ('COMPLETED','FAILED','CANCELLED','SKIPPED')
+			 OR EXCLUDED.status IN ('COMPLETED','FAILED','CANCELLED','SKIPPED'))
+			AND (EXCLUDED.updated_at > observability_run_summaries.updated_at
+			 OR (EXCLUDED.updated_at = observability_run_summaries.updated_at
+			  AND EXCLUDED.last_event_id > observability_run_summaries.last_event_id))
+			THEN EXCLUDED.updated_at ELSE observability_run_summaries.updated_at END,
+		last_event_id=CASE WHEN
+			(observability_run_summaries.status NOT IN ('COMPLETED','FAILED','CANCELLED','SKIPPED')
+			 OR EXCLUDED.status IN ('COMPLETED','FAILED','CANCELLED','SKIPPED'))
+			AND (EXCLUDED.updated_at > observability_run_summaries.updated_at
+			 OR (EXCLUDED.updated_at = observability_run_summaries.updated_at
+			  AND EXCLUDED.last_event_id > observability_run_summaries.last_event_id))
+			THEN EXCLUDED.last_event_id ELSE observability_run_summaries.last_event_id END
 )
 SELECT EXISTS (SELECT 1 FROM accepted)`
 
@@ -134,13 +192,16 @@ func (repository *Repository) SaveSummary(ctx context.Context, userID string, ev
 		return errors.New("trusted user ID is required")
 	}
 	redacted := Redact(event)
+	acceptedAt := normalizeRelayTime(repository.now())
+	redacted.OccurredAt = normalizeRelayTime(redacted.OccurredAt)
+	redacted.IngestedAt = acceptedAt
 	if ContainsSecret(redacted) {
 		return errors.New("observability event contains secret material")
 	}
 	if err := redacted.Validate(); err != nil {
 		return fmt.Errorf("validate redacted observability event: %w", err)
 	}
-	if redacted.OccurredAt.IsZero() || redacted.IngestedAt.IsZero() {
+	if acceptedAt.IsZero() || !relayTimeInWindow(redacted.OccurredAt, acceptedAt) {
 		return errors.New("observability event timestamps are required")
 	}
 	if len(redacted.EventID) > maxRelayIDBytes || len(redacted.Correlation.TraceID) > maxRelayIDBytes {
@@ -178,7 +239,7 @@ func (repository *Repository) SaveSummary(ctx context.Context, userID string, ev
 		redacted.OccurredAt,
 		payload,
 		redacted.IngestedAt,
-		redacted.IngestedAt.Add(relayLifetime),
+		acceptedAt.Add(relayLifetime),
 		summary.Status,
 		summary.DurationMs,
 		summary.ErrorFingerprints,
@@ -260,7 +321,7 @@ func (repository *Repository) Pull(ctx context.Context, userID, cursor string, l
 	cursorTime := time.Time{}
 	cursorEventID := ""
 	if cursor != "" {
-		decoded, err := decodeCursor(cursor)
+		decoded, err := decodeCursorAt(cursor, normalizeRelayTime(repository.now()))
 		if err != nil {
 			return EventPage{}, err
 		}
@@ -273,6 +334,7 @@ func (repository *Repository) Pull(ctx context.Context, userID, cursor string, l
 	defer rows.Close()
 
 	page := EventPage{Events: []Event{}}
+	hasLookahead := false
 	for rows.Next() {
 		var eventID string
 		var occurredAt time.Time
@@ -281,6 +343,7 @@ func (repository *Repository) Pull(ctx context.Context, userID, cursor string, l
 			return EventPage{}, fmt.Errorf("scan observability event: %w", err)
 		}
 		if len(page.Events) == limit {
+			hasLookahead = true
 			continue
 		}
 		event, err := decodePersistedEvent(payload)
@@ -295,7 +358,7 @@ func (repository *Repository) Pull(ctx context.Context, userID, cursor string, l
 	if err := rows.Err(); err != nil {
 		return EventPage{}, fmt.Errorf("iterate observability events: %w", err)
 	}
-	if len(page.Events) == limit {
+	if hasLookahead {
 		last := page.Events[len(page.Events)-1]
 		page.NextCursor, err = encodeCursor(last.OccurredAt, last.EventID)
 		if err != nil {
@@ -339,6 +402,10 @@ func encodeCursor(occurredAt time.Time, eventID string) (string, error) {
 }
 
 func decodeCursor(value string) (decodedRelayCursor, error) {
+	return decodeCursorAt(value, normalizeRelayTime(time.Now()))
+}
+
+func decodeCursorAt(value string, now time.Time) (decodedRelayCursor, error) {
 	if value == "" || len(value) > maxCursorBytes {
 		return decodedRelayCursor{}, ErrInvalidCursor
 	}
@@ -356,10 +423,24 @@ func decodeCursor(value string) (decodedRelayCursor, error) {
 		return decodedRelayCursor{}, ErrInvalidCursor
 	}
 	occurredAt, err := time.Parse(time.RFC3339Nano, cursor.OccurredAt)
-	if err != nil || cursor.Version != 1 || !validRelayEventID(cursor.EventID) {
+	if err != nil || cursor.Version != 1 || !validRelayEventID(cursor.EventID) || !relayTimeInWindow(occurredAt, now) {
 		return decodedRelayCursor{}, ErrInvalidCursor
 	}
-	return decodedRelayCursor{OccurredAt: occurredAt, EventID: cursor.EventID}, nil
+	return decodedRelayCursor{OccurredAt: normalizeRelayTime(occurredAt), EventID: cursor.EventID}, nil
+}
+
+func normalizeRelayTime(value time.Time) time.Time {
+	if value.IsZero() {
+		return time.Time{}
+	}
+	return value.UTC().Truncate(time.Microsecond)
+}
+
+func relayTimeInWindow(value, now time.Time) bool {
+	if value.IsZero() || now.IsZero() {
+		return false
+	}
+	return !value.Before(now.Add(-maxEventAge)) && !value.After(now.Add(maxEventFutureSkew))
 }
 
 func decodePersistedEvent(payload []byte) (Event, error) {
@@ -502,7 +583,11 @@ func validateRunSummary(summary RunSummary) error {
 	if summary.DurationMs != nil && *summary.DurationMs < 0 {
 		return errors.New("observability summary duration is invalid")
 	}
+	if len(summary.ErrorFingerprints) > maxRunErrorFingerprints {
+		return errors.New("observability summary has too many fingerprints")
+	}
 	seen := make(map[string]struct{}, len(summary.ErrorFingerprints))
+	previous := ""
 	for _, fingerprint := range summary.ErrorFingerprints {
 		if !hashPattern.MatchString(fingerprint) {
 			return errors.New("observability summary fingerprint is invalid")
@@ -511,6 +596,10 @@ func validateRunSummary(summary RunSummary) error {
 			return errors.New("observability summary fingerprints must be unique")
 		}
 		seen[fingerprint] = struct{}{}
+		if previous != "" && fingerprint < previous {
+			return errors.New("observability summary fingerprints must be sorted")
+		}
+		previous = fingerprint
 	}
 	if err := summary.Correlation.validate(); err != nil {
 		return fmt.Errorf("validate observability summary: %w", err)

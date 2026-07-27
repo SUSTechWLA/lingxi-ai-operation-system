@@ -835,6 +835,28 @@ func TestBuildCloudSpecExposesAuthenticatedObservabilityRelay(t *testing.T) {
 	if ack == nil || !reflect.DeepEqual(ack.Required, []string{"eventIds"}) {
 		t.Fatalf("ack schema = %#v", ack)
 	}
+	eventIDs := inlineProperty(t, ack, "eventIds")
+	if eventIDs.MinItems == nil || *eventIDs.MinItems != 1 || eventIDs.MaxItems == nil || *eventIDs.MaxItems != 500 {
+		t.Fatalf("ack eventIds bounds = %#v", eventIDs)
+	}
+	if eventIDs.Items == nil || eventIDs.Items.Schema == nil || eventIDs.Items.Schema.Pattern != `^evt_[A-Za-z0-9_-]+$` ||
+		eventIDs.Items.Schema.MaxLength == nil || *eventIDs.Items.Schema.MaxLength != 128 {
+		t.Fatalf("ack eventId schema = %#v", eventIDs.Items)
+	}
+	cursor := inlineParameterSchema(findParameter(pull, "query", "cursor"))
+	if cursor == nil || cursor.MaxLength == nil || *cursor.MaxLength != 2048 {
+		t.Fatalf("cursor schema = %#v", cursor)
+	}
+	runOp := operationForMethod(t, spec.Paths["/api/observability/runs/:runId/summary"], "GET")
+	runID := inlineParameterSchema(findParameter(runOp, "path", "runId"))
+	if runID == nil || runID.MaxLength == nil || *runID.MaxLength != 128 || runID.Pattern != `^(?:wfr|agr)_[A-Za-z0-9_-]+$` {
+		t.Fatalf("runId schema = %#v", runID)
+	}
+	fingerprints := inlineProperty(t, spec.Components.Schemas["ObservabilityRunSummary"], "errorFingerprints")
+	if fingerprints.MaxItems == nil || *fingerprints.MaxItems != 128 || fingerprints.Items == nil ||
+		fingerprints.Items.Schema == nil || fingerprints.Items.Schema.Pattern != `^[a-f0-9]{64}$` {
+		t.Fatalf("fingerprint schema = %#v", fingerprints)
+	}
 	for _, forbidden := range []string{"prompt", "media", "toolArgs", "attributes", "errorText"} {
 		if _, ok := spec.Components.Schemas["ObservabilityRunSummary"].Properties[forbidden]; ok {
 			t.Fatalf("run summary exposes %q", forbidden)

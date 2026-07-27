@@ -91,7 +91,7 @@ func TestRepositorySaveSummaryRedactsValidatesAndUsesFixedExpiry(t *testing.T) {
 	event.Evidence.Attributes = map[string]any{"prompt": "do not persist me"}
 	rawCopy := event
 	db := &fakeRelayDB{row: relayRow{true}}
-	repo := newRepositoryWithRelayDB(db)
+	repo := newRepositoryWithRelayDBAndClock(db, func() time.Time { return event.IngestedAt })
 
 	if err := repo.SaveSummary(context.Background(), "user_a", event); err != nil {
 		t.Fatal(err)
@@ -125,6 +125,74 @@ func TestRepositorySaveSummaryRedactsValidatesAndUsesFixedExpiry(t *testing.T) {
 	}
 	if strings.Contains(call.query, "error_message") || strings.Contains(call.query, "prompt") {
 		t.Fatalf("save SQL exposes forbidden columns: %s", call.query)
+	}
+}
+
+func TestRepositorySaveUsesCloudAcceptanceClockAndPostgresMicrosecondPrecision(t *testing.T) {
+	acceptedAt := time.Date(2026, 7, 27, 15, 4, 5, 987_654_321, time.FixedZone("CST", 8*60*60))
+	occurredAt := time.Date(2026, 7, 26, 23, 4, 5, 123_456_789, time.FixedZone("west", -7*60*60))
+	event := validEvent()
+	event.OccurredAt = occurredAt
+	event.IngestedAt = acceptedAt.Add(365 * 24 * time.Hour)
+	callerCopy := event
+	db := &fakeRelayDB{row: relayRow{true}}
+	repo := newRepositoryWithRelayDBAndClock(db, func() time.Time { return acceptedAt })
+
+	if err := repo.SaveSummary(context.Background(), "user_a", event); err != nil {
+		t.Fatal(err)
+	}
+	call := db.calls[0]
+	wantOccurred := time.Date(2026, 7, 27, 6, 4, 5, 123_456_000, time.UTC)
+	wantAccepted := time.Date(2026, 7, 27, 7, 4, 5, 987_654_000, time.UTC)
+	if call.args[4] != wantOccurred || call.args[6] != wantAccepted || call.args[7] != wantAccepted.Add(72*time.Hour) {
+		t.Fatalf("timestamps = occurred:%v accepted:%v expires:%v", call.args[4], call.args[6], call.args[7])
+	}
+	var persisted Event
+	if err := json.Unmarshal(call.args[5].([]byte), &persisted); err != nil {
+		t.Fatal(err)
+	}
+	postgresOccurred := time.UnixMicro(call.args[4].(time.Time).UnixMicro()).UTC()
+	postgresAccepted := time.UnixMicro(call.args[6].(time.Time).UnixMicro()).UTC()
+	if !persisted.OccurredAt.Equal(postgresOccurred) || !persisted.IngestedAt.Equal(postgresAccepted) {
+		t.Fatalf("JSON timestamps do not survive PostgreSQL microsecond round trip: payload=%s columns=%v/%v", call.args[5], postgresOccurred, postgresAccepted)
+	}
+	if !event.OccurredAt.Equal(callerCopy.OccurredAt) || !event.IngestedAt.Equal(callerCopy.IngestedAt) {
+		t.Fatal("SaveSummary mutated caller timestamps")
+	}
+}
+
+func TestRepositoryRejectsOccurredAtOutsideAcceptanceWindow(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	for _, occurredAt := range []time.Time{
+		{},
+		now.Add(maxEventFutureSkew + time.Microsecond),
+		now.Add(-maxEventAge - time.Microsecond),
+	} {
+		event := validEvent()
+		event.OccurredAt = occurredAt
+		db := &fakeRelayDB{row: relayRow{true}}
+		err := newRepositoryWithRelayDBAndClock(db, func() time.Time { return now }).SaveSummary(context.Background(), "user_a", event)
+		if err == nil || len(db.calls) != 0 {
+			t.Fatalf("occurredAt %v accepted, calls=%d", occurredAt, len(db.calls))
+		}
+	}
+}
+
+func TestRepositoryPullRejectsCursorOutsideAcceptanceWindow(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	repo := newRepositoryWithRelayDBAndClock(&fakeRelayDB{rows: &relayRows{}}, func() time.Time { return now })
+	for _, occurredAt := range []time.Time{
+		{},
+		now.Add(maxEventFutureSkew + time.Microsecond),
+		now.Add(-maxEventAge - time.Microsecond),
+	} {
+		cursor, err := encodeCursor(occurredAt, "evt_one")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.Pull(context.Background(), "user_a", cursor, 10); !errors.Is(err, ErrInvalidCursor) {
+			t.Fatalf("cursor time %v error=%v", occurredAt, err)
+		}
 	}
 }
 
@@ -163,7 +231,8 @@ func TestRepositorySaveSummaryRejectsUnsafeIdentityAndPayload(t *testing.T) {
 
 func TestRepositorySaveSummaryRejectsCrossOwnerEventIDCollision(t *testing.T) {
 	db := &fakeRelayDB{row: relayRow{false}}
-	err := newRepositoryWithRelayDB(db).SaveSummary(context.Background(), "user_a", validEvent())
+	event := validEvent()
+	err := newRepositoryWithRelayDBAndClock(db, func() time.Time { return event.OccurredAt.Add(time.Hour) }).SaveSummary(context.Background(), "user_a", event)
 	if !errors.Is(err, ErrEventConflict) {
 		t.Fatalf("error = %v, want ErrEventConflict", err)
 	}
@@ -172,16 +241,21 @@ func TestRepositorySaveSummaryRejectsCrossOwnerEventIDCollision(t *testing.T) {
 func TestRepositoryPullScopesStableCursorAndClosesRows(t *testing.T) {
 	first := validEvent()
 	second := validEvent()
+	lookahead := validEvent()
 	second.EventID = "evt_zz"
+	lookahead.EventID = "evt_zzz"
 	second.OccurredAt = first.OccurredAt
+	lookahead.OccurredAt = first.OccurredAt
 	firstJSON, _ := json.Marshal(first)
 	secondJSON, _ := json.Marshal(second)
+	lookaheadJSON, _ := json.Marshal(lookahead)
 	rows := &relayRows{values: []relayRow{
 		{first.EventID, first.OccurredAt, firstJSON},
 		{second.EventID, second.OccurredAt, secondJSON},
+		{lookahead.EventID, lookahead.OccurredAt, lookaheadJSON},
 	}}
 	db := &fakeRelayDB{rows: rows}
-	repo := newRepositoryWithRelayDB(db)
+	repo := newRepositoryWithRelayDBAndClock(db, func() time.Time { return first.OccurredAt.Add(time.Hour) })
 
 	page, err := repo.Pull(context.Background(), "user_a", "", 2)
 	if err != nil {
@@ -204,12 +278,31 @@ func TestRepositoryPullScopesStableCursorAndClosesRows(t *testing.T) {
 	}
 
 	nextDB := &fakeRelayDB{rows: &relayRows{}}
-	if _, err := newRepositoryWithRelayDB(nextDB).Pull(context.Background(), "user_a", page.NextCursor, 2); err != nil {
+	if _, err := newRepositoryWithRelayDBAndClock(nextDB, func() time.Time { return first.OccurredAt.Add(time.Hour) }).Pull(context.Background(), "user_a", page.NextCursor, 2); err != nil {
 		t.Fatal(err)
 	}
 	nextArgs := nextDB.calls[0].args
 	if nextArgs[1] != second.OccurredAt || nextArgs[2] != second.EventID {
 		t.Fatalf("decoded cursor args = %#v", nextArgs)
+	}
+}
+
+func TestRepositoryPullExactlyFullFinalPageHasNoCursor(t *testing.T) {
+	first := validEvent()
+	second := validEvent()
+	second.EventID = "evt_zz"
+	firstJSON, _ := json.Marshal(first)
+	secondJSON, _ := json.Marshal(second)
+	rows := &relayRows{values: []relayRow{
+		{first.EventID, first.OccurredAt, firstJSON},
+		{second.EventID, second.OccurredAt, secondJSON},
+	}}
+	page, err := newRepositoryWithRelayDB(&fakeRelayDB{rows: rows}).Pull(context.Background(), "user_a", "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 2 || page.NextCursor != "" {
+		t.Fatalf("final exactly-full page = %#v", page)
 	}
 }
 
@@ -296,8 +389,18 @@ func TestRepositoryRunSummaryRejectsMalformedStoredState(t *testing.T) {
 		{"unknown status", func(row relayRow) { row[1] = ExecutionStatus("BROKEN") }},
 		{"negative duration", func(row relayRow) { value := int64(-1); row[2] = &value }},
 		{"invalid fingerprint", func(row relayRow) { row[3] = []string{"raw error text"} }},
+		{"unsorted fingerprints", func(row relayRow) {
+			row[3] = []string{strings.Repeat("b", 64), strings.Repeat("a", 64)}
+		}},
 		{"unknown correlation field", func(row relayRow) {
 			row[4] = []byte(`{"traceId":"trc_one","spanId":"spn_one","workflowRunId":"wfr_run","prompt":"secret"}`)
+		}},
+		{"too many fingerprints", func(row relayRow) {
+			fingerprints := make([]string, maxRunErrorFingerprints+1)
+			for index := range fingerprints {
+				fingerprints[index] = fmt.Sprintf("%064x", index+1)
+			}
+			row[3] = fingerprints
 		}},
 	}
 	for _, test := range tests {
@@ -308,5 +411,25 @@ func TestRepositoryRunSummaryRejectsMalformedStoredState(t *testing.T) {
 				t.Fatal("malformed stored summary was accepted")
 			}
 		})
+	}
+}
+
+func TestSaveSummarySQLKeepsTerminalStateMonotonicAndFingerprintSetBounded(t *testing.T) {
+	for _, fragment := range []string{
+		"observability_event_outbox.redacted_payload - 'ingestedAt'",
+		"EXCLUDED.redacted_payload - 'ingestedAt'",
+		"RETURNING (xmax = 0) AS inserted",
+		"WHERE EXISTS (SELECT 1 FROM accepted WHERE inserted)",
+		"last_event_id",
+		"observability_run_summaries.status NOT IN ('COMPLETED','FAILED','CANCELLED','SKIPPED')",
+		"EXCLUDED.status IN ('COMPLETED','FAILED','CANCELLED','SKIPPED')",
+		"EXCLUDED.last_event_id > observability_run_summaries.last_event_id",
+		"COALESCE(EXCLUDED.duration_ms, observability_run_summaries.duration_ms)",
+		"ORDER BY fingerprint",
+		"LIMIT 128",
+	} {
+		if !strings.Contains(saveSummarySQL, fragment) {
+			t.Errorf("save summary SQL missing %q: %s", fragment, saveSummarySQL)
+		}
 	}
 }

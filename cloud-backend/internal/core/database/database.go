@@ -197,8 +197,23 @@ const observabilityRelayMigration = `
 		correlation JSONB NOT NULL,
 		versions JSONB NOT NULL,
 		updated_at TIMESTAMPTZ NOT NULL,
+		last_event_id VARCHAR(128) NOT NULL,
+		CONSTRAINT observability_run_summary_fingerprint_limit
+			CHECK (cardinality(error_fingerprints) <= 128),
 		PRIMARY KEY (user_id, run_id)
 	);
+	ALTER TABLE observability_run_summaries
+		ADD COLUMN IF NOT EXISTS last_event_id VARCHAR(128) NOT NULL DEFAULT '';
+	DO $$ BEGIN
+		IF NOT EXISTS (
+			SELECT 1 FROM pg_constraint
+			WHERE conname='observability_run_summary_fingerprint_limit'
+		) THEN
+			ALTER TABLE observability_run_summaries
+				ADD CONSTRAINT observability_run_summary_fingerprint_limit
+				CHECK (cardinality(error_fingerprints) <= 128);
+		END IF;
+	END $$;
 	CREATE INDEX IF NOT EXISTS idx_observability_run_summaries_user_updated
 		ON observability_run_summaries(user_id, updated_at DESC);
 `

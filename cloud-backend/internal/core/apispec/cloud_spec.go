@@ -73,10 +73,13 @@ func BuildCloudSpec() *Spec {
 
 	// ── Observability ──
 	minRelayLimit, maxRelayLimit := float64(1), float64(500)
+	maxCursorLength, maxRelayIDLength := 2048, 128
 	b.Route("GET", "/api/observability/events", "Pull undelivered redacted observability events").
 		Tags("Observability").
 		creatorAuth(false).
-		QueryParam("cursor", "Opaque versioned continuation cursor", StringSchema(), false).
+		QueryParam("cursor", "Opaque versioned continuation cursor", &Schema{
+			Type: "string", MaxLength: &maxCursorLength,
+		}, false).
 		QueryParam("limit", "Maximum events to return", &Schema{
 			Type: "integer", Minimum: &minRelayLimit, Maximum: &maxRelayLimit, Default: 100,
 		}, false).
@@ -93,7 +96,9 @@ func BuildCloudSpec() *Spec {
 	b.Route("GET", "/api/observability/runs/:runId/summary", "Get an allowlisted redacted run summary").
 		Tags("Observability").
 		creatorAuth(false).
-		PathParam("runId", "Workflow or agent run identifier", StringSchema()).
+		PathParam("runId", "Workflow or agent run identifier", &Schema{
+			Type: "string", MaxLength: &maxRelayIDLength, Pattern: `^(?:wfr|agr)_[A-Za-z0-9_-]+$`,
+		}).
 		ResponseJSON("200", "Redacted run summary", "ObservabilityRunSummaryResponse").
 		ResponseJSON("400", "Malformed run identifier", "ErrorResponse").
 		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").

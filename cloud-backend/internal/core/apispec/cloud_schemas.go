@@ -34,11 +34,36 @@ func registerCloudSchemas(b *Builder) {
 			"message": {Schema: StringSchema()},
 		},
 	})
-	b.Schema("ObservabilityAckRequest", Reflect(observability.AcknowledgeRequest{}))
-	b.Schema("ObservabilityRunSummary", Reflect(observability.RunSummary{}))
+	minAckItems, maxAckItems, maxRelayIDLength, maxFingerprints := 1, 500, 128, 128
+	ackClosed := false
+	b.Schema("ObservabilityAckRequest", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"eventIds": {Schema: &Schema{
+				Type: "array", MinItems: &minAckItems, MaxItems: &maxAckItems,
+				Items: &SchemaRef{Schema: &Schema{
+					Type: "string", Pattern: `^evt_[A-Za-z0-9_-]+$`, MaxLength: &maxRelayIDLength,
+				}},
+			}},
+		},
+		Required:             []string{"eventIds"},
+		AdditionalProperties: &AdditionalProperties{Allowed: &ackClosed},
+	})
+	summarySchema := Reflect(observability.RunSummary{})
+	summarySchema.Properties["errorFingerprints"].Schema.MaxItems = &maxFingerprints
+	summarySchema.Properties["errorFingerprints"].Schema.Items.Schema.Pattern = `^[a-f0-9]{64}$`
+	b.Schema("ObservabilityRunSummary", summarySchema)
 	b.Schema("ObservabilityEventPageResponse", Reflect(observabilityEventPageResponse{}))
 	b.Schema("ObservabilityAckResponse", Reflect(observabilityAckEnvelope{}))
-	b.Schema("ObservabilityRunSummaryResponse", Reflect(observabilityRunSummaryEnvelope{}))
+	b.Schema("ObservabilityRunSummaryResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data":    {Ref: "#/components/schemas/ObservabilityRunSummary"},
+		},
+		Required: []string{"code", "message", "data"},
+	})
 
 	// ── Health ──
 	b.Schema("HealthResponse", &Schema{
@@ -1176,12 +1201,6 @@ type observabilityAckEnvelope struct {
 	Code    int                               `json:"code"`
 	Message string                            `json:"message"`
 	Data    observability.AcknowledgeResponse `json:"data"`
-}
-
-type observabilityRunSummaryEnvelope struct {
-	Code    int                      `json:"code"`
-	Message string                   `json:"message"`
-	Data    observability.RunSummary `json:"data"`
 }
 
 func enumSchema(values ...string) *Schema {

@@ -279,3 +279,15 @@ func TestContainsSecretRejectsNonStringDecodedCausalEventReference(t *testing.T)
 		t.Fatal("ContainsSecret() accepted non-string causal reference")
 	}
 }
+
+func TestRedactDeepClonesExecutionDuration(t *testing.T) {
+	event := validEvent()
+	original := *event.Execution.DurationMs
+
+	redacted := Redact(event)
+	*redacted.Execution.DurationMs = original + 1
+
+	if *event.Execution.DurationMs != original {
+		t.Fatalf("Redact shared execution.durationMs pointer: got %d, want %d", *event.Execution.DurationMs, original)
+	}
+}

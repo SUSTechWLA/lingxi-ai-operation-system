@@ -20,6 +20,8 @@ func TestObservabilityRelayMigrationIsIdempotentAndOwnershipScoped(t *testing.T)
 		"CREATE INDEX IF NOT EXISTS idx_observability_event_outbox_correlation",
 		"CREATE TABLE IF NOT EXISTS observability_run_summaries",
 		"PRIMARY KEY (user_id, run_id)",
+		"last_event_id VARCHAR(128) NOT NULL",
+		"cardinality(error_fingerprints) <= 128",
 	} {
 		if !strings.Contains(observabilityRelayMigration, fragment) {
 			t.Fatalf("migration missing %q: %s", fragment, observabilityRelayMigration)
