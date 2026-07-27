@@ -1785,7 +1785,7 @@ func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, lease
 		s.terminalLeaseUntil[runID] = leaseUntil
 		deliveries = append(deliveries, TerminalEventDelivery{
 			RunID: runID, EventID: s.terminalEventID[runID], ClaimToken: claimToken,
-			PayloadFrozen:     event.EventID != "" && event.CallbackIdempotencyKey != "" && event.ObservabilityEvent != nil,
+			PayloadFrozen:     event.EventID != "" && event.CallbackIdempotencyKey != "",
 			CallbackDelivered: s.callbackDelivered[runID], ObservabilityDelivered: s.observabilityDelivered[runID],
 			Event: event,
 		})

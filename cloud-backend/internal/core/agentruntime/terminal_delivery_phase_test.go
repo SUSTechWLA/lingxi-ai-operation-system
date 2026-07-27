@@ -58,6 +58,46 @@ type lostTerminalAckStore struct {
 	loseNextAck bool
 }
 
+type lostTerminalObservabilityMarkStore struct {
+	*memoryRunStore
+	loseNextMark bool
+}
+
+func (s *lostTerminalObservabilityMarkStore) MarkTerminalObservabilityDelivered(
+	ctx context.Context,
+	delivery TerminalEventDelivery,
+) (bool, error) {
+	if !s.loseNextMark {
+		return s.memoryRunStore.MarkTerminalObservabilityDelivered(ctx, delivery)
+	}
+	s.loseNextMark = false
+	_, _ = s.memoryRunStore.ReleaseTerminalEvent(ctx, delivery)
+	return false, nil
+}
+
+type idempotentTerminalReplaySink struct {
+	mu          sync.Mutex
+	invocations [][]byte
+	applied     map[string]struct{}
+}
+
+func (s *idempotentTerminalReplaySink) Write(_ context.Context, event observability.Event) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.invocations = append(s.invocations, payload)
+	if s.applied == nil {
+		s.applied = make(map[string]struct{})
+	}
+	s.applied[event.EventID] = struct{}{}
+	return nil
+}
+
+func (*idempotentTerminalReplaySink) Close(context.Context) error { return nil }
+
 type terminalReplaySink struct {
 	mu       sync.Mutex
 	failures int
@@ -186,6 +226,54 @@ func TestRunnerTerminalReplayThroughEmitterKeepsPreparedEnvelopeByteIdentical(t 
 	}
 }
 
+func TestRunnerTamperedPreparedEnvelopeFailsClosedBeforeCallback(t *testing.T) {
+	store := newMemoryRunStore()
+	run := terminalDeliveryTestRun("agr_phase_tampered_prepared")
+	sink := &terminalReplaySink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
+		observability.Runtime{AppVersion: "app-frozen", GitCommit: "commit-frozen"}, sink, 4,
+	)
+	callbackCount := 0
+	runner := NewRunner(nil, store, nil, nil, nil).
+		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+			callbackCount++
+			return nil
+		}).
+		WithObservability(emitter.ForComponent(observability.ComponentAgentRuntime))
+
+	event := terminalEventFromRun(run, "")
+	event.EventID = "evt_agent_terminal_tampered_prepared"
+	event.CallbackIdempotencyKey = event.EventID
+	event.RunID, event.TaskID, event.UserID = run.ID, run.TaskID, run.UserID
+	event.TraceID, event.ToolRegistrySnapshotID = run.TraceID, run.ToolRegistrySnapshotID
+	event.Status, event.OccurredAt = run.Status, run.UpdatedAt
+	prepared, err := runner.freezeTerminalObservability(context.Background(), event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := bytes.Replace(prepared, []byte(`"ownerUserId":"owner-phase"`), []byte(`"ownerUserId":"owner-other"`), 1)
+	if bytes.Equal(prepared, tampered) {
+		t.Fatal("test did not alter the prepared owner")
+	}
+	event.PreparedObservability = tampered
+	if err := store.SaveRunTerminal(context.Background(), run, event); err != nil {
+		t.Fatal(err)
+	}
+
+	err = runner.DeliverPendingTerminalEventsOnce(context.Background(), 1)
+	if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("tampered delivery error = %v, want digest mismatch", err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	payloads, _ := sink.snapshot(t)
+	if callbackCount != 0 || len(payloads) != 0 || store.terminalDelivered(run.ID) {
+		t.Fatalf("callback=%d sink=%d delivered=%v, want fail closed before side effects", callbackCount, len(payloads), store.terminalDelivered(run.ID))
+	}
+}
+
 func TestRunnerLegacyTerminalRowFreezesSQLIdentityAcrossProcessRestart(t *testing.T) {
 	store := newMemoryRunStore()
 	run := terminalDeliveryTestRun("agr_phase_legacy_restart")
@@ -267,6 +355,49 @@ func TestRunnerAckFalseIsClaimLoss(t *testing.T) {
 	err := runner.persistAndDeliverTerminal(context.Background(), run, terminalEventFromRun(run, ""))
 	if err == nil || !strings.Contains(err.Error(), "terminal event claim lost") {
 		t.Fatalf("AckTerminalEvent(false) error = %v, want terminal event claim lost", err)
+	}
+}
+
+func TestRunnerSinkSuccessThenObservabilityPhaseMarkLossReplaysOneEffectiveEvent(t *testing.T) {
+	store := &lostTerminalObservabilityMarkStore{memoryRunStore: newMemoryRunStore(), loseNextMark: true}
+	run := terminalDeliveryTestRun("agr_phase_observability_mark_loss")
+	sink := &idempotentTerminalReplaySink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
+		observability.Runtime{AppVersion: "frozen-app", GitCommit: "frozen-commit"}, sink, 4,
+	)
+	callbackCount := 0
+	runner := NewRunner(nil, store, nil, nil, nil).
+		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+			callbackCount++
+			return nil
+		}).
+		WithObservability(emitter.ForComponent(observability.ComponentAgentRuntime))
+
+	err := runner.persistAndDeliverTerminal(context.Background(), run, terminalEventFromRun(run, ""))
+	if err == nil || !strings.Contains(err.Error(), "claim lost during mark observability delivered") {
+		t.Fatalf("first delivery error = %v, want observability phase claim loss", err)
+	}
+	if err := runner.DeliverPendingTerminalEventsOnce(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if callbackCount != 1 {
+		t.Fatalf("callback count = %d, want completed callback phase not replayed", callbackCount)
+	}
+	if len(sink.invocations) != 2 || len(sink.applied) != 1 {
+		t.Fatalf("sink invocations=%d effective applications=%d, want 2/1", len(sink.invocations), len(sink.applied))
+	}
+	if !bytes.Equal(sink.invocations[0], sink.invocations[1]) {
+		t.Fatalf("phase-mark replay changed prepared event\nfirst:  %s\nsecond: %s", sink.invocations[0], sink.invocations[1])
+	}
+	if !store.terminalDelivered(run.ID) {
+		t.Fatal("terminal event remained pending after phase-mark recovery")
 	}
 }
 
@@ -458,7 +589,7 @@ func enqueueTerminalDeliveryForTest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	event.ObservabilityEvent = frozen
+	event.PreparedObservability = frozen
 	if err := store.SaveRunTerminal(context.Background(), run, event); err != nil {
 		t.Fatal(err)
 	}

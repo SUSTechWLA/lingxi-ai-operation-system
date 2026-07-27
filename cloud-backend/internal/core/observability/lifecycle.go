@@ -20,13 +20,13 @@ type DurableEventEmitter interface {
 	EmitAndWait(context.Context, Event) error
 }
 
-// FrozenDurableEventEmitter prepares a durable event exactly once and later
-// replays that prepared envelope without changing timestamps, sequence,
-// source, runtime, correlation, error, or evidence fields.
-type FrozenDurableEventEmitter interface {
+// PreparedDurableEventEmitter prepares a durable event exactly once and later
+// replays only the opaque capability returned by that preparation step. Raw
+// Event values cannot cross the replay boundary.
+type PreparedDurableEventEmitter interface {
 	DurableEventEmitter
-	FreezeDurableEvent(context.Context, Event) (Event, error)
-	EmitFrozenAndWait(context.Context, Event) error
+	PrepareDurableEvent(context.Context, Event) (PreparedEvent, error)
+	ReplayPreparedAndWait(context.Context, PreparedEvent) error
 }
 
 // EnsureCorrelation supplies product-independent trace/span identifiers when a

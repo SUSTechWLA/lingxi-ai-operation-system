@@ -84,7 +84,7 @@ type RunTerminalEvent struct {
 	ErrorCode              string                 `json:"errorCode,omitempty"`
 	Error                  string                 `json:"error,omitempty"`
 	OccurredAt             time.Time              `json:"occurredAt"`
-	ObservabilityEvent     *observability.Event   `json:"observabilityEvent,omitempty"`
+	PreparedObservability  []byte                 `json:"preparedObservability,omitempty"`
 }
 
 // RunTerminalCallback may be invoked again after a crash between the remote
@@ -1286,11 +1286,11 @@ func (r *Runner) persistAndDeliverTerminal(ctx context.Context, run *Run, event 
 	if run.Status == RunStatusFailed && event.ErrorCode == "" {
 		event.ErrorCode = "AGENT.RUNTIME.INTERNAL_FAILURE"
 	}
-	frozenObservability, err := r.freezeTerminalObservability(ctx, event)
+	preparedObservability, err := r.freezeTerminalObservability(ctx, event)
 	if err != nil {
 		return err
 	}
-	event.ObservabilityEvent = frozenObservability
+	event.PreparedObservability = preparedObservability
 	if err := r.store.SaveRunTerminal(ctx, run, event); err != nil {
 		return fmt.Errorf("persist agent terminal event: %w", err)
 	}
@@ -1317,17 +1317,23 @@ func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int
 			delivery.Event.CallbackIdempotencyKey = delivery.EventID
 			freezePayload = true
 		}
-		needsPreparedEnvelope := delivery.Event.ObservabilityEvent == nil
-		if _, ok := r.events.(observability.FrozenDurableEventEmitter); ok && delivery.Event.ObservabilityEvent != nil {
-			needsPreparedEnvelope = delivery.Event.ObservabilityEvent.Validate() != nil
+		needsPreparedEnvelope := false
+		if _, ok := r.events.(observability.PreparedDurableEventEmitter); ok {
+			needsPreparedEnvelope = len(delivery.Event.PreparedObservability) == 0
+			if !needsPreparedEnvelope {
+				if _, decodeErr := decodeTerminalPreparedObservability(delivery.Event); decodeErr != nil {
+					deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery, decodeErr))
+					continue
+				}
+			}
 		}
 		if needsPreparedEnvelope {
-			frozenObservability, freezeErr := r.freezeTerminalObservability(ctx, delivery.Event)
+			preparedObservability, freezeErr := r.freezeTerminalObservability(ctx, delivery.Event)
 			if freezeErr != nil {
 				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery, freezeErr))
 				continue
 			}
-			delivery.Event.ObservabilityEvent = frozenObservability
+			delivery.Event.PreparedObservability = preparedObservability
 			freezePayload = true
 		}
 		if freezePayload {
@@ -1442,12 +1448,16 @@ func (r *Runner) emitDurableTerminal(ctx context.Context, terminal RunTerminalEv
 	if r == nil || r.events == nil {
 		return nil
 	}
-	event, err := frozenTerminalObservabilityValue(terminal)
+	if preparedEmitter, ok := r.events.(observability.PreparedDurableEventEmitter); ok {
+		prepared, err := decodeTerminalPreparedObservability(terminal)
+		if err != nil {
+			return err
+		}
+		return preparedEmitter.ReplayPreparedAndWait(ctx, prepared)
+	}
+	event, err := terminalObservabilityValue(terminal)
 	if err != nil {
 		return err
-	}
-	if frozen, ok := r.events.(observability.FrozenDurableEventEmitter); ok {
-		return frozen.EmitFrozenAndWait(ctx, event)
 	}
 	if durable, ok := r.events.(observability.DurableEventEmitter); ok {
 		return durable.EmitAndWait(ctx, event)
@@ -1455,25 +1465,51 @@ func (r *Runner) emitDurableTerminal(ctx context.Context, terminal RunTerminalEv
 	return r.events.Emit(ctx, event)
 }
 
-func (r *Runner) freezeTerminalObservability(ctx context.Context, terminal RunTerminalEvent) (*observability.Event, error) {
-	event, err := frozenTerminalObservabilityValue(terminal)
+func (r *Runner) freezeTerminalObservability(ctx context.Context, terminal RunTerminalEvent) ([]byte, error) {
+	event, err := terminalObservabilityValue(terminal)
 	if err != nil {
 		return nil, err
 	}
-	if frozen, ok := r.events.(observability.FrozenDurableEventEmitter); ok {
+	if preparedEmitter, ok := r.events.(observability.PreparedDurableEventEmitter); ok {
 		deliveryCtx := terminalDeliveryContext(ctx, terminal)
-		event, err = frozen.FreezeDurableEvent(deliveryCtx, event)
-		if err != nil {
-			return nil, fmt.Errorf("freeze terminal observability: %w", err)
+		prepared, prepareErr := preparedEmitter.PrepareDurableEvent(deliveryCtx, event)
+		if prepareErr != nil {
+			return nil, fmt.Errorf("freeze terminal observability: %w", prepareErr)
 		}
+		serialized, marshalErr := observability.MarshalPreparedEvent(prepared)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("serialize terminal observability: %w", marshalErr)
+		}
+		return serialized, nil
 	}
-	return &event, nil
+	return nil, nil
 }
 
-func frozenTerminalObservabilityValue(terminal RunTerminalEvent) (observability.Event, error) {
-	if terminal.ObservabilityEvent != nil {
-		return *terminal.ObservabilityEvent, nil
+func decodeTerminalPreparedObservability(terminal RunTerminalEvent) (observability.PreparedEvent, error) {
+	if len(terminal.PreparedObservability) == 0 {
+		return nil, errors.New("terminal observability prepared capability is missing")
 	}
+	event, err := terminalObservabilityValue(terminal)
+	if err != nil {
+		return nil, err
+	}
+	errorCode := ""
+	if event.Error != nil {
+		errorCode = event.Error.Code
+	}
+	prepared, err := observability.DecodePreparedEvent(terminal.PreparedObservability, observability.PreparedEventBinding{
+		EventID: terminal.EventID, OwnerUserID: terminal.UserID, Component: observability.ComponentAgentRuntime,
+		Correlation: event.Correlation, Runtime: event.Runtime, Privacy: event.Privacy,
+		EventType: event.EventType, ExecutionStatus: event.Execution.Status,
+		ErrorCode: errorCode, OccurredAt: terminal.OccurredAt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("decode terminal observability: %w", err)
+	}
+	return prepared, nil
+}
+
+func terminalObservabilityValue(terminal RunTerminalEvent) (observability.Event, error) {
 	eventType := observability.EventTypeAgentRunCompleted
 	status := observability.ExecutionStatusCompleted
 	severity := observability.SeverityInfo

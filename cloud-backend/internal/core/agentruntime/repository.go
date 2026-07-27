@@ -195,11 +195,14 @@ func (r *Repository) ClaimTerminalEvents(ctx context.Context, limit int, leaseUn
 		); err != nil {
 			return nil, err
 		}
+		if !database.ValidAgentTerminalEventID(delivery.EventID) {
+			return nil, fmt.Errorf("terminal event identity invalid for run %s", delivery.RunID)
+		}
 		if err := json.Unmarshal(eventJSON, &delivery.Event); err != nil {
 			return nil, err
 		}
 		delivery.PayloadFrozen = delivery.Event.EventID != "" &&
-			delivery.Event.CallbackIdempotencyKey != "" && delivery.Event.ObservabilityEvent != nil
+			delivery.Event.CallbackIdempotencyKey != ""
 		if delivery.Event.EventID == "" {
 			delivery.Event.EventID = delivery.EventID
 		} else if delivery.Event.EventID != delivery.EventID {

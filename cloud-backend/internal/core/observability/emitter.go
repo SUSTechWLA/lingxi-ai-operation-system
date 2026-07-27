@@ -56,16 +56,11 @@ func (e *componentEmitter) Emit(ctx context.Context, event Event) error {
 func (e *componentEmitter) EmitAndWait(ctx context.Context, event Event) error {
 	return e.emitter.emitAndWait(ctx, event, e.component)
 }
-func (e *componentEmitter) FreezeDurableEvent(ctx context.Context, event Event) (Event, error) {
-	prepared, err := e.emitter.prepare(ctx, event)
-	if err != nil {
-		return Event{}, err
-	}
-	prepared.Source.Component = string(e.component)
-	return prepared, nil
+func (e *componentEmitter) PrepareDurableEvent(ctx context.Context, event Event) (PreparedEvent, error) {
+	return e.emitter.prepareCapability(ctx, event, e.component)
 }
-func (e *componentEmitter) EmitFrozenAndWait(ctx context.Context, event Event) error {
-	return e.emitter.emitFrozenAndWait(ctx, event)
+func (e *componentEmitter) ReplayPreparedAndWait(ctx context.Context, prepared PreparedEvent) error {
+	return e.emitter.replayPreparedAndWait(ctx, prepared, e.component)
 }
 
 type Emitter struct {
@@ -129,12 +124,12 @@ func (e *Emitter) EmitAndWait(ctx context.Context, event Event) error {
 	return e.emitAndWait(ctx, event, "")
 }
 
-func (e *Emitter) FreezeDurableEvent(ctx context.Context, event Event) (Event, error) {
-	return e.prepare(ctx, event)
+func (e *Emitter) PrepareDurableEvent(ctx context.Context, event Event) (PreparedEvent, error) {
+	return e.prepareCapability(ctx, event, "")
 }
 
-func (e *Emitter) EmitFrozenAndWait(ctx context.Context, event Event) error {
-	return e.emitFrozenAndWait(ctx, event)
+func (e *Emitter) ReplayPreparedAndWait(ctx context.Context, prepared PreparedEvent) error {
+	return e.replayPreparedAndWait(ctx, prepared, "")
 }
 
 func (e *Emitter) emitAndWait(ctx context.Context, event Event, component Component) error {
@@ -153,15 +148,34 @@ func (e *Emitter) emitAndWait(ctx context.Context, event Event, component Compon
 	}
 }
 
-func (e *Emitter) emitFrozenAndWait(ctx context.Context, event Event) error {
+func (e *Emitter) replayPreparedAndWait(ctx context.Context, prepared PreparedEvent, component Component) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := validateFrozenEvent(event); err != nil {
+	capability, ok := prepared.(*preparedEvent)
+	if !ok || capability == nil {
+		return errors.New("invalid prepared observability capability")
+	}
+	errorCode := ""
+	if capability.event.Error != nil {
+		errorCode = capability.event.Error.Code
+	}
+	expectedComponent := Component(capability.event.Source.Component)
+	if component != "" {
+		expectedComponent = component
+	}
+	validated, err := DecodePreparedEvent(capability.serialized, PreparedEventBinding{
+		EventID: capability.event.EventID, OwnerUserID: capability.ownerUserID, Component: expectedComponent,
+		Source: capability.event.Source, Runtime: capability.event.Runtime, Privacy: capability.event.Privacy,
+		EventType:       capability.event.EventType,
+		ExecutionStatus: capability.event.Execution.Status, ErrorCode: errorCode, OccurredAt: capability.event.OccurredAt,
+	})
+	if err != nil {
 		return err
 	}
+	validatedCapability := validated.(*preparedEvent)
 	result := make(chan error, 1)
-	if err := e.enqueuePrepared(ctx, event, result); err != nil {
+	if err := e.enqueuePreparedForOwner(ctx, validatedCapability.event, validatedCapability.ownerUserID, result); err != nil {
 		return err
 	}
 	select {
@@ -185,17 +199,19 @@ func (e *Emitter) emit(ctx context.Context, event Event, component Component, re
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	prepared, err := e.prepare(ctx, event)
+	prepared, err := e.prepare(ctx, event, component)
 	if err != nil {
 		return err
-	}
-	if component != "" {
-		prepared.Source.Component = string(component)
 	}
 	return e.enqueuePrepared(ctx, prepared, result)
 }
 
 func (e *Emitter) enqueuePrepared(ctx context.Context, prepared Event, result chan error) error {
+	owner, _ := trustedcontext.UserID(ctx)
+	return e.enqueuePreparedForOwner(ctx, prepared, owner, result)
+}
+
+func (e *Emitter) enqueuePreparedForOwner(ctx context.Context, prepared Event, owner string, result chan error) error {
 	if e == nil {
 		return errors.New("observability emitter requires a sink")
 	}
@@ -208,7 +224,6 @@ func (e *Emitter) enqueuePrepared(ctx context.Context, prepared Event, result ch
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	owner, _ := trustedcontext.UserID(ctx)
 	item := queuedEvent{event: prepared, ownerUserID: owner, result: result}
 
 	e.mu.Lock()
@@ -232,16 +247,6 @@ func (e *Emitter) enqueuePrepared(ctx context.Context, prepared Event, result ch
 	e.queue = append(e.queue, item)
 	e.mu.Unlock()
 	e.signal(e.wake)
-	return nil
-}
-
-func validateFrozenEvent(event Event) error {
-	if ContainsSecret(event) {
-		return errors.New("observability event contains secret material")
-	}
-	if err := event.Validate(); err != nil {
-		return fmt.Errorf("validate frozen observability event: %w", err)
-	}
 	return nil
 }
 
@@ -271,7 +276,19 @@ func (e *Emitter) Close(ctx context.Context) error {
 	}
 }
 
-func (e *Emitter) prepare(ctx context.Context, event Event) (Event, error) {
+func (e *Emitter) prepareCapability(ctx context.Context, event Event, component Component) (PreparedEvent, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	prepared, err := e.prepare(ctx, event, component)
+	if err != nil {
+		return nil, err
+	}
+	owner, _ := trustedcontext.UserID(ctx)
+	return newPreparedEvent(owner, prepared)
+}
+
+func (e *Emitter) prepare(ctx context.Context, event Event, component Component) (Event, error) {
 	now := time.Now().UTC()
 	event.SchemaVersion = "1.0"
 	if event.EventID == "" {
@@ -283,6 +300,9 @@ func (e *Emitter) prepare(ctx context.Context, event Event) (Event, error) {
 	event.IngestedAt = now
 	event.ProducerSequence = e.sequence.Add(1) - 1
 	event.Source = e.source
+	if component != "" {
+		event.Source.Component = string(component)
+	}
 	event.Runtime = mergeRuntime(event.Runtime, e.runtime)
 	event.Correlation = mergeCorrelation(event.Correlation, CorrelationFromContext(ctx))
 	event.Correlation = sanitizeCorrelation(event.Correlation)

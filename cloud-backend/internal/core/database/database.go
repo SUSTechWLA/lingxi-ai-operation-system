@@ -2,7 +2,9 @@ package database
 
 import (
 	"context"
+	"crypto/md5"
 	"fmt"
+	"regexp"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,7 +31,37 @@ const (
 	RunToolRegistrySnapshotIDMaxBytes = 160
 	RunParentRunIDMaxBytes            = 64
 	RunReplayFromStageIDMaxBytes      = 128
+	AgentTerminalEventIDMaxBytes      = 96
 )
+
+const agentTerminalLegacyEventIDPrefix = "evt_agent_terminal_legacy_"
+
+var (
+	agentTerminalEventIDPattern = regexp.MustCompile(`^evt_[A-Za-z0-9_-]+$`)
+	agentRunIDPattern           = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+)
+
+// ValidAgentTerminalEventID matches the durable database constraint exactly.
+// It is exported so repositories can fail closed before claiming malformed
+// outbox identities left behind by manual or pre-migration writes.
+func ValidAgentTerminalEventID(eventID string) bool {
+	return len(eventID) <= AgentTerminalEventIDMaxBytes && agentTerminalEventIDPattern.MatchString(eventID)
+}
+
+func normalizeAgentTerminalEventID(runID, sqlEventID, jsonEventID string) string {
+	if ValidAgentTerminalEventID(sqlEventID) {
+		return sqlEventID
+	}
+	if ValidAgentTerminalEventID(jsonEventID) {
+		return jsonEventID
+	}
+	legacy := agentTerminalLegacyEventIDPrefix + runID
+	if agentRunIDPattern.MatchString(runID) && len(legacy) <= AgentTerminalEventIDMaxBytes {
+		return legacy
+	}
+	digest := md5.Sum([]byte(runID)) // PostgreSQL migration compatibility; not used for security.
+	return fmt.Sprintf("%s%x", agentTerminalLegacyEventIDPrefix, digest)
+}
 
 // ValidateRunIdentityColumnBounds enforces the exact VARCHAR widths shared by
 // agent_runs and workflow_runs before either repository reaches PostgreSQL.
@@ -146,20 +178,35 @@ const agentTerminalOutboxMigration = `
 	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_observability_delivered_at TIMESTAMPTZ;
 	UPDATE agent_runs
 	SET terminal_event_id=CASE
-		WHEN BTRIM(COALESCE(terminal_event_json->>'eventId','')) ~ '^evt_[A-Za-z0-9_-]+$'
-		 AND OCTET_LENGTH(BTRIM(terminal_event_json->>'eventId')) <= 96
-		THEN BTRIM(terminal_event_json->>'eventId')
+		WHEN COALESCE(terminal_event_json->>'eventId','') ~ '^evt_[A-Za-z0-9_-]+$'
+		 AND OCTET_LENGTH(terminal_event_json->>'eventId') <= 96
+		THEN terminal_event_json->>'eventId'
+		WHEN id ~ '^[A-Za-z0-9_-]+$'
+		 AND OCTET_LENGTH('evt_agent_terminal_legacy_' || id) <= 96
+		THEN 'evt_agent_terminal_legacy_' || id
 		ELSE 'evt_agent_terminal_legacy_' || MD5(id)
 	END
 	WHERE terminal_event_json IS NOT NULL
-	  AND (terminal_event_id IS NULL OR LEFT(terminal_event_id, 16)='legacy_terminal_');
+	  AND (
+		terminal_event_id IS NULL
+		OR terminal_event_id <> BTRIM(terminal_event_id)
+		OR terminal_event_id !~ '^evt_[A-Za-z0-9_-]+$'
+		OR OCTET_LENGTH(terminal_event_id) > 96
+	  );
 	UPDATE agent_runs
 	SET terminal_event_callback_delivered_at=COALESCE(terminal_event_callback_delivered_at, terminal_event_delivered_at),
 	    terminal_event_observability_delivered_at=COALESCE(terminal_event_observability_delivered_at, terminal_event_delivered_at)
 	WHERE terminal_event_delivered_at IS NOT NULL;
 	ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS agent_terminal_event_identity_required;
 	ALTER TABLE agent_runs ADD CONSTRAINT agent_terminal_event_identity_required
-		CHECK (terminal_event_json IS NULL OR terminal_event_id IS NOT NULL);
+		CHECK (
+			terminal_event_json IS NULL OR (
+				terminal_event_id IS NOT NULL
+				AND terminal_event_id = BTRIM(terminal_event_id)
+				AND terminal_event_id ~ '^evt_[A-Za-z0-9_-]+$'
+				AND OCTET_LENGTH(terminal_event_id) <= 96
+			)
+		);
 	ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS agent_terminal_event_phase_order;
 	ALTER TABLE agent_runs ADD CONSTRAINT agent_terminal_event_phase_order CHECK (
 		(terminal_event_observability_delivered_at IS NULL OR terminal_event_callback_delivered_at IS NOT NULL)
