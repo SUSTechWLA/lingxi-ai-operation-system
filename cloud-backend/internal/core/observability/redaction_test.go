@@ -111,6 +111,45 @@ func TestRedactRemovesMismatchedDiagnosticKey(t *testing.T) {
 	}
 }
 
+func TestRedactRemovesSensitiveCausalEventReference(t *testing.T) {
+	const unsafeCause = "evt_authorization_Bearer_secret-value"
+	event := validEvent()
+	event.Error.CausedByEventID = unsafeCause
+
+	got := Redact(event)
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Error.CausedByEventID != "" {
+		t.Fatalf("CausedByEventID = %q, want empty", got.Error.CausedByEventID)
+	}
+	if strings.Contains(string(data), unsafeCause) {
+		t.Fatalf("unsafe causal reference leaked after redaction: %s", data)
+	}
+	if !slices.Contains(got.Privacy.RedactedFields, "error.causedByEventId") {
+		t.Fatalf("redactedFields = %#v, missing causal reference", got.Privacy.RedactedFields)
+	}
+	if !ContainsSecret(event.Error) {
+		t.Fatal("ContainsSecret() accepted unsafe typed causal reference")
+	}
+}
+
+func TestRedactPreservesSafeCanonicalCausalEventReference(t *testing.T) {
+	const safeCause = "evt_01j99zstagefailed"
+	event := validEvent()
+	event.Error.CausedByEventID = safeCause
+
+	got := Redact(event)
+
+	if got.Error.CausedByEventID != safeCause {
+		t.Fatalf("CausedByEventID = %q, want %q", got.Error.CausedByEventID, safeCause)
+	}
+	if ContainsSecret(got.Error) {
+		t.Fatal("ContainsSecret() rejected safe causal reference")
+	}
+}
+
 func TestContainsSecretFindsNestedSensitiveFieldsAndUnsafeDeveloperDetail(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -185,5 +224,17 @@ func TestContainsSecretRequiresDiagnosticKeyToMatchCode(t *testing.T) {
 	}
 	if !ContainsSecret(mismatched) {
 		t.Fatal("ContainsSecret() accepted mismatched diagnostic key")
+	}
+}
+
+func TestContainsSecretRejectsUnsafeDecodedCausalEventReference(t *testing.T) {
+	value := map[string]any{
+		"error": map[string]any{
+			"causedByEventId": "evt_authorization_Bearer_secret-value",
+		},
+	}
+
+	if !ContainsSecret(value) {
+		t.Fatal("ContainsSecret() accepted unsafe decoded causal reference")
 	}
 }

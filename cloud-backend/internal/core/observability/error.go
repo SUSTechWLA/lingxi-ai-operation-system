@@ -41,6 +41,21 @@ type errorDefinition struct {
 	SuggestedActionKey string
 }
 
+const maxCausalEventReferenceLength = 128
+
+var sensitiveCausalEventMarkers = []string{
+	"authorization",
+	"bearer",
+	"cookie",
+	"token",
+	"password",
+	"apikey",
+	"secret",
+	"prompt",
+	"userinput",
+	"sklive",
+}
+
 var errorRegistry = map[string]errorDefinition{
 	"AUTH.SESSION.EXPIRED": {
 		Class:              ErrorClassAuthentication,
@@ -136,7 +151,7 @@ func NormalizeError(code string, err error, component string, causedBy string) *
 	fingerprintInput := code + "\x00" + strings.TrimSpace(component)
 	sum := sha256.Sum256([]byte(fingerprintInput))
 	causedByEventID := ""
-	if eventIDPattern.MatchString(causedBy) {
+	if safeCausalEventReference(causedBy) {
 		causedByEventID = causedBy
 	}
 
@@ -150,6 +165,19 @@ func NormalizeError(code string, err error, component string, causedBy string) *
 		DeveloperDetail:    diagnosticKey(code),
 		SuggestedActionKey: definition.SuggestedActionKey,
 	}
+}
+
+func safeCausalEventReference(value string) bool {
+	if len(value) > maxCausalEventReferenceLength || !eventIDPattern.MatchString(value) {
+		return false
+	}
+	normalized := strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(value))
+	for _, marker := range sensitiveCausalEventMarkers {
+		if strings.Contains(normalized, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 func diagnosticKey(code string) string {
@@ -187,8 +215,8 @@ func (e EventError) validate() error {
 	if !hashPattern.MatchString(e.Fingerprint) {
 		return fmt.Errorf("error.fingerprint has an invalid format")
 	}
-	if e.CausedByEventID != "" && !eventIDPattern.MatchString(e.CausedByEventID) {
-		return fmt.Errorf("error.causedByEventId has an invalid format")
+	if e.CausedByEventID != "" && !safeCausalEventReference(e.CausedByEventID) {
+		return fmt.Errorf("error.causedByEventId is not a safe causal reference")
 	}
 	if !matchesDiagnosticKey(e.Code, e.DeveloperDetail) {
 		return fmt.Errorf("error.developerDetail does not match error.code")

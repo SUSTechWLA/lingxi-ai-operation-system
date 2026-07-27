@@ -117,3 +117,41 @@ func TestNormalizeErrorDropsInvalidCausedByEventID(t *testing.T) {
 		t.Fatal("invalid causal value retained secret text")
 	}
 }
+
+func TestNormalizeErrorDropsSensitiveAndOversizedCausedByEventIDs(t *testing.T) {
+	sensitive := []string{
+		"evt_authorization_value",
+		"evt_Bearer_value",
+		"evt_cookie_value",
+		"evt_token_value",
+		"evt_password_value",
+		"evt_apiKey_value",
+		"evt_api_key_value",
+		"evt_secret_value",
+		"evt_prompt_value",
+		"evt_userInput_value",
+		"evt_user_input_value",
+		"evt_sk_live_value",
+	}
+	for _, causedBy := range sensitive {
+		got := NormalizeError("MCP.CONNECTION.UNAVAILABLE", errors.New("boom"), "mcp-client", causedBy)
+		if got.CausedByEventID != "" {
+			t.Errorf("NormalizeError() retained sensitive cause %q", causedBy)
+		}
+	}
+
+	oversized := "evt_" + strings.Repeat("a", 125)
+	got := NormalizeError("MCP.CONNECTION.UNAVAILABLE", errors.New("boom"), "mcp-client", oversized)
+	if got.CausedByEventID != "" {
+		t.Fatalf("NormalizeError() retained %d-byte cause", len(oversized))
+	}
+}
+
+func TestNormalizeErrorPreservesSafeCanonicalCausedByEventID(t *testing.T) {
+	const causedBy = "evt_01j99zstagefailed"
+	got := NormalizeError("MCP.CONNECTION.UNAVAILABLE", errors.New("boom"), "mcp-client", causedBy)
+
+	if got.CausedByEventID != causedBy {
+		t.Fatalf("CausedByEventID = %q, want %q", got.CausedByEventID, causedBy)
+	}
+}

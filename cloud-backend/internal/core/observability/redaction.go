@@ -24,6 +24,10 @@ func Redact(event Event) Event {
 		errorCopy := *event.Error
 		errorCopy.EvidenceRefs = cloneStrings(event.Error.EvidenceRefs)
 		redacted.Error = &errorCopy
+		if errorCopy.CausedByEventID != "" && !safeCausalEventReference(errorCopy.CausedByEventID) {
+			redacted.Error.CausedByEventID = ""
+			addRedactedField(&redacted.Privacy, "error.causedByEventId")
+		}
 		if !matchesDiagnosticKey(errorCopy.Code, errorCopy.DeveloperDetail) {
 			redacted.Error.DeveloperDetail = ""
 			addRedactedField(&redacted.Privacy, "error.developerDetail")
@@ -62,6 +66,9 @@ func containsSecret(value reflect.Value, seen map[visit]struct{}) bool {
 	}
 	if value.Type() == reflect.TypeOf(EventError{}) {
 		eventError := value.Interface().(EventError)
+		if eventError.CausedByEventID != "" && !safeCausalEventReference(eventError.CausedByEventID) {
+			return true
+		}
 		if !matchesDiagnosticKey(eventError.Code, eventError.DeveloperDetail) {
 			return true
 		}
@@ -88,6 +95,9 @@ func containsSecret(value reflect.Value, seen map[visit]struct{}) bool {
 		}
 		seen[current] = struct{}{}
 		if decodedDeveloperDetailMismatch(value) {
+			return true
+		}
+		if decodedUnsafeCausalEventReference(value) {
 			return true
 		}
 		iter := value.MapRange()
@@ -147,6 +157,19 @@ func containsSecret(value reflect.Value, seen map[visit]struct{}) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+func decodedUnsafeCausalEventReference(value reflect.Value) bool {
+	iter := value.MapRange()
+	for iter.Next() {
+		key := iter.Key()
+		if key.Kind() != reflect.String || normalizedFieldName(key.String()) != "causedbyeventid" {
+			continue
+		}
+		causedBy, ok := stringValue(iter.Value())
+		return ok && causedBy != "" && !safeCausalEventReference(causedBy)
 	}
 	return false
 }

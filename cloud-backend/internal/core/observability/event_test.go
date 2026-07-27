@@ -96,6 +96,7 @@ func TestEventValidateRejectsInvalidContractFields(t *testing.T) {
 		{"error metadata mismatch", func(e *Event) { e.Error.Retryable = true }, "error.retryable"},
 		{"error fingerprint", func(e *Event) { e.Error.Fingerprint = "short" }, "error.fingerprint"},
 		{"error cause", func(e *Event) { e.Error.CausedByEventID = "event_1" }, "error.causedByEventId"},
+		{"secret-bearing error cause", func(e *Event) { e.Error.CausedByEventID = "evt_authorization_Bearer_secret-value" }, "error.causedByEventId"},
 		{"developer detail", func(e *Event) { e.Error.DeveloperDetail = "dial tcp 127.0.0.1:9001" }, "error.developerDetail"},
 		{"mismatched developer detail", func(e *Event) { e.Error.DeveloperDetail = "diagnostic.secret.abc123" }, "error.developerDetail"},
 		{"error evidence ref", func(e *Event) { e.Error.EvidenceRefs = []string{"/tmp/error.log"} }, "error.evidenceRefs"},
