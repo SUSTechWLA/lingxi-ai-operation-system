@@ -42,16 +42,13 @@ func Middleware(emitter *Emitter) gin.HandlerFunc {
 
 		started := time.Now()
 		defer func() {
-			if recover() != nil {
-				// Do not pass panic values to logs: they can contain request data.
-				c.AbortWithStatus(http.StatusInternalServerError)
-			}
+			recovered := recover()
 			durationMs := time.Since(started).Milliseconds()
 
 			status := ExecutionStatusCompleted
 			severity := SeverityInfo
 			eventType := EventTypeRequestCompleted
-			if c.Writer.Status() >= http.StatusInternalServerError {
+			if recovered != nil || c.Writer.Status() >= http.StatusInternalServerError {
 				status = ExecutionStatusFailed
 				severity = SeverityError
 				eventType = EventTypeRequestFailed
@@ -76,6 +73,11 @@ func Middleware(emitter *Emitter) gin.HandlerFunc {
 				zap.String("spanId", correlation.SpanID),
 				zap.String("parentSpanId", correlation.ParentSpanID),
 			)
+			if recovered != nil {
+				// Emit first, then preserve Gin's outer recovery semantics. Never
+				// log or copy the recovered value because it may contain secrets.
+				panic(recovered)
+			}
 		}()
 		c.Next()
 	}

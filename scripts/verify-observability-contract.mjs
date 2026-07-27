@@ -96,6 +96,9 @@ function validateRegistry(rows) {
 assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema')
 assert.equal(schema.additionalProperties, false)
 assert.ok(Array.isArray(schema.properties.eventType.enum), 'eventType must be a closed v1 enum')
+for (const eventType of ['request.accepted', 'request.completed', 'request.failed']) {
+  assert.ok(schema.properties.eventType.enum.includes(eventType), `${eventType} must remain in the closed v1 enum`)
+}
 assert.ok(schema.properties.eventType.enum.includes(fixture.eventType), 'fixture eventType must be registered')
 assert.match(schema.$defs.error.properties.developerDetail.pattern, /^\^diagnostic\\\./, 'developerDetail must be a diagnostic key')
 for (const field of schema.required) assert.ok(Object.hasOwn(fixture, field), 'missing ' + field)

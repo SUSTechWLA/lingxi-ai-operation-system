@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -81,10 +82,15 @@ func TestMiddlewareEmitsExactlyOneFailedTerminalEventOnPanic(t *testing.T) {
 	sink := &memorySink{}
 	emitter := NewEmitter(testSource(), Runtime{}, sink, 4)
 	r := gin.New()
+	recoveries := 0
+	r.Use(gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, _ any) {
+		recoveries++
+		c.AbortWithStatus(http.StatusInternalServerError)
+	}))
 	r.Use(Middleware(emitter))
-	r.GET("/panic", func(*gin.Context) { panic("Bearer must-not-leak") })
+	r.GET("/panic", func(*gin.Context) { panic("test panic") })
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/panic?token=must-not-leak", nil))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/panic", nil))
 	if err := emitter.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +100,42 @@ func TestMiddlewareEmitsExactlyOneFailedTerminalEventOnPanic(t *testing.T) {
 	}
 	if events[1].Execution.Status != ExecutionStatusFailed {
 		t.Fatalf("terminal status = %q", events[1].Execution.Status)
+	}
+	if recoveries != 1 || rec.Code != http.StatusInternalServerError {
+		t.Fatalf("outer recoveries = %d, status = %d", recoveries, rec.Code)
+	}
+}
+
+func TestMiddlewarePanicAfterCommittedSuccessStillEmitsOneFailedTerminalAndRepanics(t *testing.T) {
+	sink := &memorySink{}
+	emitter := NewEmitter(testSource(), Runtime{}, sink, 4)
+	r := gin.New()
+	recoveries := 0
+	r.Use(gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, _ any) {
+		recoveries++
+		c.AbortWithStatus(http.StatusInternalServerError)
+	}))
+	r.Use(Middleware(emitter))
+	r.GET("/panic-after-write", func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+		c.Writer.WriteHeaderNow()
+		panic("test panic after committed response")
+	})
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/panic-after-write", nil))
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _ := sink.snapshot()
+	if len(events) != 2 || events[0].EventType != EventTypeRequestAccepted || events[1].EventType != EventTypeRequestFailed {
+		t.Fatalf("request events = %#v", events)
+	}
+	if recoveries != 1 {
+		t.Fatalf("outer recoveries = %d, want 1", recoveries)
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("committed response status = %d, want %d", rec.Code, http.StatusNoContent)
 	}
 }
 

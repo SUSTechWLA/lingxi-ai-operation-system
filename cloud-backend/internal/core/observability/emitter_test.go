@@ -30,6 +30,22 @@ func (s *cancelSink) Write(ctx context.Context, _ Event) error {
 
 func (*cancelSink) Close(context.Context) error { return nil }
 
+type gatedContextSink struct {
+	memorySink
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *gatedContextSink) Write(ctx context.Context, event Event) error {
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.memorySink.Write(ctx, event)
+}
+
 type memorySink struct {
 	mu     sync.Mutex
 	events []Event
@@ -237,6 +253,36 @@ func TestEmitterCloseCancellationUnblocksSinkWrite(t *testing.T) {
 	case <-emitter.done:
 	case <-time.After(time.Second):
 		t.Fatal("worker did not stop after Close context cancellation")
+	}
+}
+
+func TestEmitterProducerCancellationDoesNotAbortAcceptedEvent(t *testing.T) {
+	sink := &gatedContextSink{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	emitter := NewEmitter(testSource(), Runtime{}, sink, 1)
+	producerCtx, cancelProducer := context.WithCancel(WithCorrelation(context.Background(), Correlation{
+		TraceID: "4bf92f3577b34da6a3ce929d0e0e4736",
+		SpanID:  "00f067aa0ba902b7",
+	}))
+	if err := emitter.Emit(producerCtx, validEvent()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-sink.started:
+	case <-time.After(time.Second):
+		t.Fatal("sink write did not start")
+	}
+	cancelProducer()
+	close(sink.release)
+
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	events, _ := sink.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("delivered events = %d, want 1", len(events))
 	}
 }
 

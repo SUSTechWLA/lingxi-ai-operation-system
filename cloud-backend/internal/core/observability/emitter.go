@@ -24,7 +24,6 @@ type Sink interface {
 }
 
 type queuedEvent struct {
-	ctx   context.Context
 	event Event
 }
 
@@ -98,7 +97,7 @@ func (e *Emitter) Emit(ctx context.Context, event Event) error {
 	if err != nil {
 		return err
 	}
-	item := queuedEvent{ctx: ctx, event: prepared}
+	item := queuedEvent{event: prepared}
 
 	e.mu.Lock()
 	if e.closing {
@@ -213,7 +212,7 @@ func (e *Emitter) run() {
 	for {
 		item, ok, closing := e.take()
 		if ok {
-			writeCtx, cancel := e.writeContext(item.ctx)
+			writeCtx, cancel := e.writeContext()
 			if err := e.sink.Write(writeCtx, item.event); err != nil {
 				e.recordError(err)
 			}
@@ -239,13 +238,8 @@ func (e *Emitter) run() {
 	}
 }
 
-func (e *Emitter) writeContext(parent context.Context) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(parent)
-	stop := context.AfterFunc(e.writeLifetime, cancel)
-	return ctx, func() {
-		stop()
-		cancel()
-	}
+func (e *Emitter) writeContext() (context.Context, context.CancelFunc) {
+	return context.WithCancel(e.writeLifetime)
 }
 
 func (e *Emitter) take() (queuedEvent, bool, bool) {

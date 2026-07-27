@@ -61,3 +61,36 @@ func TestNewHTTPRouterInstallsRecoveryCORSAndObservability(t *testing.T) {
 		t.Fatalf("observability events = %d, want 2", len(sink.events))
 	}
 }
+
+func TestNewHTTPRouterRecoveryPreservesCommittedStatusAndFailedTerminal(t *testing.T) {
+	sink := &serverEventSink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud-backend", Component: "http-server", Environment: "test"},
+		observability.Runtime{},
+		sink,
+		4,
+	)
+	router := newHTTPRouter(nil, emitter)
+	router.GET("/panic-after-write", func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+		c.Writer.WriteHeaderNow()
+		panic("test panic after committed response")
+	})
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/panic-after-write", nil))
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("committed status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.events) != 2 ||
+		sink.events[0].EventType != observability.EventTypeRequestAccepted ||
+		sink.events[1].EventType != observability.EventTypeRequestFailed {
+		t.Fatalf("request events = %#v", sink.events)
+	}
+}
