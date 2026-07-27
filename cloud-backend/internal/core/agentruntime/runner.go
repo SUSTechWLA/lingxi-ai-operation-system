@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -72,19 +73,19 @@ type Run struct {
 }
 
 type RunTerminalEvent struct {
-	EventID                string                 `json:"eventId"`
-	CallbackIdempotencyKey string                 `json:"callbackIdempotencyKey"`
-	RunID                  string                 `json:"runId"`
-	TaskID                 string                 `json:"taskId,omitempty"`
-	UserID                 string                 `json:"userId,omitempty"`
-	TraceID                string                 `json:"traceId,omitempty"`
-	ToolRegistrySnapshotID string                 `json:"toolRegistrySnapshotId,omitempty"`
-	Status                 RunStatus              `json:"status"`
-	Context                map[string]interface{} `json:"context,omitempty"`
-	ErrorCode              string                 `json:"errorCode,omitempty"`
-	Error                  string                 `json:"error,omitempty"`
-	OccurredAt             time.Time              `json:"occurredAt"`
-	PreparedObservability  []byte                 `json:"preparedObservability,omitempty"`
+	EventID                string                             `json:"eventId"`
+	CallbackIdempotencyKey string                             `json:"callbackIdempotencyKey"`
+	RunID                  string                             `json:"runId"`
+	TaskID                 string                             `json:"taskId,omitempty"`
+	UserID                 string                             `json:"userId,omitempty"`
+	TraceID                string                             `json:"traceId,omitempty"`
+	ToolRegistrySnapshotID string                             `json:"toolRegistrySnapshotId,omitempty"`
+	Status                 RunStatus                          `json:"status"`
+	Context                map[string]interface{}             `json:"context,omitempty"`
+	ErrorCode              string                             `json:"errorCode,omitempty"`
+	Error                  string                             `json:"error,omitempty"`
+	OccurredAt             time.Time                          `json:"occurredAt"`
+	PreparedObservability  *observability.SealedPreparedEvent `json:"preparedObservability,omitempty"`
 }
 
 // RunTerminalCallback may be invoked again after a crash between the remote
@@ -160,15 +161,16 @@ type PlanJudgeWarning struct {
 }
 
 type Runner struct {
-	orchestrator Orchestrator
-	store        RunStore
-	planner      Planner
-	guard        *PlanGuard
-	compiler     *PlanCompiler
-	planJudge    PlanJudge
-	terminal     RunTerminalCallback
-	toolResolver RequestToolSnapshotResolver
-	events       observability.EventEmitter
+	orchestrator           Orchestrator
+	store                  RunStore
+	planner                Planner
+	guard                  *PlanGuard
+	compiler               *PlanCompiler
+	planJudge              PlanJudge
+	terminal               RunTerminalCallback
+	toolResolver           RequestToolSnapshotResolver
+	events                 observability.PersistentPreparedEventEmitter
+	observabilityConfigErr error
 }
 
 const asyncRunStartTimeout = 10 * time.Minute
@@ -199,8 +201,51 @@ func (r *Runner) WithRequestToolResolver(resolver RequestToolSnapshotResolver) *
 }
 
 func (r *Runner) WithObservability(emitter observability.EventEmitter) *Runner {
-	r.events = emitter
+	persistent, ok := emitter.(observability.PersistentPreparedEventEmitter)
+	if !ok || isNilInterface(persistent) {
+		r.events = nil
+		r.observabilityConfigErr = errors.New("agent runner requires persistent prepared observability")
+		return r
+	}
+	if err := persistent.ValidatePersistentConfiguration(); err != nil {
+		r.events = nil
+		r.observabilityConfigErr = fmt.Errorf("agent runner persistent prepared observability: %w", err)
+		return r
+	}
+	r.events = persistent
+	r.observabilityConfigErr = nil
 	return r
+}
+
+func (r *Runner) ValidateConfiguration() error {
+	if r == nil {
+		return errors.New("agent runner is not configured")
+	}
+	if r.observabilityConfigErr != nil {
+		return r.observabilityConfigErr
+	}
+	if r.terminal != nil && (r.events == nil || isNilInterface(r.events)) {
+		return errors.New("agent runner terminal callback requires persistent prepared observability")
+	}
+	if r.events != nil {
+		if err := r.events.ValidatePersistentConfiguration(); err != nil {
+			return fmt.Errorf("agent runner persistent prepared observability: %w", err)
+		}
+	}
+	return nil
+}
+
+func isNilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
@@ -254,6 +299,9 @@ func (r *Runner) validateStartRequest(req StartRunRequest) error {
 	}
 	if r == nil || r.orchestrator == nil || r.store == nil || r.planner == nil || r.guard == nil || r.compiler == nil {
 		return fmt.Errorf("agent runner is not configured")
+	}
+	if err := r.ValidateConfiguration(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1264,6 +1312,9 @@ func (r *Runner) persistAndDeliverTerminal(ctx context.Context, run *Run, event 
 	if r == nil || r.store == nil {
 		return fmt.Errorf("agent runner is not configured")
 	}
+	if err := r.ValidateConfiguration(); err != nil {
+		return err
+	}
 	if run == nil || !terminalRunStatus(run.Status) {
 		return fmt.Errorf("persist agent terminal event requires a terminal run")
 	}
@@ -1298,7 +1349,13 @@ func (r *Runner) persistAndDeliverTerminal(ctx context.Context, run *Run, event 
 }
 
 func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int) error {
-	if r == nil || r.store == nil || limit <= 0 || (r.terminal == nil && r.events == nil) {
+	if r == nil || r.store == nil || limit <= 0 {
+		return nil
+	}
+	if err := r.ValidateConfiguration(); err != nil {
+		return err
+	}
+	if r.terminal == nil && r.events == nil {
 		return nil
 	}
 	claimToken := "agent_terminal_claim_" + uuid.NewString()
@@ -1317,14 +1374,16 @@ func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int
 			delivery.Event.CallbackIdempotencyKey = delivery.EventID
 			freezePayload = true
 		}
-		needsPreparedEnvelope := false
-		if _, ok := r.events.(observability.PreparedDurableEventEmitter); ok {
-			needsPreparedEnvelope = len(delivery.Event.PreparedObservability) == 0
-			if !needsPreparedEnvelope {
-				if _, decodeErr := decodeTerminalPreparedObservability(delivery.Event); decodeErr != nil {
-					deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery, decodeErr))
-					continue
-				}
+		if delivery.Event.OccurredAt.IsZero() {
+			delivery.Event.OccurredAt = time.Now().UTC()
+			freezePayload = true
+		}
+		deliveryCtx := terminalDeliveryContext(ctx, delivery.Event)
+		needsPreparedEnvelope := delivery.Event.PreparedObservability == nil
+		if !needsPreparedEnvelope {
+			if _, restoreErr := r.restoreTerminalPreparedObservability(deliveryCtx, delivery.Event); restoreErr != nil {
+				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery, restoreErr))
+				continue
 			}
 		}
 		if needsPreparedEnvelope {
@@ -1349,7 +1408,6 @@ func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int
 			}
 			delivery.PayloadFrozen = true
 		}
-		deliveryCtx := terminalDeliveryContext(ctx, delivery.Event)
 		if !delivery.CallbackDelivered && r.terminal != nil {
 			if callbackErr := r.terminal(deliveryCtx, delivery.Event); callbackErr != nil {
 				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery,
@@ -1423,12 +1481,12 @@ func terminalDeliveryContext(ctx context.Context, event RunTerminalEvent) contex
 	}
 	existing := observability.CorrelationFromContext(ctx)
 	correlation := observability.Correlation{
-		TraceID:    event.TraceID,
+		TraceID:    terminalObservabilityTraceID(event),
 		SpanID:     terminalObservabilitySpanID(event.EventID),
 		AgentRunID: event.RunID,
 		TaskID:     event.TaskID,
 	}
-	if existing.TraceID == event.TraceID {
+	if existing.TraceID == correlation.TraceID {
 		correlation.ParentSpanID = existing.SpanID
 	}
 	for _, key := range []string{"projectId", "videoProjectId"} {
@@ -1448,63 +1506,43 @@ func (r *Runner) emitDurableTerminal(ctx context.Context, terminal RunTerminalEv
 	if r == nil || r.events == nil {
 		return nil
 	}
-	if preparedEmitter, ok := r.events.(observability.PreparedDurableEventEmitter); ok {
-		prepared, err := decodeTerminalPreparedObservability(terminal)
-		if err != nil {
-			return err
-		}
-		return preparedEmitter.ReplayPreparedAndWait(ctx, prepared)
-	}
-	event, err := terminalObservabilityValue(terminal)
+	prepared, err := r.restoreTerminalPreparedObservability(ctx, terminal)
 	if err != nil {
 		return err
 	}
-	if durable, ok := r.events.(observability.DurableEventEmitter); ok {
-		return durable.EmitAndWait(ctx, event)
-	}
-	return r.events.Emit(ctx, event)
+	return r.events.ReplayPreparedAndWait(ctx, prepared)
 }
 
-func (r *Runner) freezeTerminalObservability(ctx context.Context, terminal RunTerminalEvent) ([]byte, error) {
+func (r *Runner) freezeTerminalObservability(ctx context.Context, terminal RunTerminalEvent) (*observability.SealedPreparedEvent, error) {
+	if r == nil || r.events == nil {
+		return nil, errors.New("terminal observability requires persistent prepared observability")
+	}
 	event, err := terminalObservabilityValue(terminal)
 	if err != nil {
 		return nil, err
 	}
-	if preparedEmitter, ok := r.events.(observability.PreparedDurableEventEmitter); ok {
-		deliveryCtx := terminalDeliveryContext(ctx, terminal)
-		prepared, prepareErr := preparedEmitter.PrepareDurableEvent(deliveryCtx, event)
-		if prepareErr != nil {
-			return nil, fmt.Errorf("freeze terminal observability: %w", prepareErr)
-		}
-		serialized, marshalErr := observability.MarshalPreparedEvent(prepared)
-		if marshalErr != nil {
-			return nil, fmt.Errorf("serialize terminal observability: %w", marshalErr)
-		}
-		return serialized, nil
+	deliveryCtx := terminalDeliveryContext(ctx, terminal)
+	sealed, sealErr := r.events.FreezeAndSeal(deliveryCtx, event)
+	if sealErr != nil {
+		return nil, fmt.Errorf("freeze terminal observability: %w", sealErr)
 	}
-	return nil, nil
+	return &sealed, nil
 }
 
-func decodeTerminalPreparedObservability(terminal RunTerminalEvent) (observability.PreparedEvent, error) {
-	if len(terminal.PreparedObservability) == 0 {
+func (r *Runner) restoreTerminalPreparedObservability(ctx context.Context, terminal RunTerminalEvent) (observability.PreparedEvent, error) {
+	if r == nil || r.events == nil {
+		return nil, errors.New("terminal observability requires persistent prepared observability")
+	}
+	if terminal.PreparedObservability == nil {
 		return nil, errors.New("terminal observability prepared capability is missing")
 	}
-	event, err := terminalObservabilityValue(terminal)
+	expected, err := terminalObservabilityValue(terminal)
 	if err != nil {
 		return nil, err
 	}
-	errorCode := ""
-	if event.Error != nil {
-		errorCode = event.Error.Code
-	}
-	prepared, err := observability.DecodePreparedEvent(terminal.PreparedObservability, observability.PreparedEventBinding{
-		EventID: terminal.EventID, OwnerUserID: terminal.UserID, Component: observability.ComponentAgentRuntime,
-		Correlation: event.Correlation, Runtime: event.Runtime, Privacy: event.Privacy,
-		EventType: event.EventType, ExecutionStatus: event.Execution.Status,
-		ErrorCode: errorCode, OccurredAt: terminal.OccurredAt,
-	})
+	prepared, err := r.events.RestorePreparedEventFor(ctx, *terminal.PreparedObservability, expected)
 	if err != nil {
-		return nil, fmt.Errorf("decode terminal observability: %w", err)
+		return nil, fmt.Errorf("restore terminal observability: %w", err)
 	}
 	return prepared, nil
 }
@@ -1556,7 +1594,7 @@ func terminalObservabilityValue(terminal RunTerminalEvent) (observability.Event,
 
 func terminalObservabilityCorrelation(event RunTerminalEvent) observability.Correlation {
 	correlation := observability.Correlation{
-		TraceID:    event.TraceID,
+		TraceID:    terminalObservabilityTraceID(event),
 		SpanID:     terminalObservabilitySpanID(event.EventID),
 		AgentRunID: event.RunID,
 		TaskID:     event.TaskID,
@@ -1568,6 +1606,14 @@ func terminalObservabilityCorrelation(event RunTerminalEvent) observability.Corr
 		}
 	}
 	return correlation
+}
+
+func terminalObservabilityTraceID(event RunTerminalEvent) string {
+	if traceID := strings.TrimSpace(event.TraceID); traceID != "" {
+		return traceID
+	}
+	digest := sha256.Sum256([]byte("agent-terminal-observability-trace\x00" + strings.TrimSpace(event.EventID)))
+	return hex.EncodeToString(digest[:16])
 }
 
 func terminalObservabilitySpanID(eventID string) string {

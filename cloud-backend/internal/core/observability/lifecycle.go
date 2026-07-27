@@ -20,12 +20,14 @@ type DurableEventEmitter interface {
 	EmitAndWait(context.Context, Event) error
 }
 
-// PreparedDurableEventEmitter prepares a durable event exactly once and later
-// replays only the opaque capability returned by that preparation step. Raw
-// Event values cannot cross the replay boundary.
-type PreparedDurableEventEmitter interface {
+// PersistentPreparedEventEmitter owns one authenticated persistence domain.
+// Only this emitter can freeze, restore, and replay its prepared capabilities.
+type PersistentPreparedEventEmitter interface {
 	DurableEventEmitter
-	PrepareDurableEvent(context.Context, Event) (PreparedEvent, error)
+	ValidatePersistentConfiguration() error
+	FreezeAndSeal(context.Context, Event) (SealedPreparedEvent, error)
+	RestorePreparedEvent(SealedPreparedEvent) (PreparedEvent, error)
+	RestorePreparedEventFor(context.Context, SealedPreparedEvent, Event) (PreparedEvent, error)
 	ReplayPreparedAndWait(context.Context, PreparedEvent) error
 }
 

@@ -56,19 +56,14 @@ func (e *componentEmitter) Emit(ctx context.Context, event Event) error {
 func (e *componentEmitter) EmitAndWait(ctx context.Context, event Event) error {
 	return e.emitter.emitAndWait(ctx, event, e.component)
 }
-func (e *componentEmitter) PrepareDurableEvent(ctx context.Context, event Event) (PreparedEvent, error) {
-	return e.emitter.prepareCapability(ctx, event, e.component)
-}
-func (e *componentEmitter) ReplayPreparedAndWait(ctx context.Context, prepared PreparedEvent) error {
-	return e.emitter.replayPreparedAndWait(ctx, prepared, e.component)
-}
 
 type Emitter struct {
-	source   Source
-	runtime  Runtime
-	sink     Sink
-	capacity int
-	sequence atomic.Int64
+	source           Source
+	runtime          Runtime
+	sink             Sink
+	capacity         int
+	persistentSealer *persistentSealer
+	sequence         atomic.Int64
 
 	mu       sync.Mutex
 	queue    []queuedEvent
@@ -112,6 +107,22 @@ func NewEmitter(source Source, runtime Runtime, sink Sink, capacity int) *Emitte
 	return emitter
 }
 
+func NewPersistentEmitter(
+	source Source,
+	runtime Runtime,
+	sink Sink,
+	capacity int,
+	config PersistentSealingConfig,
+) (*Emitter, error) {
+	sealer, err := newPersistentSealer(config)
+	if err != nil {
+		return nil, err
+	}
+	emitter := NewEmitter(source, runtime, sink, capacity)
+	emitter.persistentSealer = sealer
+	return emitter, nil
+}
+
 // Emit validates and queues an event without waiting for the sink. When the
 // bounded queue is full, DEBUG is always the first eviction candidate.
 // Protected events are never silently lost: if no lower-priority event can be
@@ -124,58 +135,12 @@ func (e *Emitter) EmitAndWait(ctx context.Context, event Event) error {
 	return e.emitAndWait(ctx, event, "")
 }
 
-func (e *Emitter) PrepareDurableEvent(ctx context.Context, event Event) (PreparedEvent, error) {
-	return e.prepareCapability(ctx, event, "")
-}
-
-func (e *Emitter) ReplayPreparedAndWait(ctx context.Context, prepared PreparedEvent) error {
-	return e.replayPreparedAndWait(ctx, prepared, "")
-}
-
 func (e *Emitter) emitAndWait(ctx context.Context, event Event, component Component) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	result := make(chan error, 1)
 	if err := e.emit(ctx, event, component, result); err != nil {
-		return err
-	}
-	select {
-	case err := <-result:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (e *Emitter) replayPreparedAndWait(ctx context.Context, prepared PreparedEvent, component Component) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	capability, ok := prepared.(*preparedEvent)
-	if !ok || capability == nil {
-		return errors.New("invalid prepared observability capability")
-	}
-	errorCode := ""
-	if capability.event.Error != nil {
-		errorCode = capability.event.Error.Code
-	}
-	expectedComponent := Component(capability.event.Source.Component)
-	if component != "" {
-		expectedComponent = component
-	}
-	validated, err := DecodePreparedEvent(capability.serialized, PreparedEventBinding{
-		EventID: capability.event.EventID, OwnerUserID: capability.ownerUserID, Component: expectedComponent,
-		Source: capability.event.Source, Runtime: capability.event.Runtime, Privacy: capability.event.Privacy,
-		EventType:       capability.event.EventType,
-		ExecutionStatus: capability.event.Execution.Status, ErrorCode: errorCode, OccurredAt: capability.event.OccurredAt,
-	})
-	if err != nil {
-		return err
-	}
-	validatedCapability := validated.(*preparedEvent)
-	result := make(chan error, 1)
-	if err := e.enqueuePreparedForOwner(ctx, validatedCapability.event, validatedCapability.ownerUserID, result); err != nil {
 		return err
 	}
 	select {
@@ -274,18 +239,6 @@ func (e *Emitter) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-func (e *Emitter) prepareCapability(ctx context.Context, event Event, component Component) (PreparedEvent, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	prepared, err := e.prepare(ctx, event, component)
-	if err != nil {
-		return nil, err
-	}
-	owner, _ := trustedcontext.UserID(ctx)
-	return newPreparedEvent(owner, prepared)
 }
 
 func (e *Emitter) prepare(ctx context.Context, event Event, component Component) (Event, error) {

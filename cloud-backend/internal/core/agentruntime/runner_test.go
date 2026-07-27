@@ -60,8 +60,8 @@ func (s *agentTerminalSink) snapshot() []agentTerminalObservation {
 func TestRunnerStartAsyncPreservesAuthenticatedOwnerForBackgroundEvents(t *testing.T) {
 	store := newMemoryRunStore()
 	sink := &agentOwnerSink{}
-	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"}, observability.Runtime{}, sink, 32)
-	runner := NewRunner(&fakeOrchestrator{}, store, staticPlanner{err: errors.New("planning failed")}, NewPlanGuard(staticToolCatalog{}, nil), NewPlanCompiler(staticToolCatalog{})).WithObservability(emitter)
+	emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"}, observability.Runtime{}, sink, 32)
+	runner := NewRunner(&fakeOrchestrator{}, store, staticPlanner{err: errors.New("planning failed")}, NewPlanGuard(staticToolCatalog{}, nil), NewPlanCompiler(staticToolCatalog{})).WithObservability(persistent)
 	ctx := trustedcontext.WithUserID(context.Background(), "user-1")
 	run, err := runner.StartAsync(ctx, StartRunRequest{UserID: "user-1", Message: "make"})
 	if err != nil {
@@ -179,7 +179,7 @@ func TestRunnerBackgroundPersistsConsistentCancellationAndTimeoutTerminals(t *te
 		t.Run(tt.name, func(t *testing.T) {
 			store := newMemoryRunStore()
 			sink := &agentEventSink{}
-			emitter := observability.NewEmitter(
+			emitter, persistent := newPersistentAgentEmitterForTest(t,
 				observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
 				observability.Runtime{}, sink, 32,
 			)
@@ -187,7 +187,7 @@ func TestRunnerBackgroundPersistsConsistentCancellationAndTimeoutTerminals(t *te
 			runner := NewRunner(
 				&fakeOrchestrator{}, store, staticPlanner{err: tt.plannerErr},
 				NewPlanGuard(nil, nil), NewPlanCompiler(nil),
-			).WithObservability(emitter).WithTerminalCallback(func(_ context.Context, event RunTerminalEvent) error {
+			).WithObservability(persistent).WithTerminalCallback(func(_ context.Context, event RunTerminalEvent) error {
 				callbacks = append(callbacks, event)
 				return nil
 			})
@@ -260,7 +260,7 @@ func (s *agentEventSink) snapshot() []observability.Event {
 func TestRunnerStartEmitsBootstrapFailureWithoutPrivateRequestText(t *testing.T) {
 	const privateRequest = "PRIVATE_AGENT_REQUEST_SENTINEL"
 	sink := &agentEventSink{}
-	emitter := observability.NewEmitter(
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
 		observability.Source{Service: "cloud-backend", Component: "agent-runtime", Environment: "test"},
 		observability.Runtime{},
 		sink,
@@ -273,7 +273,7 @@ func TestRunnerStartEmitsBootstrapFailureWithoutPrivateRequestText(t *testing.T)
 		staticPlanner{err: errors.New("planner rejected request")},
 		NewPlanGuard(catalog, nil),
 		NewPlanCompiler(catalog),
-	).WithObservability(emitter)
+	).WithObservability(persistent)
 	ctx := observability.WithCorrelation(context.Background(), observability.Correlation{
 		TraceID: "4bf92f3577b34da6a3ce929d0e0e4736",
 		SpanID:  "00f067aa0ba902b7",
@@ -322,7 +322,7 @@ func TestRunnerStartEmitsBootstrapFailureWithoutPrivateRequestText(t *testing.T)
 
 func TestRunnerDAGSubmissionCompletesBootstrapWithoutAgentTerminal(t *testing.T) {
 	sink := &agentEventSink{}
-	emitter := observability.NewEmitter(
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
 		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
 		observability.Runtime{}, sink, 32,
 	)
@@ -336,7 +336,7 @@ func TestRunnerDAGSubmissionCompletesBootstrapWithoutAgentTerminal(t *testing.T)
 		}},
 		NewPlanGuard(catalog, nil),
 		NewPlanCompiler(catalog),
-	).WithObservability(emitter)
+	).WithObservability(persistent)
 
 	run, err := runner.Start(context.Background(), StartRunRequest{UserID: "user-1", Message: "make"})
 	if err != nil {
@@ -418,7 +418,7 @@ func TestRunnerDurableTerminalOutboxEmitsExactlyOneTrueAgentTerminal(t *testing.
 				t.Fatal(err)
 			}
 			sink := &agentTerminalSink{}
-			emitter := observability.NewEmitter(
+			emitter, persistent := newPersistentAgentEmitterForTest(t,
 				observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
 				observability.Runtime{AppVersion: "app-1"}, sink, 16,
 			)
@@ -426,7 +426,7 @@ func TestRunnerDurableTerminalOutboxEmitsExactlyOneTrueAgentTerminal(t *testing.
 			runner := (&Runner{
 				orchestrator: &fakeOrchestrator{taskStatus: tt.taskStatus},
 				store:        store,
-			}).WithObservability(emitter).WithTerminalCallback(func(_ context.Context, event RunTerminalEvent) error {
+			}).WithObservability(persistent).WithTerminalCallback(func(_ context.Context, event RunTerminalEvent) error {
 				callbacks++
 				if event.RunID != run.ID || event.UserID != run.UserID || event.Status != tt.wantRun {
 					t.Fatalf("callback event=%+v", event)
@@ -487,7 +487,7 @@ func TestRunnerTerminalCallbackRetryEmitsOneIdempotentObservabilityEvent(t *test
 		t.Fatal(err)
 	}
 	sink := &agentTerminalSink{}
-	emitter := observability.NewEmitter(
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
 		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
 		observability.Runtime{}, sink, 8,
 	)
@@ -495,7 +495,7 @@ func TestRunnerTerminalCallbackRetryEmitsOneIdempotentObservabilityEvent(t *test
 	runner := (&Runner{
 		orchestrator: &fakeOrchestrator{taskStatus: model.TaskSuccess},
 		store:        store,
-	}).WithObservability(emitter).WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+	}).WithObservability(persistent).WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
 		attempts++
 		if attempts == 1 {
 			return errors.New("callback unavailable")
@@ -585,8 +585,8 @@ func TestRunnerStageBoundariesPairCancellationFailureAndPanic(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sink := &agentEventSink{}
-			emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 64)
-			runner := NewRunner(tt.orchestrator, newMemoryRunStore(), tt.planner, tt.guard, tt.compiler).WithObservability(emitter)
+			emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 64)
+			runner := NewRunner(tt.orchestrator, newMemoryRunStore(), tt.planner, tt.guard, tt.compiler).WithObservability(persistent)
 			panicked := false
 			func() {
 				defer func() { panicked = recover() != nil }()
@@ -622,9 +622,9 @@ func TestRunnerStageBoundariesPairCancellationFailureAndPanic(t *testing.T) {
 
 func TestRunnerDeadlineFailsInnerAndOuterWithTimeoutCodes(t *testing.T) {
 	sink := &agentEventSink{}
-	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 32)
+	emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 32)
 	catalog := staticToolCatalog{}
-	runner := NewRunner(&fakeOrchestrator{}, newMemoryRunStore(), boundaryPlanner{err: context.DeadlineExceeded}, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).WithObservability(emitter)
+	runner := NewRunner(&fakeOrchestrator{}, newMemoryRunStore(), boundaryPlanner{err: context.DeadlineExceeded}, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).WithObservability(persistent)
 	if _, err := runner.Start(context.Background(), StartRunRequest{UserID: "user-1", Message: "make"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Start error=%v", err)
 	}
@@ -650,10 +650,10 @@ func TestRunnerDeadlineFailsInnerAndOuterWithTimeoutCodes(t *testing.T) {
 
 func TestRunnerRepairCancellationUsesCancelledEventsWithoutError(t *testing.T) {
 	sink := &agentEventSink{}
-	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 32)
+	emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 32)
 	catalog := staticToolCatalog{"known": {Name: "known"}}
 	planner := repairCancellationPlanner{plan: &AgentPlan{Goal: "bad", Steps: []AgentStep{{ID: "bad", Tool: "missing"}}}}
-	runner := NewRunner(&fakeOrchestrator{}, newMemoryRunStore(), planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).WithObservability(emitter)
+	runner := NewRunner(&fakeOrchestrator{}, newMemoryRunStore(), planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).WithObservability(persistent)
 	if _, err := runner.Start(context.Background(), StartRunRequest{UserID: "user-1", Message: "make"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Start error=%v", err)
 	}
@@ -678,7 +678,7 @@ func TestRunnerRepairCancellationUsesCancelledEventsWithoutError(t *testing.T) {
 
 func TestRunnerPlanJudgeCancellationUsesCancelledEventContract(t *testing.T) {
 	sink := &agentEventSink{}
-	emitter := observability.NewEmitter(
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
 		observability.Source{Service: "cloud", Component: "agent", Environment: "test"},
 		observability.Runtime{}, sink, 32,
 	)
@@ -692,7 +692,7 @@ func TestRunnerPlanJudgeCancellationUsesCancelledEventContract(t *testing.T) {
 	runner := NewRunner(
 		&fakeOrchestrator{taskID: "task-1"}, newMemoryRunStore(), staticPlanner{plan: plan},
 		NewPlanGuard(catalog, nil), NewPlanCompiler(catalog),
-	).WithPlanJudge(judge).WithObservability(emitter)
+	).WithPlanJudge(judge).WithObservability(persistent)
 
 	if _, err := runner.Start(ctx, StartRunRequest{UserID: "user-1", Message: "make"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Start error=%v, want context.Canceled", err)
@@ -719,8 +719,8 @@ func TestRunnerPlanJudgeCancellationUsesCancelledEventContract(t *testing.T) {
 
 func TestObserveAgentBoundaryTreatsWrappedRunCancellationAsCancelled(t *testing.T) {
 	sink := &agentEventSink{}
-	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 8)
-	runner := (&Runner{}).WithObservability(emitter)
+	emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 8)
+	runner := (&Runner{}).WithObservability(persistent)
 	ctx := observability.WithCorrelation(context.Background(), observability.Correlation{TraceID: "trc_run", SpanID: "spn_run"})
 	err := runner.observeAgentBoundary(ctx, observability.Correlation{TraceID: "trc_run", SpanID: "spn_run", AgentRunID: "agr_run", StageID: "submission"}, agentBoundarySpec{
 		started: observability.EventTypeWorkflowStageStarted, completed: observability.EventTypeWorkflowStageCompleted,
@@ -814,7 +814,8 @@ func TestRunnerStart_CreatesTaskScopesDAGAndStoresRun(t *testing.T) {
 		},
 	}
 
-	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 	run, err := runner.Start(context.Background(), StartRunRequest{
 		UserID:  "user-1",
 		Message: "make a video about AI workflows",
@@ -901,7 +902,8 @@ func TestRunnerCompleteStart_DoesNotReviveCancelledRun(t *testing.T) {
 		Domain:  "video_creation",
 	}
 	shell := newRunShell(req)
-	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 	if err := store.SaveRun(context.Background(), shell); err != nil {
 		t.Fatalf("SaveRun returned error: %v", err)
 	}
@@ -931,9 +933,11 @@ func TestRunnerGetSyncsFailedTaskStatusToRun(t *testing.T) {
 	_ = store.SaveRun(context.Background(), &Run{
 		ID:     "run-1",
 		TaskID: "task-1",
+		UserID: "user-1",
 		Status: RunStatusRunning,
 	})
-	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskFailed}, store, nil, nil, nil)
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskFailed}, store, nil, nil, nil).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 
 	run, task, err := runner.Get(context.Background(), "run-1")
 	if err != nil {
@@ -956,9 +960,11 @@ func TestRunnerGetSyncsSuccessfulTaskStatusToRun(t *testing.T) {
 	_ = store.SaveRun(context.Background(), &Run{
 		ID:     "run-1",
 		TaskID: "task-1",
+		UserID: "user-1",
 		Status: RunStatusRunning,
 	})
-	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}, store, nil, nil, nil)
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}, store, nil, nil, nil).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 
 	run, task, err := runner.Get(context.Background(), "run-1")
 	if err != nil {
@@ -981,9 +987,11 @@ func TestRunnerGetRestoresFailedRunWhenTaskRecoveredToSuccess(t *testing.T) {
 	_ = store.SaveRun(context.Background(), &Run{
 		ID:     "run-1",
 		TaskID: "task-1",
+		UserID: "user-1",
 		Status: RunStatusFailed,
 	})
-	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}, store, nil, nil, nil)
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}, store, nil, nil, nil).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 
 	run, task, err := runner.Get(context.Background(), "run-1")
 	if err != nil {
@@ -1374,7 +1382,7 @@ func TestRunnerStart_RecordsPlanJudgeWarningsAfterGuardPasses(t *testing.T) {
 func TestRunnerStart_BlocksWhenPlanJudgeFails(t *testing.T) {
 	store := newMemoryRunStore()
 	sink := &agentEventSink{}
-	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 32)
+	emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 32)
 	orch := &fakeOrchestrator{taskID: "task-1"}
 	planner := staticPlanner{plan: &AgentPlan{
 		Goal:   "make video",
@@ -1401,7 +1409,7 @@ func TestRunnerStart_BlocksWhenPlanJudgeFails(t *testing.T) {
 
 	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).
 		WithPlanJudge(&judge).
-		WithObservability(emitter)
+		WithObservability(persistent)
 	_, err := runner.Start(context.Background(), StartRunRequest{
 		UserID:  "user-1",
 		Message: "make a video about AI workflows",

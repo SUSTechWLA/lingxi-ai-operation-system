@@ -165,6 +165,131 @@ $ git diff --check
 (no output, exit 0)
 ```
 
+## Fix Round 2 — authenticated restart capability and fail-closed wiring
+
+Round 1 still exposed a package-level decoder backed only by a public SHA-256
+digest. Any ordinary package could construct canonical bytes, recompute the
+digest, and obtain a replay capability. The Agent Runner also retained raw
+emitter fallbacks. This round removes both residual trust bypasses without
+starting Task 2.
+
+### Implementation
+
+- Removed the exported prepared-event marshal/decoder surface. Only a concrete
+  persistent component emitter can freeze, restore, bind, and replay an opaque
+  capability. External negative-compilation fixtures prove that neither a raw
+  `Event` nor the removed decoder can mint a replay capability.
+- Replaced the public checksum with a canonical versioned HMAC-SHA-256 envelope.
+  The private sealing key/domain, owner, parent source, producer runtime,
+  component, and complete redacted event are authenticated. Restore enforces
+  payload size, canonical JSON, version, signature, sealing domain, parent
+  source, component, event source, registry/redaction, and exact trusted
+  binding before returning a capability.
+- The trusted binding covers owner, Event ID, complete source and correlation,
+  complete historical runtime, schema, privacy/redaction list, severity, event
+  type, execution status, error code, and occurred time. A second component-
+  owned expected-event check binds the authenticated event to the exact Agent
+  outbox row before callback. A valid envelope copied from another row fails
+  before callback or sink.
+- A restart using the same key/domain and parent/component identity restores the
+  historical producer runtime even when the new process has a different app,
+  Git, workflow, or prompt version. Wrong keys, foreign domains, foreign parent
+  sources, and foreign component adapters fail closed.
+- Agent Runner now stores only `PersistentPreparedEventEmitter`, rejects plain
+  and typed-nil emitters through explicit startup validation, and has no raw
+  `Emit`/`EmitAndWait` fallback. Both pre-callback validation and sink replay go
+  through component-owned restore. Legacy missing trace/time values are frozen
+  deterministically before side effects.
+- Cloud startup constructs a persistent emitter, requests the Agent component,
+  and validates the Runner before route registration. Production config rejects
+  missing, short, or documented placeholder sealing keys without including the
+  supplied value in errors.
+- One-click deployment generates a separate random sealing key once, persists
+  it in the private runtime env, and upgrades existing env files only when the
+  variables are absent. Compose requires the key, release smoke checks require
+  key/domain, and the beta runbook documents stable restart and drain-before-
+  rotation behavior. No key value is logged, emitted, or recorded here.
+
+### TDD evidence
+
+Initial RED was observed before production changes:
+
+```text
+TestPublicPackageDecoderCannotMintPreparedCapability:
+  public package decoder still mints PreparedEvent
+
+persistent_sealing_test.go:
+  undefined: NewPersistentEmitter
+  undefined: PersistentSealingConfig
+  undefined: SealedPreparedEvent
+  undefined: PersistentPreparedEventEmitter
+
+TestRunnerRejectsNonPreparedEmitterBeforeTerminalCallback:
+  runner.ValidateConfiguration undefined
+
+TestValidateForModeRejectsMissingObservabilitySealingKey:
+  production missing sealing key error = <nil>
+```
+
+The resulting attack/boundary tests cover public-decoder and raw-Event negative
+compilation, public-SHA forgery, same-domain restart, wrong/missing key, foreign
+domain/source/component, complete source/runtime/schema/privacy binding tamper,
+cross-row valid-envelope substitution, pre-callback failure, typed nil, payload
+size/version bounds, byte-identical crash-window replay, and non-persistent
+Runner startup rejection.
+
+### Fresh Fix Round 2 verification
+
+```text
+$ go test -race ./internal/core/observability -count=1
+ok github.com/tangying-ai/aios-core/internal/core/observability 13.909s
+
+$ go test -race ./internal/core/agentruntime \
+    -run 'Test.*Terminal.*|TestRunnerRejects.*Emitter.*|TestCancelRunPausesTaskAndMarksProjectStopped' -count=1
+ok github.com/tangying-ai/aios-core/internal/core/agentruntime 1.470s
+
+$ go test ./internal/core/config ./cmd/tangying-ai-os -count=1
+ok github.com/tangying-ai/aios-core/internal/core/config 0.242s
+ok github.com/tangying-ai/aios-core/cmd/tangying-ai-os 0.574s
+
+$ go test ./internal/core/database \
+    -run 'Test(AgentTerminal|NormalizeAgent|ValidAgent|EnsureAgent)' -count=1 -v
+all always-run migration identity/constraint/startup-error tests PASS;
+live PostgreSQL fresh/upgrade test SKIP because no test DSN is configured
+
+$ GOFLAGS='-skip=^TestClientProviderPlannerUsesRequestTextProvider$' \
+    npm run test:observability-foundation
+contract plus observability, agentruntime, workflow, localrunner, translator,
+and worker/service: PASS
+
+$ go test ./... -skip '<exact 13 existing httptest listener tests>' -count=1
+all cloud packages PASS, including agentruntime, config, database,
+observability, worker/tool/builtin, and workflow
+
+$ go vet ./...
+(no output, exit 0)
+
+$ bash -n scripts/one-click-deploy.sh scripts/beta-smoke-check.sh
+(no output, exit 0)
+
+$ python3 scripts/test_one_click_deploy.py
+Ran 10 tests: OK
+
+$ git diff --check
+(no output, exit 0)
+```
+
+The unskipped listener probe still fails only at the sandbox boundary:
+
+```text
+TestClientProviderPlannerUsesRequestTextProvider:
+httptest: failed to listen on a port: listen tcp6 [::1]:0:
+bind: operation not permitted
+```
+
+The exact listener-test skip is therefore an explicit environment separation,
+not a product-test waiver. The full listener-free cloud suite exited zero.
+
 ## Limitation
 
 The sandbox cannot bind loopback listeners, so the unmodified listener-based

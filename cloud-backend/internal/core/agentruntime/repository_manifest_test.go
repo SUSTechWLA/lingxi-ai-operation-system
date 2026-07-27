@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/tangying-ai/aios-core/internal/core/database"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 )
 
 type agentRepositoryCall struct {
@@ -308,7 +309,7 @@ func TestRepositoryClaimTerminalEventsScansJSONAndClosesRows(t *testing.T) {
 		RunID:                  "run-1",
 		Status:                 RunStatusSuccess,
 		Context:                map[string]interface{}{"result": "ok"},
-		PreparedObservability:  []byte("prepared"),
+		PreparedObservability:  &observability.SealedPreparedEvent{Payload: []byte("prepared")},
 	}
 	eventJSON, err := json.Marshal(event)
 	if err != nil {

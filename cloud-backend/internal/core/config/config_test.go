@@ -173,6 +173,9 @@ func TestValidateForModeAcceptsStrongInternalToolRegistrationToken(t *testing.T)
 		Postgres: PostgresConfig{Password: "long-non-default-postgres-password"},
 		Auth:     AuthConfig{TokenSecret: "0123456789abcdef0123456789abcdef"},
 		Agent:    AgentConfig{ToolRegistrationInternalToken: "abcdef0123456789abcdef0123456789"},
+		Observability: ObservabilityConfig{
+			SealingKey: "observability-abcdef0123456789abcdef0123456789", SealingDomain: "cloud-agent-terminal-v1",
+		},
 		MinIO: MinIOConfig{
 			AccessKey: "long-non-default-minio-access-key", SecretKey: "long-non-default-minio-secret-value",
 		},
@@ -181,6 +184,56 @@ func TestValidateForModeAcceptsStrongInternalToolRegistrationToken(t *testing.T)
 	}
 	if err := cfg.ValidateForMode("production"); err != nil {
 		t.Fatalf("strong production control-plane configuration rejected: %v", err)
+	}
+}
+
+func TestValidateForModeRejectsMissingObservabilitySealingKey(t *testing.T) {
+	cfg := &Config{
+		Server:   ServerConfig{CORSAllowedOrigins: "https://app.example.com"},
+		Postgres: PostgresConfig{Password: "long-non-default-postgres-password"},
+		Auth:     AuthConfig{TokenSecret: "0123456789abcdef0123456789abcdef"},
+		Agent:    AgentConfig{ToolRegistrationInternalToken: "abcdef0123456789abcdef0123456789"},
+		MinIO: MinIOConfig{
+			AccessKey: "long-non-default-minio-access-key", SecretKey: "long-non-default-minio-secret-value",
+		},
+		BashTool: BashToolConfig{AllowedCommands: "ls,cat,pwd"},
+		Sandbox:  SandboxConfig{Enabled: true, Address: "127.0.0.1:50051", Fallback: false},
+	}
+	err := cfg.ValidateForMode("production")
+	if err == nil || !strings.Contains(err.Error(), "OBSERVABILITY_SEALING_KEY") {
+		t.Fatalf("production missing sealing key error = %v", err)
+	}
+}
+
+func TestValidateForModeRejectsWeakObservabilitySealingKeyWithoutLeakingIt(t *testing.T) {
+	const weakKey = "weak-observability-key"
+	cfg := &Config{Observability: ObservabilityConfig{
+		SealingKey: weakKey, SealingDomain: "cloud-agent-terminal-v1",
+	}}
+	err := cfg.ValidateForMode("production")
+	if err == nil || !strings.Contains(err.Error(), "OBSERVABILITY_SEALING_KEY") {
+		t.Fatalf("production weak sealing key error = %v", err)
+	}
+	if strings.Contains(err.Error(), weakKey) {
+		t.Fatalf("production validation leaked the observability sealing key: %v", err)
+	}
+}
+
+func TestObservabilitySealingConfigLoadsFromEnvironment(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("OBSERVABILITY_SEALING_KEY", "environment-observability-key-0123456789abcdef")
+	t.Setenv("OBSERVABILITY_SEALING_DOMAIN", "environment-agent-terminal-v1")
+	viper.AutomaticEnv()
+	setDefaults()
+
+	cfg := &Config{}
+	if err := viper.Unmarshal(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Observability.SealingKey != "environment-observability-key-0123456789abcdef" ||
+		cfg.Observability.SealingDomain != "environment-agent-terminal-v1" {
+		t.Fatalf("observability environment config was not loaded: %#v", cfg.Observability)
 	}
 }
 

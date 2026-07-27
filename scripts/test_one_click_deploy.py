@@ -95,6 +95,15 @@ class OneClickDeployContractTest(unittest.TestCase):
         self.assertGreaterEqual(source.count("healthcheck:"), 4)
         self.assertNotIn(":latest", source)
 
+    def test_deploy_persists_separate_observability_sealing_key(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        compose = COMPOSE.read_text(encoding="utf-8")
+        self.assertIn("OBSERVABILITY_SEALING_KEY", script)
+        self.assertIn("OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1", script)
+        self.assertIn("openssl rand -hex 32", script)
+        self.assertIn("OBSERVABILITY_SEALING_KEY is required", compose)
+        self.assertIn("OBSERVABILITY_SEALING_DOMAIN", compose)
+
     def test_cloud_runtime_binary_is_included_in_docker_context(self) -> None:
         source = DOCKERIGNORE.read_text(encoding="utf-8")
         self.assertIn("!build/tangying-ai-os", source)

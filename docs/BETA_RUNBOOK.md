@@ -57,6 +57,8 @@ Important beta variables:
 | Variable | Purpose |
 |---|---|
 | `AUTH_TOKEN_SECRET` | Long random auth/encryption secret. Required to be strong in `GIN_MODE=release`. |
+| `OBSERVABILITY_SEALING_KEY` | Separate long random HMAC key for durable agent terminal events. Generate it once and keep it stable across process restarts. |
+| `OBSERVABILITY_SEALING_DOMAIN` | Stable sealing-domain identifier. Default: `cloud-agent-terminal-v1`. |
 | `POSTGRES_PASSWORD` | Database password. Do not use defaults in release/production. |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | Object storage credentials. Do not use defaults in release/production. |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated frontend origins, for example `http://localhost:3000`. Must not be `*` in release/production. |
@@ -69,6 +71,12 @@ Important beta variables:
 | `TANGYING_DEVICE_ID` | Stable local runner device id. |
 
 Do not put real secrets in docs, tests, screenshots, or issue comments.
+
+Generate `OBSERVABILITY_SEALING_KEY` independently from the auth and storage
+credentials (for example, with `openssl rand -hex 32`). Missing or weak keys
+stop release-mode startup. Rotating the key or domain makes already-pending
+terminal outbox envelopes unverifiable, so drain the outbox before rotation or
+keep the previous deployment key available until all pending rows are delivered.
 
 ## Start Cloud Backend
 

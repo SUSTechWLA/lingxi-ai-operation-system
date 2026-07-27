@@ -2,6 +2,8 @@ package observability
 
 import (
 	"bytes"
+	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -9,144 +11,447 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
+	"reflect"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 )
 
-const preparedEventEnvelopeVersion = "observability.prepared.v1"
+const (
+	persistentPreparedEventVersion  = "observability.prepared.v2"
+	maxSealedPreparedEventBytes     = 64 * 1024
+	minPersistentSealingKeyBytes    = 32
+	maxPersistentSealingKeyBytes    = 4 * 1024
+	maxPersistentSealingDomainBytes = 128
+)
 
-// PreparedEvent is an opaque replay capability. Its private method prevents
-// callers outside this package from treating an arbitrary Event as prepared.
+var persistentSealingDomainPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+
+// PersistentSealingConfig identifies one durable sealing domain. Key must be
+// stable across process restarts and is copied into private emitter state.
+type PersistentSealingConfig struct {
+	Domain string
+	Key    []byte
+}
+
+// PreparedEvent is an opaque replay capability. Only a persistent component
+// emitter can create or restore an implementation.
 type PreparedEvent interface {
 	preparedEventCapability()
 }
 
 type preparedEvent struct {
+	sealed      SealedPreparedEvent
 	ownerUserID string
 	event       Event
-	serialized  []byte
+	domainProof [sha256.Size]byte
 }
 
 func (*preparedEvent) preparedEventCapability() {}
 
-// PreparedEventBinding ties a persisted capability back to the trusted
-// outbox columns used to locate it. Empty optional fields are wildcards; the
-// event ID, owner, and component are mandatory.
+// PreparedEventBinding duplicates the trusted outbox fields that must exactly
+// match the authenticated event before any callback or sink side effect.
 type PreparedEventBinding struct {
-	EventID         string
-	OwnerUserID     string
-	Component       Component
-	Source          Source
-	Correlation     Correlation
-	Runtime         Runtime
-	Privacy         Privacy
-	EventType       EventType
-	ExecutionStatus ExecutionStatus
-	ErrorCode       string
-	OccurredAt      time.Time
+	SchemaVersion   string          `json:"schemaVersion"`
+	EventID         string          `json:"eventId"`
+	OwnerUserID     string          `json:"ownerUserId"`
+	Source          Source          `json:"source"`
+	Correlation     Correlation     `json:"correlation"`
+	Runtime         Runtime         `json:"runtime"`
+	Privacy         Privacy         `json:"privacy"`
+	Severity        Severity        `json:"severity"`
+	EventType       EventType       `json:"eventType"`
+	ExecutionStatus ExecutionStatus `json:"executionStatus"`
+	ErrorCode       string          `json:"errorCode,omitempty"`
+	OccurredAt      time.Time       `json:"occurredAt"`
 }
 
-type preparedEventEnvelope struct {
-	Version     string `json:"version"`
-	OwnerUserID string `json:"ownerUserId"`
-	Event       Event  `json:"event"`
-	SHA256      string `json:"sha256"`
+// SealedPreparedEvent is safe to persist but not trusted until the originating
+// sealing domain restores it. Payload is authenticated; Binding is checked
+// exactly against the authenticated event.
+type SealedPreparedEvent struct {
+	Payload []byte               `json:"payload"`
+	Binding PreparedEventBinding `json:"binding"`
 }
 
-type preparedEventDigestBody struct {
-	Version     string `json:"version"`
-	OwnerUserID string `json:"ownerUserId"`
-	Event       Event  `json:"event"`
+func (s SealedPreparedEvent) Clone() SealedPreparedEvent {
+	clone := s
+	clone.Payload = append([]byte(nil), s.Payload...)
+	clone.Binding.Privacy.RedactedFields = append([]string(nil), s.Binding.Privacy.RedactedFields...)
+	return clone
 }
 
-func newPreparedEvent(ownerUserID string, event Event) (PreparedEvent, error) {
+type persistentSealer struct {
+	domain string
+	key    []byte
+}
+
+type persistentPreparedEnvelope struct {
+	Version         string    `json:"version"`
+	Domain          string    `json:"domain"`
+	OwnerUserID     string    `json:"ownerUserId"`
+	ProducerSource  Source    `json:"producerSource"`
+	ProducerRuntime Runtime   `json:"producerRuntime"`
+	Component       Component `json:"component"`
+	Event           Event     `json:"event"`
+	HMACSHA256      string    `json:"hmacSha256"`
+}
+
+type persistentPreparedBody struct {
+	Version         string    `json:"version"`
+	Domain          string    `json:"domain"`
+	OwnerUserID     string    `json:"ownerUserId"`
+	ProducerSource  Source    `json:"producerSource"`
+	ProducerRuntime Runtime   `json:"producerRuntime"`
+	Component       Component `json:"component"`
+	Event           Event     `json:"event"`
+}
+
+type persistentComponentEmitter struct {
+	emitter   *Emitter
+	component Component
+}
+
+func newPersistentSealer(config PersistentSealingConfig) (*persistentSealer, error) {
+	domain := strings.TrimSpace(config.Domain)
+	if domain == "" || domain != config.Domain || len(domain) > maxPersistentSealingDomainBytes ||
+		!persistentSealingDomainPattern.MatchString(domain) {
+		return nil, errors.New("persistent observability sealing domain is invalid")
+	}
+	if len(config.Key) < minPersistentSealingKeyBytes || len(config.Key) > maxPersistentSealingKeyBytes {
+		return nil, fmt.Errorf("persistent observability sealing key must be %d-%d bytes", minPersistentSealingKeyBytes, maxPersistentSealingKeyBytes)
+	}
+	return &persistentSealer{domain: domain, key: append([]byte(nil), config.Key...)}, nil
+}
+
+func (e *Emitter) ForPersistentComponent(component Component) (PersistentPreparedEventEmitter, error) {
+	if e == nil || e.persistentSealer == nil {
+		return nil, errors.New("persistent prepared observability is not configured")
+	}
+	if component == "" {
+		return nil, errors.New("persistent prepared observability requires a component")
+	}
+	emitter := &persistentComponentEmitter{emitter: e, component: component}
+	if err := emitter.ValidatePersistentConfiguration(); err != nil {
+		return nil, err
+	}
+	return emitter, nil
+}
+
+func (e *persistentComponentEmitter) Emit(ctx context.Context, event Event) error {
+	if err := e.ValidatePersistentConfiguration(); err != nil {
+		return err
+	}
+	return e.emitter.emit(ctx, event, e.component, nil)
+}
+
+func (e *persistentComponentEmitter) EmitAndWait(ctx context.Context, event Event) error {
+	if err := e.ValidatePersistentConfiguration(); err != nil {
+		return err
+	}
+	return e.emitter.emitAndWait(ctx, event, e.component)
+}
+
+func (e *persistentComponentEmitter) ValidatePersistentConfiguration() error {
+	if e == nil || e.emitter == nil || e.emitter.persistentSealer == nil {
+		return errors.New("persistent prepared observability is not configured")
+	}
+	if e.component == "" {
+		return errors.New("persistent prepared observability requires a component")
+	}
+	if e.emitter.source.Service == "" || e.emitter.source.Component == "" || e.emitter.source.Environment == "" {
+		return errors.New("persistent prepared observability requires complete parent source identity")
+	}
+	return nil
+}
+
+func (e *persistentComponentEmitter) FreezeAndSeal(ctx context.Context, event Event) (SealedPreparedEvent, error) {
+	if err := e.ValidatePersistentConfiguration(); err != nil {
+		return SealedPreparedEvent{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	prepared, err := e.emitter.prepare(ctx, event, e.component)
+	if err != nil {
+		return SealedPreparedEvent{}, err
+	}
+	ownerUserID, _ := trustedcontext.UserID(ctx)
 	ownerUserID = strings.TrimSpace(ownerUserID)
 	if ownerUserID == "" {
-		return nil, errors.New("prepared observability event requires a trusted owner")
+		return SealedPreparedEvent{}, errors.New("prepared observability event requires a trusted owner")
 	}
-	if err := validatePreparedEventValue(event); err != nil {
-		return nil, err
+	if err := validatePreparedEventValue(prepared); err != nil {
+		return SealedPreparedEvent{}, err
 	}
-	body := preparedEventDigestBody{
-		Version: preparedEventEnvelopeVersion, OwnerUserID: ownerUserID, Event: event,
+	body := persistentPreparedBody{
+		Version: persistentPreparedEventVersion, Domain: e.emitter.persistentSealer.domain,
+		OwnerUserID: ownerUserID, ProducerSource: e.emitter.source, ProducerRuntime: e.emitter.runtime,
+		Component: e.component, Event: prepared,
 	}
-	bodyJSON, err := json.Marshal(body)
+	payload, err := e.emitter.persistentSealer.seal(body)
 	if err != nil {
-		return nil, fmt.Errorf("marshal prepared observability digest body: %w", err)
+		return SealedPreparedEvent{}, err
 	}
-	digest := sha256.Sum256(bodyJSON)
-	envelope := preparedEventEnvelope{
-		Version: body.Version, OwnerUserID: body.OwnerUserID, Event: body.Event,
-		SHA256: hex.EncodeToString(digest[:]),
-	}
-	serialized, err := json.Marshal(envelope)
-	if err != nil {
-		return nil, fmt.Errorf("marshal prepared observability envelope: %w", err)
-	}
-	return &preparedEvent{ownerUserID: ownerUserID, event: event, serialized: serialized}, nil
+	sealed := SealedPreparedEvent{Payload: payload, Binding: preparedEventBinding(ownerUserID, prepared)}
+	return sealed.Clone(), nil
 }
 
-// MarshalPreparedEvent returns the stable bytes persisted by durable outboxes.
-func MarshalPreparedEvent(prepared PreparedEvent) ([]byte, error) {
-	capability, ok := prepared.(*preparedEvent)
-	if !ok || capability == nil || len(capability.serialized) == 0 {
-		return nil, errors.New("invalid prepared observability capability")
-	}
-	return append([]byte(nil), capability.serialized...), nil
-}
-
-// DecodePreparedEvent is the only persistence decoder. It validates the
-// canonical envelope, corruption digest, event registry/redaction contract,
-// and trusted outbox bindings before returning a replay capability.
-func DecodePreparedEvent(payload []byte, binding PreparedEventBinding) (PreparedEvent, error) {
-	if len(payload) == 0 {
-		return nil, errors.New("prepared observability payload is empty")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	var envelope preparedEventEnvelope
-	if err := decoder.Decode(&envelope); err != nil {
-		return nil, fmt.Errorf("decode prepared observability envelope: %w", err)
-	}
-	if err := requirePreparedJSONEOF(decoder); err != nil {
+func (e *persistentComponentEmitter) RestorePreparedEvent(sealed SealedPreparedEvent) (PreparedEvent, error) {
+	if err := e.ValidatePersistentConfiguration(); err != nil {
 		return nil, err
 	}
-	canonical, err := json.Marshal(envelope)
+	envelope, err := e.emitter.persistentSealer.open(sealed.Payload)
 	if err != nil {
-		return nil, fmt.Errorf("canonicalize prepared observability envelope: %w", err)
+		return nil, err
 	}
-	if !bytes.Equal(payload, canonical) {
-		return nil, errors.New("prepared observability envelope is not canonical")
+	if envelope.ProducerSource != e.emitter.source {
+		return nil, errors.New("prepared observability parent source domain mismatch")
 	}
-	if envelope.Version != preparedEventEnvelopeVersion {
-		return nil, errors.New("prepared observability envelope version is unsupported")
+	if envelope.Component != e.component {
+		return nil, errors.New("prepared observability component domain mismatch")
 	}
-	if strings.TrimSpace(envelope.OwnerUserID) == "" || envelope.OwnerUserID != strings.TrimSpace(envelope.OwnerUserID) {
-		return nil, errors.New("prepared observability owner is invalid")
-	}
-	bodyJSON, err := json.Marshal(preparedEventDigestBody{
-		Version: envelope.Version, OwnerUserID: envelope.OwnerUserID, Event: envelope.Event,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshal prepared observability digest body: %w", err)
-	}
-	digest := sha256.Sum256(bodyJSON)
-	wantDigest, err := hex.DecodeString(envelope.SHA256)
-	if err != nil || len(wantDigest) != sha256.Size || subtle.ConstantTimeCompare(digest[:], wantDigest) != 1 {
-		return nil, errors.New("prepared observability envelope digest mismatch")
+	wantSource := e.emitter.source
+	wantSource.Component = string(e.component)
+	if envelope.Event.Source != wantSource {
+		return nil, errors.New("prepared observability event source binding mismatch")
 	}
 	if err := validatePreparedEventValue(envelope.Event); err != nil {
 		return nil, err
 	}
-	if err := validatePreparedEventBinding(envelope, binding); err != nil {
+	wantBinding := preparedEventBinding(envelope.OwnerUserID, envelope.Event)
+	if !reflect.DeepEqual(sealed.Binding, wantBinding) {
+		return nil, errors.New("prepared observability trusted binding mismatch")
+	}
+	capability := &preparedEvent{
+		sealed: sealed.Clone(), ownerUserID: envelope.OwnerUserID, event: envelope.Event,
+		domainProof: e.domainProof(),
+	}
+	return capability, nil
+}
+
+// RestorePreparedEventFor additionally proves that the authenticated event is
+// the one the caller expects for this trusted context. Durable outboxes use it
+// before any callback so a valid envelope copied from another row cannot be
+// replayed under a different owner, identity, correlation, runtime, or status.
+func (e *persistentComponentEmitter) RestorePreparedEventFor(
+	ctx context.Context,
+	sealed SealedPreparedEvent,
+	expected Event,
+) (PreparedEvent, error) {
+	capability, err := e.RestorePreparedEvent(sealed)
+	if err != nil {
 		return nil, err
 	}
-	return &preparedEvent{
-		ownerUserID: envelope.OwnerUserID,
-		event:       envelope.Event,
-		serialized:  append([]byte(nil), canonical...),
-	}, nil
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ownerUserID, _ := trustedcontext.UserID(ctx)
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	if ownerUserID == "" {
+		return nil, errors.New("prepared observability expected event requires a trusted owner")
+	}
+	// Producer runtime is authenticated historical evidence, not part of the
+	// restart key domain. Preserve it while keeping the caller-owned tool
+	// snapshot an exact outbox expectation, including its empty value.
+	expectedToolSnapshotID := expected.Runtime.ToolRegistrySnapshotID
+	expected.Runtime = sealed.Binding.Runtime
+	expected.Runtime.ToolRegistrySnapshotID = expectedToolSnapshotID
+	preparedExpected, err := e.emitter.prepare(ctx, expected, e.component)
+	if err != nil {
+		return nil, fmt.Errorf("prepare expected observability event: %w", err)
+	}
+	preparedExpected.Runtime = expected.Runtime
+	if err := validatePreparedEventValue(preparedExpected); err != nil {
+		return nil, fmt.Errorf("validate expected observability event: %w", err)
+	}
+	wantBinding := preparedEventBinding(ownerUserID, preparedExpected)
+	if !reflect.DeepEqual(sealed.Binding, wantBinding) {
+		return nil, fmt.Errorf("prepared observability caller binding mismatch: %s", strings.Join(preparedEventBindingMismatchFields(sealed.Binding, wantBinding), ","))
+	}
+	return capability, nil
+}
+
+func preparedEventBindingMismatchFields(got, want PreparedEventBinding) []string {
+	fields := make([]string, 0, 12)
+	if got.SchemaVersion != want.SchemaVersion {
+		fields = append(fields, "schema")
+	}
+	if got.EventID != want.EventID {
+		fields = append(fields, "event-id")
+	}
+	if got.OwnerUserID != want.OwnerUserID {
+		fields = append(fields, "owner")
+	}
+	if got.Source != want.Source {
+		fields = append(fields, "source")
+	}
+	if got.Correlation != want.Correlation {
+		fields = append(fields, "correlation")
+	}
+	if got.Runtime != want.Runtime {
+		fields = append(fields, "runtime")
+	}
+	if !reflect.DeepEqual(got.Privacy, want.Privacy) {
+		fields = append(fields, "privacy")
+	}
+	if got.Severity != want.Severity {
+		fields = append(fields, "severity")
+	}
+	if got.EventType != want.EventType {
+		fields = append(fields, "event-type")
+	}
+	if got.ExecutionStatus != want.ExecutionStatus {
+		fields = append(fields, "execution-status")
+	}
+	if got.ErrorCode != want.ErrorCode {
+		fields = append(fields, "error-code")
+	}
+	if !got.OccurredAt.Equal(want.OccurredAt) {
+		fields = append(fields, "occurred-at")
+	}
+	return fields
+}
+
+func (e *persistentComponentEmitter) ReplayPreparedAndWait(ctx context.Context, prepared PreparedEvent) error {
+	if err := e.ValidatePersistentConfiguration(); err != nil {
+		return err
+	}
+	capability, ok := prepared.(*preparedEvent)
+	if !ok || capability == nil {
+		return errors.New("invalid prepared observability capability")
+	}
+	proof := e.domainProof()
+	if subtle.ConstantTimeCompare(proof[:], capability.domainProof[:]) != 1 {
+		return errors.New("prepared observability capability domain mismatch")
+	}
+	restored, err := e.RestorePreparedEvent(capability.sealed)
+	if err != nil {
+		return err
+	}
+	validated := restored.(*preparedEvent)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result := make(chan error, 1)
+	if err := e.emitter.enqueuePreparedForOwner(ctx, validated.event, validated.ownerUserID, result); err != nil {
+		return err
+	}
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *persistentSealer) seal(body persistentPreparedBody) ([]byte, error) {
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal prepared observability body: %w", err)
+	}
+	signature := s.sign(bodyJSON)
+	envelope := persistentPreparedEnvelope{
+		Version: body.Version, Domain: body.Domain, OwnerUserID: body.OwnerUserID,
+		ProducerSource: body.ProducerSource, ProducerRuntime: body.ProducerRuntime,
+		Component: body.Component, Event: body.Event, HMACSHA256: hex.EncodeToString(signature[:]),
+	}
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, fmt.Errorf("marshal prepared observability envelope: %w", err)
+	}
+	if len(payload) > maxSealedPreparedEventBytes {
+		return nil, errors.New("prepared observability payload exceeds size limit")
+	}
+	return payload, nil
+}
+
+func (s *persistentSealer) open(payload []byte) (persistentPreparedEnvelope, error) {
+	if len(payload) == 0 {
+		return persistentPreparedEnvelope{}, errors.New("prepared observability payload is empty")
+	}
+	if len(payload) > maxSealedPreparedEventBytes {
+		return persistentPreparedEnvelope{}, errors.New("prepared observability payload exceeds size limit")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var envelope persistentPreparedEnvelope
+	if err := decoder.Decode(&envelope); err != nil {
+		return persistentPreparedEnvelope{}, fmt.Errorf("decode prepared observability envelope: %w", err)
+	}
+	if err := requirePreparedJSONEOF(decoder); err != nil {
+		return persistentPreparedEnvelope{}, err
+	}
+	canonical, err := json.Marshal(envelope)
+	if err != nil {
+		return persistentPreparedEnvelope{}, fmt.Errorf("canonicalize prepared observability envelope: %w", err)
+	}
+	if !bytes.Equal(payload, canonical) {
+		return persistentPreparedEnvelope{}, errors.New("prepared observability envelope is not canonical")
+	}
+	if envelope.Version != persistentPreparedEventVersion {
+		return persistentPreparedEnvelope{}, errors.New("prepared observability envelope version is unsupported")
+	}
+	if envelope.Domain != s.domain {
+		return persistentPreparedEnvelope{}, errors.New("prepared observability sealing domain mismatch")
+	}
+	body := persistentPreparedBody{
+		Version: envelope.Version, Domain: envelope.Domain, OwnerUserID: envelope.OwnerUserID,
+		ProducerSource: envelope.ProducerSource, ProducerRuntime: envelope.ProducerRuntime,
+		Component: envelope.Component, Event: envelope.Event,
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return persistentPreparedEnvelope{}, fmt.Errorf("marshal prepared observability body: %w", err)
+	}
+	want, err := hex.DecodeString(envelope.HMACSHA256)
+	if err != nil || len(want) != sha256.Size {
+		return persistentPreparedEnvelope{}, errors.New("prepared observability signature is invalid")
+	}
+	got := s.sign(bodyJSON)
+	if subtle.ConstantTimeCompare(got[:], want) != 1 {
+		return persistentPreparedEnvelope{}, errors.New("prepared observability signature mismatch")
+	}
+	return envelope, nil
+}
+
+func (s *persistentSealer) sign(payload []byte) [sha256.Size]byte {
+	mac := hmac.New(sha256.New, s.key)
+	_, _ = mac.Write(payload)
+	var signature [sha256.Size]byte
+	copy(signature[:], mac.Sum(nil))
+	return signature
+}
+
+func (e *persistentComponentEmitter) domainProof() [sha256.Size]byte {
+	identity, _ := json.Marshal(struct {
+		Purpose   string    `json:"purpose"`
+		Domain    string    `json:"domain"`
+		Source    Source    `json:"source"`
+		Runtime   Runtime   `json:"runtime"`
+		Component Component `json:"component"`
+	}{
+		Purpose: "prepared-capability-domain-v1", Domain: e.emitter.persistentSealer.domain,
+		Source: e.emitter.source, Runtime: e.emitter.runtime, Component: e.component,
+	})
+	return e.emitter.persistentSealer.sign(identity)
+}
+
+func preparedEventBinding(ownerUserID string, event Event) PreparedEventBinding {
+	errorCode := ""
+	if event.Error != nil {
+		errorCode = event.Error.Code
+	}
+	privacy := event.Privacy
+	privacy.RedactedFields = append([]string(nil), event.Privacy.RedactedFields...)
+	return PreparedEventBinding{
+		SchemaVersion: event.SchemaVersion, EventID: event.EventID, OwnerUserID: ownerUserID,
+		Source: event.Source, Correlation: event.Correlation, Runtime: event.Runtime, Privacy: privacy,
+		Severity: event.Severity, EventType: event.EventType, ExecutionStatus: event.Execution.Status,
+		ErrorCode: errorCode, OccurredAt: event.OccurredAt.UTC(),
+	}
 }
 
 func requirePreparedJSONEOF(decoder *json.Decoder) error {
@@ -178,99 +483,6 @@ func validatePreparedEventValue(event Event) error {
 	}
 	if !bytes.Equal(eventJSON, redactedJSON) {
 		return errors.New("prepared observability event is not fully redacted")
-	}
-	return nil
-}
-
-func validatePreparedEventBinding(envelope preparedEventEnvelope, binding PreparedEventBinding) error {
-	if binding.EventID == "" || binding.OwnerUserID == "" || binding.Component == "" {
-		return errors.New("prepared observability binding requires event ID, owner, and component")
-	}
-	event := envelope.Event
-	if event.EventID != binding.EventID {
-		return errors.New("prepared observability event ID binding mismatch")
-	}
-	if envelope.OwnerUserID != binding.OwnerUserID {
-		return errors.New("prepared observability owner binding mismatch")
-	}
-	if event.Source.Component != string(binding.Component) {
-		return errors.New("prepared observability component binding mismatch")
-	}
-	if err := compareOptionalSource(event.Source, binding.Source); err != nil {
-		return err
-	}
-	if err := compareOptionalCorrelation(event.Correlation, sanitizeCorrelation(binding.Correlation)); err != nil {
-		return err
-	}
-	if err := compareOptionalRuntime(event.Runtime, binding.Runtime); err != nil {
-		return err
-	}
-	if binding.Privacy.Classification != "" && event.Privacy.Classification != binding.Privacy.Classification {
-		return errors.New("prepared observability privacy binding mismatch")
-	}
-	if binding.Privacy.RedactedFields != nil && !slices.Equal(event.Privacy.RedactedFields, binding.Privacy.RedactedFields) {
-		return errors.New("prepared observability redacted fields binding mismatch")
-	}
-	if binding.EventType != "" && event.EventType != binding.EventType {
-		return errors.New("prepared observability event type binding mismatch")
-	}
-	if binding.ExecutionStatus != "" && event.Execution.Status != binding.ExecutionStatus {
-		return errors.New("prepared observability execution binding mismatch")
-	}
-	actualErrorCode := ""
-	if event.Error != nil {
-		actualErrorCode = event.Error.Code
-	}
-	if binding.ErrorCode != actualErrorCode {
-		return errors.New("prepared observability error binding mismatch")
-	}
-	if !binding.OccurredAt.IsZero() && !event.OccurredAt.Equal(binding.OccurredAt) {
-		return errors.New("prepared observability occurred-at binding mismatch")
-	}
-	return nil
-}
-
-func compareOptionalSource(actual, expected Source) error {
-	for _, field := range []struct{ name, actual, expected string }{
-		{"service", actual.Service, expected.Service},
-		{"component", actual.Component, expected.Component},
-		{"environment", actual.Environment, expected.Environment},
-	} {
-		if field.expected != "" && field.actual != field.expected {
-			return fmt.Errorf("prepared observability source %s binding mismatch", field.name)
-		}
-	}
-	return nil
-}
-
-func compareOptionalCorrelation(actual, expected Correlation) error {
-	for _, field := range []struct{ name, actual, expected string }{
-		{"traceId", actual.TraceID, expected.TraceID}, {"spanId", actual.SpanID, expected.SpanID},
-		{"parentSpanId", actual.ParentSpanID, expected.ParentSpanID}, {"sessionId", actual.SessionID, expected.SessionID},
-		{"projectId", actual.ProjectID, expected.ProjectID}, {"taskId", actual.TaskID, expected.TaskID},
-		{"workflowRunId", actual.WorkflowRunID, expected.WorkflowRunID}, {"agentRunId", actual.AgentRunID, expected.AgentRunID},
-		{"stageId", actual.StageID, expected.StageID}, {"shotId", actual.ShotID, expected.ShotID},
-		{"artifactId", actual.ArtifactID, expected.ArtifactID}, {"toolCallId", actual.ToolCallID, expected.ToolCallID},
-		{"providerJobId", actual.ProviderJobID, expected.ProviderJobID},
-	} {
-		if field.expected != "" && field.actual != field.expected {
-			return fmt.Errorf("prepared observability correlation %s binding mismatch", field.name)
-		}
-	}
-	return nil
-}
-
-func compareOptionalRuntime(actual, expected Runtime) error {
-	for _, field := range []struct{ name, actual, expected string }{
-		{"appVersion", actual.AppVersion, expected.AppVersion}, {"gitCommit", actual.GitCommit, expected.GitCommit},
-		{"workflowVersion", actual.WorkflowVersion, expected.WorkflowVersion},
-		{"toolRegistrySnapshotId", actual.ToolRegistrySnapshotID, expected.ToolRegistrySnapshotID},
-		{"promptTemplateVersion", actual.PromptTemplateVersion, expected.PromptTemplateVersion},
-		{"provider", actual.Provider, expected.Provider}, {"model", actual.Model, expected.Model},
-	} {
-		if field.expected != "" && field.actual != field.expected {
-			return fmt.Errorf("prepared observability runtime %s binding mismatch", field.name)
-		}
 	}
 	return nil
 }

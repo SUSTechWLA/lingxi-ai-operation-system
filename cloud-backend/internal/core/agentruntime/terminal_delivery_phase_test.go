@@ -16,17 +16,71 @@ import (
 )
 
 type terminalReplayEmitter struct {
-	mu       sync.Mutex
-	failures int
-	payloads [][]byte
-	ownerIDs []string
+	mu         sync.Mutex
+	failures   int
+	payloads   [][]byte
+	ownerIDs   []string
+	emitter    *observability.Emitter
+	persistent observability.PersistentPreparedEventEmitter
 }
 
-func (e *terminalReplayEmitter) Emit(ctx context.Context, event observability.Event) error {
-	return e.EmitAndWait(ctx, event)
+type nonPreparedTerminalEmitter struct {
+	applications int
 }
 
-func (e *terminalReplayEmitter) EmitAndWait(ctx context.Context, event observability.Event) error {
+func (e *nonPreparedTerminalEmitter) Emit(context.Context, observability.Event) error {
+	e.applications++
+	return nil
+}
+
+func newTerminalReplayEmitter(t *testing.T, failures int) *terminalReplayEmitter {
+	t.Helper()
+	replay := &terminalReplayEmitter{failures: failures}
+	emitter, err := observability.NewPersistentEmitter(
+		observability.Source{Service: "cloud", Component: "http-server", Environment: "test"},
+		observability.Runtime{AppVersion: "test-app", GitCommit: "test-commit"}, replay, 8,
+		observability.PersistentSealingConfig{
+			Domain: "agent-terminal-test-v1",
+			Key:    []byte("0123456789abcdef0123456789abcdef-extra-test-key"),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistent, err := emitter.ForPersistentComponent(observability.ComponentAgentRuntime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay.emitter = emitter
+	replay.persistent = persistent
+	t.Cleanup(func() { _ = emitter.Close(context.Background()) })
+	return replay
+}
+
+func newPersistentAgentEmitterForTest(
+	t *testing.T,
+	source observability.Source,
+	runtime observability.Runtime,
+	sink observability.Sink,
+	capacity int,
+) (*observability.Emitter, observability.PersistentPreparedEventEmitter) {
+	t.Helper()
+	emitter, err := observability.NewPersistentEmitter(source, runtime, sink, capacity, observability.PersistentSealingConfig{
+		Domain: "agent-terminal-test-v1",
+		Key:    []byte("0123456789abcdef0123456789abcdef-extra-test-key"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistent, err := emitter.ForPersistentComponent(observability.ComponentAgentRuntime)
+	if err != nil {
+		emitter.Close(context.Background())
+		t.Fatal(err)
+	}
+	return emitter, persistent
+}
+
+func (e *terminalReplayEmitter) Write(ctx context.Context, event observability.Event) error {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return err
@@ -41,6 +95,36 @@ func (e *terminalReplayEmitter) EmitAndWait(ctx context.Context, event observabi
 		return errors.New("observability sink unavailable")
 	}
 	return nil
+}
+
+func (*terminalReplayEmitter) Close(context.Context) error { return nil }
+
+func (e *terminalReplayEmitter) Emit(ctx context.Context, event observability.Event) error {
+	return e.persistent.Emit(ctx, event)
+}
+
+func (e *terminalReplayEmitter) EmitAndWait(ctx context.Context, event observability.Event) error {
+	return e.persistent.EmitAndWait(ctx, event)
+}
+
+func (e *terminalReplayEmitter) ValidatePersistentConfiguration() error {
+	return e.persistent.ValidatePersistentConfiguration()
+}
+
+func (e *terminalReplayEmitter) FreezeAndSeal(ctx context.Context, event observability.Event) (observability.SealedPreparedEvent, error) {
+	return e.persistent.FreezeAndSeal(ctx, event)
+}
+
+func (e *terminalReplayEmitter) RestorePreparedEvent(sealed observability.SealedPreparedEvent) (observability.PreparedEvent, error) {
+	return e.persistent.RestorePreparedEvent(sealed)
+}
+
+func (e *terminalReplayEmitter) RestorePreparedEventFor(ctx context.Context, sealed observability.SealedPreparedEvent, event observability.Event) (observability.PreparedEvent, error) {
+	return e.persistent.RestorePreparedEventFor(ctx, sealed, event)
+}
+
+func (e *terminalReplayEmitter) ReplayPreparedAndWait(ctx context.Context, prepared observability.PreparedEvent) error {
+	return e.persistent.ReplayPreparedAndWait(ctx, prepared)
 }
 
 func (e *terminalReplayEmitter) snapshot() ([][]byte, []string) {
@@ -147,7 +231,7 @@ func (s *lostTerminalAckStore) AckTerminalEvent(ctx context.Context, delivery Te
 func TestRunnerCallbackSuccessThenObservabilityFailureDoesNotRepeatCallback(t *testing.T) {
 	store := newMemoryRunStore()
 	run := terminalDeliveryTestRun("agr_phase_callback")
-	emitter := &terminalReplayEmitter{failures: 1}
+	emitter := newTerminalReplayEmitter(t, 1)
 	callbackCount := 0
 	runner := NewRunner(nil, store, nil, nil, nil).
 		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
@@ -167,10 +251,53 @@ func TestRunnerCallbackSuccessThenObservabilityFailureDoesNotRepeatCallback(t *t
 	}
 }
 
+func TestRunnerRejectsNonPreparedEmitterBeforeTerminalCallback(t *testing.T) {
+	store := newMemoryRunStore()
+	run := terminalDeliveryTestRun("agr_phase_non_prepared_config")
+	emitter := &nonPreparedTerminalEmitter{}
+	callbackCount := 0
+	runner := NewRunner(nil, store, nil, nil, nil).
+		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+			callbackCount++
+			return nil
+		}).
+		WithObservability(emitter)
+
+	if err := runner.ValidateConfiguration(); err == nil || !strings.Contains(err.Error(), "persistent prepared observability") {
+		t.Fatalf("configuration error = %v", err)
+	}
+	err := runner.persistAndDeliverTerminal(context.Background(), run, terminalEventFromRun(run, ""))
+	if err == nil || !strings.Contains(err.Error(), "persistent prepared observability") {
+		t.Fatalf("terminal delivery error = %v", err)
+	}
+	if callbackCount != 0 || emitter.applications != 0 {
+		t.Fatalf("callback=%d emitter=%d, want configuration failure before side effects", callbackCount, emitter.applications)
+	}
+}
+
+func TestRunnerRejectsTypedNilPersistentEmitterBeforeTerminalCallback(t *testing.T) {
+	var emitter *terminalReplayEmitter
+	callbackCount := 0
+	runner := NewRunner(nil, newMemoryRunStore(), nil, nil, nil).
+		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+			callbackCount++
+			return nil
+		}).
+		WithObservability(emitter)
+
+	err := runner.ValidateConfiguration()
+	if err == nil || !strings.Contains(err.Error(), "persistent prepared observability") {
+		t.Fatalf("typed-nil configuration error = %v", err)
+	}
+	if callbackCount != 0 {
+		t.Fatalf("callback count = %d, want zero", callbackCount)
+	}
+}
+
 func TestRunnerTerminalReplayUsesByteIdenticalFrozenObservabilityEnvelope(t *testing.T) {
 	store := newMemoryRunStore()
 	run := terminalDeliveryTestRun("agr_phase_replay")
-	emitter := &terminalReplayEmitter{failures: 1}
+	emitter := newTerminalReplayEmitter(t, 1)
 	runner := NewRunner(nil, store, nil, nil, nil).WithObservability(emitter)
 
 	if err := runner.persistAndDeliverTerminal(context.Background(), run, terminalEventFromRun(run, "")); err == nil {
@@ -195,14 +322,14 @@ func TestRunnerTerminalReplayThroughEmitterKeepsPreparedEnvelopeByteIdentical(t 
 	store := newMemoryRunStore()
 	run := terminalDeliveryTestRun("agr_phase_prepared_replay")
 	sink := &terminalReplaySink{failures: 1}
-	emitter := observability.NewEmitter(
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
 		observability.Source{Service: "cloud", Component: "wrong-default", Environment: "test"},
 		observability.Runtime{AppVersion: "app-frozen", GitCommit: "commit-frozen"},
 		sink,
 		8,
 	)
 	runner := NewRunner(nil, store, nil, nil, nil).
-		WithObservability(emitter.ForComponent(observability.ComponentAgentRuntime))
+		WithObservability(persistent)
 
 	if err := runner.persistAndDeliverTerminal(context.Background(), run, terminalEventFromRun(run, "")); err == nil {
 		t.Fatal("first delivery succeeded despite repository sink failure")
@@ -230,7 +357,7 @@ func TestRunnerTamperedPreparedEnvelopeFailsClosedBeforeCallback(t *testing.T) {
 	store := newMemoryRunStore()
 	run := terminalDeliveryTestRun("agr_phase_tampered_prepared")
 	sink := &terminalReplaySink{}
-	emitter := observability.NewEmitter(
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
 		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
 		observability.Runtime{AppVersion: "app-frozen", GitCommit: "commit-frozen"}, sink, 4,
 	)
@@ -240,7 +367,7 @@ func TestRunnerTamperedPreparedEnvelopeFailsClosedBeforeCallback(t *testing.T) {
 			callbackCount++
 			return nil
 		}).
-		WithObservability(emitter.ForComponent(observability.ComponentAgentRuntime))
+		WithObservability(persistent)
 
 	event := terminalEventFromRun(run, "")
 	event.EventID = "evt_agent_terminal_tampered_prepared"
@@ -252,18 +379,19 @@ func TestRunnerTamperedPreparedEnvelopeFailsClosedBeforeCallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tampered := bytes.Replace(prepared, []byte(`"ownerUserId":"owner-phase"`), []byte(`"ownerUserId":"owner-other"`), 1)
-	if bytes.Equal(prepared, tampered) {
+	tampered := prepared.Clone()
+	tampered.Payload = bytes.Replace(prepared.Payload, []byte(`"ownerUserId":"owner-phase"`), []byte(`"ownerUserId":"owner-other"`), 1)
+	if bytes.Equal(prepared.Payload, tampered.Payload) {
 		t.Fatal("test did not alter the prepared owner")
 	}
-	event.PreparedObservability = tampered
+	event.PreparedObservability = &tampered
 	if err := store.SaveRunTerminal(context.Background(), run, event); err != nil {
 		t.Fatal(err)
 	}
 
 	err = runner.DeliverPendingTerminalEventsOnce(context.Background(), 1)
-	if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
-		t.Fatalf("tampered delivery error = %v, want digest mismatch", err)
+	if err == nil || !strings.Contains(err.Error(), "signature mismatch") {
+		t.Fatalf("tampered delivery error = %v, want signature mismatch", err)
 	}
 	if err := emitter.Close(context.Background()); err != nil {
 		t.Fatal(err)
@@ -271,6 +399,58 @@ func TestRunnerTamperedPreparedEnvelopeFailsClosedBeforeCallback(t *testing.T) {
 	payloads, _ := sink.snapshot(t)
 	if callbackCount != 0 || len(payloads) != 0 || store.terminalDelivered(run.ID) {
 		t.Fatalf("callback=%d sink=%d delivered=%v, want fail closed before side effects", callbackCount, len(payloads), store.terminalDelivered(run.ID))
+	}
+}
+
+func TestRunnerRejectsValidPreparedEnvelopeCopiedFromAnotherOutboxRowBeforeCallback(t *testing.T) {
+	store := newMemoryRunStore()
+	sink := &terminalReplaySink{}
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
+		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
+		observability.Runtime{AppVersion: "app-frozen", GitCommit: "commit-frozen"}, sink, 4,
+	)
+	callbackCount := 0
+	runner := NewRunner(nil, store, nil, nil, nil).
+		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+			callbackCount++
+			return nil
+		}).
+		WithObservability(persistent)
+
+	firstRun := terminalDeliveryTestRun("agr_phase_source_row")
+	firstEvent := terminalEventFromRun(firstRun, "")
+	firstEvent.EventID = "evt_agent_terminal_source_row"
+	firstEvent.CallbackIdempotencyKey = firstEvent.EventID
+	firstEvent.RunID, firstEvent.TaskID, firstEvent.UserID = firstRun.ID, firstRun.TaskID, firstRun.UserID
+	firstEvent.TraceID, firstEvent.ToolRegistrySnapshotID = firstRun.TraceID, firstRun.ToolRegistrySnapshotID
+	firstEvent.Status, firstEvent.OccurredAt = firstRun.Status, firstRun.UpdatedAt
+	sealed, err := runner.freezeTerminalObservability(context.Background(), firstEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secondRun := terminalDeliveryTestRun("agr_phase_target_row")
+	secondEvent := terminalEventFromRun(secondRun, "")
+	secondEvent.EventID = "evt_agent_terminal_target_row"
+	secondEvent.CallbackIdempotencyKey = secondEvent.EventID
+	secondEvent.RunID, secondEvent.TaskID, secondEvent.UserID = secondRun.ID, secondRun.TaskID, secondRun.UserID
+	secondEvent.TraceID, secondEvent.ToolRegistrySnapshotID = secondRun.TraceID, secondRun.ToolRegistrySnapshotID
+	secondEvent.Status, secondEvent.OccurredAt = secondRun.Status, secondRun.UpdatedAt
+	secondEvent.PreparedObservability = sealed
+	if err := store.SaveRunTerminal(context.Background(), secondRun, secondEvent); err != nil {
+		t.Fatal(err)
+	}
+
+	err = runner.DeliverPendingTerminalEventsOnce(context.Background(), 1)
+	if err == nil || !strings.Contains(err.Error(), "caller binding mismatch") {
+		t.Fatalf("cross-row prepared delivery error = %v", err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	payloads, _ := sink.snapshot(t)
+	if callbackCount != 0 || len(payloads) != 0 || store.terminalDelivered(secondRun.ID) {
+		t.Fatalf("callback=%d sink=%d delivered=%v, want fail closed before side effects", callbackCount, len(payloads), store.terminalDelivered(secondRun.ID))
 	}
 }
 
@@ -287,7 +467,7 @@ func TestRunnerLegacyTerminalRowFreezesSQLIdentityAcrossProcessRestart(t *testin
 	store.terminalEventID[run.ID] = legacySQLID
 
 	firstSink := &terminalReplaySink{failures: 1}
-	firstEmitter := observability.NewEmitter(
+	firstEmitter, firstPersistent := newPersistentAgentEmitterForTest(t,
 		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "first-process"},
 		observability.Runtime{AppVersion: "app-first", GitCommit: "commit-first"},
 		firstSink,
@@ -301,7 +481,7 @@ func TestRunnerLegacyTerminalRowFreezesSQLIdentityAcrossProcessRestart(t *testin
 			callbackKey = event.CallbackIdempotencyKey
 			return nil
 		}).
-		WithObservability(firstEmitter.ForComponent(observability.ComponentAgentRuntime))
+		WithObservability(firstPersistent)
 	if err := firstRunner.DeliverPendingTerminalEventsOnce(context.Background(), 1); err == nil {
 		t.Fatal("first process succeeded despite repository sink failure")
 	}
@@ -310,9 +490,9 @@ func TestRunnerLegacyTerminalRowFreezesSQLIdentityAcrossProcessRestart(t *testin
 	}
 
 	secondSink := &terminalReplaySink{}
-	secondEmitter := observability.NewEmitter(
-		observability.Source{Service: "cloud-v2", Component: "agent-runtime", Environment: "second-process"},
-		observability.Runtime{AppVersion: "app-second", GitCommit: "commit-second"},
+	secondEmitter, secondPersistent := newPersistentAgentEmitterForTest(t,
+		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "first-process"},
+		observability.Runtime{AppVersion: "app-first", GitCommit: "commit-first"},
 		secondSink,
 		8,
 	)
@@ -321,7 +501,7 @@ func TestRunnerLegacyTerminalRowFreezesSQLIdentityAcrossProcessRestart(t *testin
 			callbackCount++
 			return nil
 		}).
-		WithObservability(secondEmitter.ForComponent(observability.ComponentAgentRuntime))
+		WithObservability(secondPersistent)
 	if err := secondRunner.DeliverPendingTerminalEventsOnce(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +530,7 @@ func TestRunnerAckFalseIsClaimLoss(t *testing.T) {
 	run := terminalDeliveryTestRun("agr_phase_ack")
 	runner := NewRunner(nil, store, nil, nil, nil).WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
 		return nil
-	})
+	}).WithObservability(newTerminalReplayEmitter(t, 0))
 
 	err := runner.persistAndDeliverTerminal(context.Background(), run, terminalEventFromRun(run, ""))
 	if err == nil || !strings.Contains(err.Error(), "terminal event claim lost") {
@@ -362,7 +542,7 @@ func TestRunnerSinkSuccessThenObservabilityPhaseMarkLossReplaysOneEffectiveEvent
 	store := &lostTerminalObservabilityMarkStore{memoryRunStore: newMemoryRunStore(), loseNextMark: true}
 	run := terminalDeliveryTestRun("agr_phase_observability_mark_loss")
 	sink := &idempotentTerminalReplaySink{}
-	emitter := observability.NewEmitter(
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
 		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
 		observability.Runtime{AppVersion: "frozen-app", GitCommit: "frozen-commit"}, sink, 4,
 	)
@@ -372,7 +552,7 @@ func TestRunnerSinkSuccessThenObservabilityPhaseMarkLossReplaysOneEffectiveEvent
 			callbackCount++
 			return nil
 		}).
-		WithObservability(emitter.ForComponent(observability.ComponentAgentRuntime))
+		WithObservability(persistent)
 
 	err := runner.persistAndDeliverTerminal(context.Background(), run, terminalEventFromRun(run, ""))
 	if err == nil || !strings.Contains(err.Error(), "claim lost during mark observability delivered") {
@@ -404,7 +584,7 @@ func TestRunnerSinkSuccessThenObservabilityPhaseMarkLossReplaysOneEffectiveEvent
 func TestRunnerEmitSuccessThenAckLossDoesNotRepeatCompletedPhases(t *testing.T) {
 	store := &lostTerminalAckStore{memoryRunStore: newMemoryRunStore(), loseNextAck: true}
 	run := terminalDeliveryTestRun("agr_phase_ack_replay")
-	emitter := &terminalReplayEmitter{}
+	emitter := newTerminalReplayEmitter(t, 0)
 	callbackCount := 0
 	runner := NewRunner(nil, store, nil, nil, nil).
 		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
@@ -431,7 +611,7 @@ func TestRunnerEmitSuccessThenAckLossDoesNotRepeatCompletedPhases(t *testing.T) 
 func TestRunnerConcurrentTerminalReconcilersClaimOneDelivery(t *testing.T) {
 	store := newMemoryRunStore()
 	run := terminalDeliveryTestRun("agr_phase_concurrent")
-	emitter := &terminalReplayEmitter{}
+	emitter := newTerminalReplayEmitter(t, 0)
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var callbackCount atomic.Int32
@@ -470,7 +650,7 @@ func TestRunnerConcurrentTerminalReconcilersClaimOneDelivery(t *testing.T) {
 func TestRunnerExpiredLeaseReplaysStableCallbackIdempotencyIdentity(t *testing.T) {
 	store := newMemoryRunStore()
 	run := terminalDeliveryTestRun("agr_phase_expired_lease")
-	emitter := &terminalReplayEmitter{}
+	emitter := newTerminalReplayEmitter(t, 0)
 	runner := NewRunner(nil, store, nil, nil, nil).WithObservability(emitter)
 	const eventID = "evt_agent_terminal_expired_lease"
 	enqueueTerminalDeliveryForTest(t, runner, store, run, eventID)
@@ -522,7 +702,7 @@ func TestRunnerTerminalCallbackReceivesStableExplicitIdempotencyKey(t *testing.T
 			return err
 		}
 		return json.Unmarshal(payload, &callbackPayload)
-	})
+	}).WithObservability(newTerminalReplayEmitter(t, 0))
 
 	if err := runner.persistAndDeliverTerminal(context.Background(), run, terminalEventFromRun(run, "")); err != nil {
 		t.Fatal(err)
@@ -548,7 +728,7 @@ func TestRunnerTerminalCallbackReplayUsesByteIdenticalFrozenPayload(t *testing.T
 			return errors.New("receiver unavailable after reading payload")
 		}
 		return nil
-	})
+	}).WithObservability(newTerminalReplayEmitter(t, 0))
 	if err := runner.persistAndDeliverTerminal(context.Background(), run, terminalEventFromRun(run, "")); err == nil {
 		t.Fatal("first callback attempt unexpectedly succeeded")
 	}

@@ -24,7 +24,8 @@ func TestRunnerTerminalEventRetriesUntilAcknowledged(t *testing.T) {
 				return errors.New("temporary callback failure")
 			}
 			return nil
-		})
+		}).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 	run := &Run{ID: "agent_run_shot_stable", UserID: "u-1", Status: RunStatusFailed}
 	event := RunTerminalEvent{RunID: run.ID, UserID: run.UserID, Status: run.Status, Context: map[string]interface{}{"projectId": "vp-1"}}
 	if err := runner.persistAndDeliverTerminal(context.Background(), run, event); err == nil {
@@ -49,7 +50,8 @@ func TestRunnerNeverEmitsTerminalWhenTerminalSaveFails(t *testing.T) {
 		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
 			callbacks.Add(1)
 			return nil
-		})
+		}).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 	run := &Run{ID: "agent_run_shot_stable", Status: RunStatusFailed}
 	err := runner.persistAndDeliverTerminal(context.Background(), run, RunTerminalEvent{RunID: run.ID, Status: run.Status})
 	if err == nil || callbacks.Load() != 0 || store.hasPendingTerminal(run.ID) {
@@ -60,7 +62,10 @@ func TestRunnerNeverEmitsTerminalWhenTerminalSaveFails(t *testing.T) {
 func TestRunnerExistingFailedRunRedeliversPendingTerminalEvent(t *testing.T) {
 	store := newMemoryRunStore()
 	existing := &Run{ID: "agent_run_shot_stable", UserID: "u-1", Message: "regenerate", Status: RunStatusFailed}
-	event := RunTerminalEvent{RunID: existing.ID, UserID: existing.UserID, Status: existing.Status}
+	event := RunTerminalEvent{
+		EventID: "evt_agent_terminal_existing", CallbackIdempotencyKey: "evt_agent_terminal_existing",
+		RunID: existing.ID, UserID: existing.UserID, Status: existing.Status,
+	}
 	if err := store.SaveRunTerminal(context.Background(), existing, event); err != nil {
 		t.Fatalf("seed terminal run: %v", err)
 	}
@@ -69,7 +74,8 @@ func TestRunnerExistingFailedRunRedeliversPendingTerminalEvent(t *testing.T) {
 		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
 			callbacks.Add(1)
 			return nil
-		})
+		}).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 	run, err := runner.StartAsync(context.Background(), StartRunRequest{RunID: existing.ID, UserID: "u-1", Message: "regenerate"})
 	if err != nil || run.Status != RunStatusFailed || callbacks.Load() != 1 || !store.terminalDelivered(existing.ID) {
 		t.Fatalf("run=%+v error=%v callbacks=%d delivered=%v", run, err, callbacks.Load(), store.terminalDelivered(existing.ID))
@@ -142,7 +148,8 @@ func TestRunnerBackgroundPlanningFailureEmitsScopedTerminalEvent(t *testing.T) {
 		WithTerminalCallback(func(_ context.Context, event RunTerminalEvent) error {
 			events <- event
 			return nil
-		})
+		}).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 	req := StartRunRequest{
 		RunID: "agent_run_shot_stable", UserID: "u-1", Message: "regenerate", Domain: "video_creation",
 		Context: map[string]interface{}{

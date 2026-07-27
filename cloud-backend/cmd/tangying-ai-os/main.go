@@ -84,12 +84,19 @@ func main() {
 
 	database.RunMigrations(ctx, pool)
 	observabilityRepository := observability.NewRepository(pool)
-	observabilityEmitter := observability.NewEmitter(
+	observabilityEmitter, err := observability.NewPersistentEmitter(
 		observability.Source{Service: "cloud-backend", Component: "http-server", Environment: mode},
 		cloudObservabilityRuntime(),
 		observability.NewCompositeSink(logger.NewEventSink(zap.L()), observability.NewRepositorySink(observabilityRepository)),
 		1024,
+		observability.PersistentSealingConfig{
+			Domain: cfg.Observability.SealingDomain,
+			Key:    []byte(cfg.Observability.SealingKey),
+		},
 	)
+	if err != nil {
+		zap.L().Fatal("Invalid persistent observability configuration", zap.Error(err))
+	}
 	defer func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer closeCancel()
@@ -425,6 +432,10 @@ func main() {
 
 	agentPlanner := buildAgentPlanner(cfg, toolRegistry)
 	videoDirectorAdapter := &stageDirectorRegistry{videoDirectorRegistry}
+	agentObservability, err := observabilityEmitter.ForPersistentComponent(observability.ComponentAgentRuntime)
+	if err != nil {
+		zap.L().Fatal("Invalid agent observability configuration", zap.Error(err))
+	}
 	agentRunner := agentruntime.NewRunner(
 		orchestratorService,
 		agentRunRepo,
@@ -436,8 +447,11 @@ func main() {
 			return pc
 		}(),
 	).WithPlanJudge(videoPlanJudge.NewRuntimeJudge()).
-		WithObservability(observabilityEmitter.ForComponent(observability.ComponentAgentRuntime)).
+		WithObservability(agentObservability).
 		WithRequestToolResolver(agentruntime.NewLocalMCPRequestToolResolver(toolRegistry, localRunnerService))
+	if err := agentRunner.ValidateConfiguration(); err != nil {
+		zap.L().Fatal("Invalid agent runtime configuration", zap.Error(err))
+	}
 	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine).
 		WithRegenerationDispatcher(taskExecutionCtrl)
 	agentRuntimeHandler.RegisterRoutes(r, requireAuth)

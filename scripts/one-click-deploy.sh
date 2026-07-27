@@ -61,10 +61,24 @@ require_command() {
 
 write_runtime_env() {
   if [[ -f "$runtime_env" ]]; then
+    local upgraded="false"
+    umask 077
+    if ! grep -q '^OBSERVABILITY_SEALING_KEY=' "$runtime_env"; then
+      printf 'OBSERVABILITY_SEALING_KEY=%s\n' "$(openssl rand -hex 32)" >>"$runtime_env"
+      upgraded="true"
+    fi
+    if ! grep -q '^OBSERVABILITY_SEALING_DOMAIN=' "$runtime_env"; then
+      printf 'OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1\n' >>"$runtime_env"
+      upgraded="true"
+    fi
+    if [[ "$upgraded" == "true" ]]; then
+      log "upgraded private runtime environment with durable observability sealing"
+    fi
     return
   fi
-  local auth_secret postgres_password minio_access_key minio_secret_key desktop_data_root
+  local auth_secret observability_sealing_key postgres_password minio_access_key minio_secret_key desktop_data_root
   auth_secret="$(openssl rand -hex 32)"
+  observability_sealing_key="$(openssl rand -hex 32)"
   postgres_password="$(openssl rand -hex 24)"
   minio_access_key="$(openssl rand -hex 12)"
   minio_secret_key="$(openssl rand -hex 24)"
@@ -82,6 +96,8 @@ write_runtime_env() {
     printf 'MINIO_ACCESS_KEY=%s\n' "$minio_access_key"
     printf 'MINIO_SECRET_KEY=%s\n' "$minio_secret_key"
     printf 'AUTH_TOKEN_SECRET=%s\n' "$auth_secret"
+    printf 'OBSERVABILITY_SEALING_KEY=%s\n' "$observability_sealing_key"
+    printf 'OBSERVABILITY_SEALING_DOMAIN=cloud-agent-terminal-v1\n'
     printf 'CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,null\n'
     printf 'TANGYING_DESKTOP_DATA_ROOT=%s\n' "$desktop_data_root"
   } >"$runtime_env"

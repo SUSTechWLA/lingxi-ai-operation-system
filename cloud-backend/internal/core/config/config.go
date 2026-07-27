@@ -11,20 +11,29 @@ import (
 )
 
 type Config struct {
-	Server      ServerConfig      `mapstructure:",squash"`
-	Postgres    PostgresConfig    `mapstructure:",squash"`
-	Redis       RedisConfig       `mapstructure:",squash"`
-	Kafka       KafkaConfig       `mapstructure:",squash"`
-	OpenAI      OpenAIConfig      `mapstructure:",squash"`
-	Auth        AuthConfig        `mapstructure:",squash"`
-	Worker      WorkerConfig      `mapstructure:",squash"`
-	MinIO       MinIOConfig       `mapstructure:",squash"`
-	BashTool    BashToolConfig    `mapstructure:",squash"`
-	Services    ServicesConfig    `mapstructure:",squash"`
-	Sandbox     SandboxConfig     `mapstructure:",squash"`
-	Video       VideoConfig       `mapstructure:",squash"`
-	Agent       AgentConfig       `mapstructure:",squash"`
-	HyperFrames HyperFramesConfig `mapstructure:",squash"`
+	Server        ServerConfig        `mapstructure:",squash"`
+	Postgres      PostgresConfig      `mapstructure:",squash"`
+	Redis         RedisConfig         `mapstructure:",squash"`
+	Kafka         KafkaConfig         `mapstructure:",squash"`
+	OpenAI        OpenAIConfig        `mapstructure:",squash"`
+	Auth          AuthConfig          `mapstructure:",squash"`
+	Worker        WorkerConfig        `mapstructure:",squash"`
+	MinIO         MinIOConfig         `mapstructure:",squash"`
+	BashTool      BashToolConfig      `mapstructure:",squash"`
+	Services      ServicesConfig      `mapstructure:",squash"`
+	Sandbox       SandboxConfig       `mapstructure:",squash"`
+	Video         VideoConfig         `mapstructure:",squash"`
+	Agent         AgentConfig         `mapstructure:",squash"`
+	Observability ObservabilityConfig `mapstructure:",squash"`
+	HyperFrames   HyperFramesConfig   `mapstructure:",squash"`
+}
+
+// ObservabilityConfig controls authentication for durable prepared events.
+// The sealing key must remain stable across process restarts while an outbox
+// can contain pending terminal events.
+type ObservabilityConfig struct {
+	SealingKey    string `mapstructure:"OBSERVABILITY_SEALING_KEY"`
+	SealingDomain string `mapstructure:"OBSERVABILITY_SEALING_DOMAIN"`
 }
 
 // AgentConfig controls the dynamic agent runtime.
@@ -176,6 +185,16 @@ func (cfg *Config) ValidateForMode(mode string) error {
 	if isWeakSecret(cfg.Agent.ToolRegistrationInternalToken, "replace-with-a-long-random-internal-token") {
 		problems = append(problems, "TOOL_REGISTRATION_INTERNAL_TOKEN must be set to a long random value in production")
 	}
+	if isWeakSecret(
+		cfg.Observability.SealingKey,
+		"replace-with-a-long-random-observability-sealing-key",
+		"development-only-observability-sealing-key",
+	) {
+		problems = append(problems, "OBSERVABILITY_SEALING_KEY must be set to a long random value in production")
+	}
+	if strings.TrimSpace(cfg.Observability.SealingDomain) == "" {
+		problems = append(problems, "OBSERVABILITY_SEALING_DOMAIN must be set in production")
+	}
 	if isWeakSecret(cfg.Postgres.Password, "changeme", "your-postgres-password") {
 		problems = append(problems, "POSTGRES_PASSWORD must be set to a non-default value in production")
 	}
@@ -253,6 +272,8 @@ func setDefaults() {
 	viper.SetDefault("AUTH_TOKEN_SECRET", "development-only-change-me")
 	viper.SetDefault("AUTH_ACCESS_TOKEN_TTL_SECONDS", 3600)
 	viper.SetDefault("AUTH_REFRESH_TOKEN_TTL_SECONDS", 2592000)
+	viper.SetDefault("OBSERVABILITY_SEALING_KEY", "")
+	viper.SetDefault("OBSERVABILITY_SEALING_DOMAIN", "cloud-agent-terminal-v1")
 	viper.SetDefault("WORKER_TOOL_TIMEOUT", 120)
 	viper.SetDefault("WORKER_THREAD_POOL_CORE", 10)
 	viper.SetDefault("WORKER_THREAD_POOL_MAX", 50)

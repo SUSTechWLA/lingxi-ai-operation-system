@@ -6,6 +6,6 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/observability"
 )
 
-func replayRawEvent(emitter observability.PreparedDurableEventEmitter) error {
+func replayRawEvent(emitter observability.PersistentPreparedEventEmitter) error {
 	return emitter.ReplayPreparedAndWait(context.Background(), observability.Event{})
 }
