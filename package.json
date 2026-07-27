@@ -12,6 +12,7 @@
     "deploy:down": "bash scripts/one-click-deploy.sh down",
     "test:deploy": "python3 -m unittest scripts/test_one_click_deploy.py",
     "test:beta-smoke": "cd frontend && npm run test:director && cd ../cloud-backend && go test ./internal/core/localrunner",
+    "test:observability-contract": "node scripts/verify-observability-contract.mjs",
     "electron:dev": "cd frontend && npm run electron:dev",
     "electron:build": "bash scripts/build-local-desktop.sh"
   }

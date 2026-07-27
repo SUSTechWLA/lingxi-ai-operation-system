@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tangying.ai/contracts/observability/v1/event.schema.json",
+  "title": "Tangying observability event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "occurredAt",
+    "ingestedAt",
+    "producerSequence",
+    "severity",
+    "eventType",
+    "messageKey",
+    "source",
+    "correlation",
+    "execution",
+    "runtime",
+    "evidence",
+    "error",
+    "privacy"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "eventId": { "type": "string", "pattern": "^evt_[A-Za-z0-9_-]+$" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "ingestedAt": { "type": "string", "format": "date-time" },
+    "producerSequence": { "type": "integer", "minimum": 0 },
+    "severity": { "enum": ["DEBUG", "INFO", "WARN", "ERROR"] },
+    "eventType": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$" },
+    "messageKey": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$" },
+    "source": { "$ref": "#/$defs/source" },
+    "correlation": { "$ref": "#/$defs/correlation" },
+    "execution": { "$ref": "#/$defs/execution" },
+    "runtime": { "$ref": "#/$defs/runtime" },
+    "evidence": { "$ref": "#/$defs/evidence" },
+    "error": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/error" }
+      ]
+    },
+    "privacy": { "$ref": "#/$defs/privacy" }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "component", "environment"],
+      "properties": {
+        "service": { "type": "string", "minLength": 1 },
+        "component": { "type": "string", "minLength": 1 },
+        "environment": { "type": "string", "minLength": 1 }
+      }
+    },
+    "correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traceId", "spanId"],
+      "properties": {
+        "traceId": { "type": "string", "pattern": "^trc_[A-Za-z0-9_-]+$" },
+        "spanId": { "type": "string", "pattern": "^spn_[A-Za-z0-9_-]+$" },
+        "parentSpanId": { "type": "string", "pattern": "^spn_[A-Za-z0-9_-]+$" },
+        "sessionId": { "type": "string", "pattern": "^ses_[A-Za-z0-9_-]+$" },
+        "projectId": { "type": "string", "pattern": "^prj_[A-Za-z0-9_-]+$" },
+        "taskId": { "type": "string", "pattern": "^tsk_[A-Za-z0-9_-]+$" },
+        "workflowRunId": { "type": "string", "pattern": "^wfr_[A-Za-z0-9_-]+$" },
+        "agentRunId": { "type": "string", "pattern": "^agr_[A-Za-z0-9_-]+$" },
+        "stageId": { "type": "string", "minLength": 1 },
+        "shotId": { "type": "string", "pattern": "^shot_[A-Za-z0-9_-]+$" },
+        "artifactId": { "type": "string", "pattern": "^art_[A-Za-z0-9_-]+$" },
+        "toolCallId": { "type": "string", "pattern": "^call_[A-Za-z0-9_-]+$" },
+        "providerJobId": { "type": "string", "pattern": "^job_[A-Za-z0-9_-]+$" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "attempt"],
+      "properties": {
+        "status": { "enum": ["QUEUED", "STARTED", "IN_PROGRESS", "COMPLETED", "FAILED", "CANCELLED", "PAUSED", "SKIPPED"] },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "durationMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "appVersion": { "type": "string" },
+        "gitCommit": { "type": "string" },
+        "workflowVersion": { "type": "string" },
+        "toolRegistrySnapshotId": { "type": "string" },
+        "promptTemplateVersion": { "type": "string" },
+        "provider": { "type": "string" },
+        "model": { "type": "string" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inputRefs": { "type": "array", "items": { "type": "string", "pattern": "^artifact://" } },
+        "outputRefs": { "type": "array", "items": { "type": "string", "pattern": "^artifact://" } },
+        "inputHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "outputHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "sizeBytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "class", "fingerprint", "retryable", "userMessageKey", "suggestedActionKey"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z]+(?:\\.[A-Z_]+){2}$" },
+        "class": { "type": "string", "minLength": 1 },
+        "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "retryable": { "type": "boolean" },
+        "causedByEventId": { "type": "string", "pattern": "^evt_[A-Za-z0-9_-]+$" },
+        "userMessageKey": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$" },
+        "developerDetail": { "type": "string", "maxLength": 512 },
+        "suggestedActionKey": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$" },
+        "evidenceRefs": { "type": "array", "items": { "type": "string", "pattern": "^artifact://" } },
+        "protectedStackRef": { "type": "string", "pattern": "^artifact://" }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "redactedFields"],
+      "properties": {
+        "classification": { "enum": ["PUBLIC", "INTERNAL", "SENSITIVE", "SECRET"] },
+        "redactedFields": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      }
+    }
+  }
+}
