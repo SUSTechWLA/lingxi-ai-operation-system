@@ -173,7 +173,8 @@ func main() {
 		}
 	}
 
-	nodeExecutor := workerService.NewNodeExecutor(toolRegistry, producer, cfg.Worker, directExec, sandboxExec, nodeRepo)
+	nodeExecutor := workerService.NewNodeExecutor(toolRegistry, producer, cfg.Worker, directExec, sandboxExec, nodeRepo).
+		WithObservability(observabilityEmitter)
 	nodeExecutor.SetLocalJobDispatcher(localRunnerService)
 
 	// Publish
@@ -206,7 +207,8 @@ func main() {
 		zap.Int("roleAgents", len(videoDirectorRegistry.List())))
 
 	// Translator — uses toolManifestSvc to inject available tool list into LLM prompt
-	nlService := translatorSvc.NewNlToDagService(serverModelConfig, cfg.Services.OrchestratorURL, toolManifestSvc)
+	nlService := translatorSvc.NewNlToDagService(serverModelConfig, cfg.Services.OrchestratorURL, toolManifestSvc).
+		WithObservability(observabilityEmitter)
 
 	// Kafka consumers
 	workerConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-worker-group",
@@ -351,7 +353,8 @@ func main() {
 	handler.NewContextHandler(contextService).RegisterRoutes(r, requireAuth)
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r, requireAuth)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r, requireAuth)
-	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, requireAuth)
+	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, requireAuth).
+		WithObservability(observabilityEmitter)
 	localRunnerHandler.WithToolManifestResolver(toolRegistry)
 	localRunnerHandler.RegisterRoutes(r)
 	// Preflight: check local capabilities before starting a video pipeline.
@@ -436,6 +439,7 @@ func main() {
 			return pc
 		}(),
 	).WithPlanJudge(videoPlanJudge.NewRuntimeJudge()).
+		WithObservability(observabilityEmitter).
 		WithRequestToolResolver(agentruntime.NewLocalMCPRequestToolResolver(toolRegistry, localRunnerService))
 	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine).
 		WithRegenerationDispatcher(taskExecutionCtrl)
@@ -536,7 +540,8 @@ func main() {
 		// Wire the state machine to sync node statuses to the workflow run's
 		// stage_statuses JSONB so the frontend progress panel shows live status.
 		stateMachine.SetStageStatusSyncer(&runStatusSyncer{runRepo: workflowRunRepo})
-		workflowRunSvc := workflow.NewRunService(workflowRepo, workflowRunRepo, orchestratorService)
+		workflowRunSvc := workflow.NewRunService(workflowRepo, workflowRunRepo, orchestratorService).
+			WithObservability(observabilityEmitter)
 		stageApprovalSvc := workflow.NewStageApprovalService(workflowRunRepo, nodeRepo, stateMachine)
 
 		// Checkpoint store and service — persists stage boundaries for recovery.
@@ -546,12 +551,12 @@ func main() {
 		_ = workflow.EnsureCheckpointSchema(ctx, pool)
 
 		// Decision log store — audit trail for every approval, rejection, and pipeline decision.
-		decisionLogStore := workflow.NewDecisionLogStore(pool)
+		decisionLogStore := workflow.NewDecisionLogStoreWithResolver(pool, workflowRunRepo)
 		_ = workflow.EnsureDecisionLogSchema(ctx, pool)
 
 		// Wire decision log into the agent runtime handler so approve/reject
 		// writes audit-trail entries automatically.
-		agentRuntimeHandler.WithDecisionLogWriter(&decisionLogAdapter{store: decisionLogStore})
+		agentRuntimeHandler.WithDecisionLogWriter(&decisionLogAdapter{store: decisionLogStore, resolver: workflowRunRepo})
 		agentRuntimeHandler.WithAtomicReviewReopener(agentruntime.NewPGXReviewReopener(pool))
 
 		artifactRepo := artifact.NewRepository(pool)
@@ -1472,7 +1477,8 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 // agentruntime.DecisionLogWriter interface, allowing the agent runtime
 // handler to write audit-trail entries without importing the workflow package.
 type decisionLogAdapter struct {
-	store workflow.DecisionLogStore
+	store    workflow.DecisionLogStore
+	resolver workflow.DecisionWorkflowRunResolver
 }
 
 // stageDirectorRegistry adapts videodirector.Registry to agentruntime.DirectorRegistry.
@@ -1492,8 +1498,19 @@ func (r *stageDirectorRegistry) Get(stageName string) agentruntime.StageDirector
 }
 
 func (a *decisionLogAdapter) Save(ctx context.Context, r *agentruntime.DecisionLogRecord) error {
+	workflowRunID := strings.TrimSpace(r.WorkflowRunID)
+	if workflowRunID == "" && a.resolver != nil && strings.TrimSpace(r.TaskID) != "" {
+		resolved, err := a.resolver.FindRunIDByTaskID(ctx, r.TaskID)
+		if err != nil {
+			return fmt.Errorf("resolve decision workflowRunId: %w", err)
+		}
+		workflowRunID = strings.TrimSpace(resolved)
+	}
+	if workflowRunID == "" {
+		return fmt.Errorf("decision workflowRunId is required")
+	}
 	return a.store.Save(ctx, &workflow.DecisionLogRecord{
-		WorkflowRunID:  r.WorkflowRunID,
+		WorkflowRunID:  workflowRunID,
 		TaskID:         r.TaskID,
 		StageName:      r.StageName,
 		DecisionType:   r.DecisionType,

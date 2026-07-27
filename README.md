@@ -310,5 +310,9 @@ Local agent:   http://localhost:18080/api/local/docs
 - [Default IP A-roll Assets](docs/default-ip-aroll-assets.md)
 - [影视类视频创作流程](docs/cinematic-video-workflow.md)
 - [工作区归档与清理](docs/workspace-maintenance.md)
+- [Observability event contract](docs/observability/event-contract.md)
 
 Wiki 中包含产品介绍、系统边界、核心流程、即梦 MCP 使用方式和后续路线图。
+
+运行 `npm run test:observability-foundation` 可离线校验事件契约并执行云端
+关键生命周期测试。

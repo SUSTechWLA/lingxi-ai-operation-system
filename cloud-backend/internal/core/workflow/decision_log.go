@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,15 +31,15 @@ type DecisionLogRecord struct {
 
 // Decision type constants.
 const (
-	DecisionStageApproval        = "stage_approval"
-	DecisionStageRejection       = "stage_rejection"
-	DecisionStageEdit            = "stage_edited"
-	DecisionStageRegeneration    = "stage_regenerated"
-	DecisionRenderRuntimeSelect  = "render_runtime_selection"
-	DecisionPipelineSelection    = "pipeline_selection"
-	DecisionProposalSelection    = "proposal_selection"
-	DecisionPreviewApproval      = "preview_approval"
-	DecisionFinalRenderApproval  = "final_render_approval"
+	DecisionStageApproval       = "stage_approval"
+	DecisionStageRejection      = "stage_rejection"
+	DecisionStageEdit           = "stage_edited"
+	DecisionStageRegeneration   = "stage_regenerated"
+	DecisionRenderRuntimeSelect = "render_runtime_selection"
+	DecisionPipelineSelection   = "pipeline_selection"
+	DecisionProposalSelection   = "proposal_selection"
+	DecisionPreviewApproval     = "preview_approval"
+	DecisionFinalRenderApproval = "final_render_approval"
 )
 
 // DecisionLogStore persists decision log records.
@@ -48,11 +49,18 @@ type DecisionLogStore interface {
 	FindByStage(ctx context.Context, workflowRunID, stageName string) ([]*DecisionLogRecord, error)
 }
 
+type DecisionWorkflowRunResolver interface {
+	FindRunIDByTaskID(ctx context.Context, taskID string) (string, error)
+}
+
 // SaveSimple implements a simplified save that accepts id, taskID, stageName,
 // decisionType, selected, approved, reviewerID, and comment. It is suitable for
 // use as an agentruntime.DecisionLogWriter adapter.
 func (s *pgxDecisionLogStore) SaveSimple(ctx context.Context, taskID, stageName, decisionType, selected, reviewerID, comment string, approved bool) error {
-	workflowRunID := "" // resolved by caller if available
+	workflowRunID, err := s.resolveWorkflowRunID(ctx, taskID)
+	if err != nil {
+		return err
+	}
 	return s.Save(ctx, &DecisionLogRecord{
 		TaskID:         taskID,
 		StageName:      stageName,
@@ -65,13 +73,33 @@ func (s *pgxDecisionLogStore) SaveSimple(ctx context.Context, taskID, stageName,
 	})
 }
 
+func (s *pgxDecisionLogStore) resolveWorkflowRunID(ctx context.Context, taskID string) (string, error) {
+	if s == nil || s.resolver == nil {
+		return "", fmt.Errorf("workflowRunId resolver is required")
+	}
+	workflowRunID, err := s.resolver.FindRunIDByTaskID(ctx, taskID)
+	if err != nil {
+		return "", fmt.Errorf("resolve workflowRunId: %w", err)
+	}
+	workflowRunID = strings.TrimSpace(workflowRunID)
+	if workflowRunID == "" {
+		return "", fmt.Errorf("workflowRunId is required")
+	}
+	return workflowRunID, nil
+}
+
 type pgxDecisionLogStore struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	resolver DecisionWorkflowRunResolver
 }
 
 // NewDecisionLogStore creates a DecisionLogStore backed by pgxpool.Pool.
 func NewDecisionLogStore(pool *pgxpool.Pool) DecisionLogStore {
 	return &pgxDecisionLogStore{pool: pool}
+}
+
+func NewDecisionLogStoreWithResolver(pool *pgxpool.Pool, resolver DecisionWorkflowRunResolver) DecisionLogStore {
+	return &pgxDecisionLogStore{pool: pool, resolver: resolver}
 }
 
 // EnsureDecisionLogSchema creates the decision_logs table if it does not exist.
@@ -97,6 +125,12 @@ func EnsureDecisionLogSchema(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 func (s *pgxDecisionLogStore) Save(ctx context.Context, d *DecisionLogRecord) error {
+	if d == nil {
+		return fmt.Errorf("decision log record is required")
+	}
+	if d.WorkflowRunID == "" {
+		return fmt.Errorf("workflowRunId is required")
+	}
 	if d.ID == "" {
 		d.ID = "dl-" + uuid.NewString()[:8]
 	}

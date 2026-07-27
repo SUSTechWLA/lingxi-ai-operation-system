@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/tangying-ai/aios-core/internal/core/auth"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -74,6 +76,7 @@ type Handler struct {
 	jobFailureCallback   JobFailureCallback
 	manifestResolver     ToolManifestResolver
 	middleware           []gin.HandlerFunc
+	events               observability.EventEmitter
 }
 
 func NewHandler(service RunnerService, results NodeResultSink, middleware ...gin.HandlerFunc) *Handler {
@@ -97,6 +100,11 @@ func (h *Handler) WithJobFailureCallback(cb JobFailureCallback) *Handler {
 // completion is durably marked COMPLETED or published to the DAG state machine.
 func (h *Handler) WithToolManifestResolver(resolver ToolManifestResolver) *Handler {
 	h.manifestResolver = resolver
+	return h
+}
+
+func (h *Handler) WithObservability(emitter observability.EventEmitter) *Handler {
+	h.events = emitter
 	return h
 }
 
@@ -168,6 +176,13 @@ func (h *Handler) claimJob(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if job != nil {
+		ctx := observability.EnsureCorrelation(c.Request.Context())
+		c.Request = c.Request.WithContext(ctx)
+		correlation, attempt := localJobCorrelation(ctx, job)
+		h.emitLocalJob(ctx, observability.EventTypeLocalJobStarted, observability.ExecutionStatusStarted,
+			observability.SeverityInfo, correlation, attempt, nil, nil, nil)
+	}
 	c.JSON(http.StatusOK, ClaimJobResponse{Job: job})
 }
 
@@ -232,6 +247,9 @@ func (h *Handler) completeJob(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	ctx, finishLifecycle := h.prepareLocalJobTerminal(c.Request.Context(), jobContext)
+	c.Request = c.Request.WithContext(ctx)
+	defer finishLifecycle(c)
 	if jobContext != nil && (jobContext.Status == JobCompleted || jobContext.Status == JobFailed) {
 		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, jobContext); err != nil {
 			writeCallbackError(c, err)
@@ -531,6 +549,9 @@ func (h *Handler) failJob(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	ctx, finishLifecycle := h.prepareLocalJobTerminal(c.Request.Context(), existing)
+	c.Request = c.Request.WithContext(ctx)
+	defer finishLifecycle(c)
 	if existing != nil && (existing.Status == JobCompleted || existing.Status == JobFailed) {
 		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, existing); err != nil {
 			writeCallbackError(c, err)
@@ -552,6 +573,70 @@ func (h *Handler) failJob(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *Handler) prepareLocalJobTerminal(ctx context.Context, job *LocalJob) (context.Context, func(*gin.Context)) {
+	ctx = observability.EnsureCorrelation(ctx)
+	correlation, attempt := localJobCorrelation(ctx, job)
+	return ctx, func(c *gin.Context) {
+		var durationMs *int64
+		if job != nil && !job.CreatedAt.IsZero() {
+			value := time.Since(job.CreatedAt).Milliseconds()
+			if value >= 0 {
+				durationMs = &value
+			}
+		}
+		eventType := observability.EventTypeLocalJobCompleted
+		status := observability.ExecutionStatusCompleted
+		severity := observability.SeverityInfo
+		recovered := recover()
+		if recovered != nil || c == nil || c.Writer.Status() >= http.StatusBadRequest {
+			eventType = observability.EventTypeLocalJobFailed
+			status = observability.ExecutionStatusFailed
+			severity = observability.SeverityError
+		}
+		h.emitLocalJob(ctx, eventType, status, severity, correlation, attempt, durationMs, nil, nil)
+		if recovered != nil {
+			panic(recovered)
+		}
+	}
+}
+
+func localJobCorrelation(ctx context.Context, job *LocalJob) (observability.Correlation, int64) {
+	correlation := observability.CorrelationFromContext(ctx)
+	attempt := int64(1)
+	if job == nil {
+		return correlation, attempt
+	}
+	correlation.ProviderJobID = job.ID
+	correlation.ProjectID = job.ProjectID
+	correlation.TaskID = job.TaskID
+	correlation.StageID = job.NodeID
+	if job.Attempt > 0 {
+		attempt = int64(job.Attempt)
+	}
+	return correlation, attempt
+}
+
+func (h *Handler) emitLocalJob(ctx context.Context, eventType observability.EventType, status observability.ExecutionStatus, severity observability.Severity, correlation observability.Correlation, attempt int64, durationMs *int64, eventErr *observability.EventError, sizeBytes *int64) {
+	if h == nil {
+		return
+	}
+	observability.EmitSafely(ctx, h.events, "local-runner", observability.Event{
+		EventType:   eventType,
+		MessageKey:  string(eventType),
+		Severity:    severity,
+		Correlation: correlation,
+		Execution: observability.Execution{
+			Status: status, Attempt: attempt, DurationMs: durationMs,
+		},
+		Evidence: observability.Evidence{SizeBytes: sizeBytes},
+		Error:    eventErr,
+		Privacy: observability.Privacy{
+			Classification: observability.PrivacyInternal,
+			RedactedFields: []string{"localJob.payload", "localJob.output", "localJob.error", "localJob.diagnostics"},
+		},
+	})
 }
 
 // recoverTerminalMutation handles the loser of a concurrent complete/fail CAS.

@@ -19,6 +19,12 @@ type RunService struct {
 	repo        *Repository
 	runRepo     *RunRepository
 	orchService *service.OrchestratorService
+	events      observability.EventEmitter
+}
+
+func (s *RunService) WithObservability(emitter observability.EventEmitter) *RunService {
+	s.events = emitter
+	return s
 }
 
 func NewRunService(repo *Repository, runRepo *RunRepository, orchService *service.OrchestratorService) *RunService {
@@ -30,6 +36,7 @@ func (s *RunService) CreateRun(ctx context.Context, userID, projectID, templateI
 	if userID == "" {
 		return nil, fmt.Errorf("authenticated user is required")
 	}
+	ctx = observability.EnsureCorrelation(ctx)
 	tmpl, err := s.repo.FindByID(ctx, templateID)
 	if err != nil {
 		return nil, fmt.Errorf("template not found: %w", err)
@@ -54,6 +61,10 @@ func (s *RunService) CreateRun(ctx context.Context, userID, projectID, templateI
 	if err != nil {
 		return nil, fmt.Errorf("failed to create task: %w", err)
 	}
+	taskCorrelation := observability.CorrelationFromContext(ctx)
+	taskCorrelation.ProjectID = projectID
+	taskCorrelation.TaskID = task.ID
+	s.emitRunTransition(ctx, observability.EventTypeTaskCreated, observability.ExecutionStatusCompleted, observability.SeverityInfo, taskCorrelation, 1, nil)
 
 	// Submit DAG
 	if err := s.orchService.SubmitDAG(ctx, task.ID, &dag); err != nil {
@@ -85,6 +96,17 @@ func (s *RunService) CreateRun(ctx context.Context, userID, projectID, templateI
 
 	if err := s.runRepo.Create(ctx, run); err != nil {
 		return nil, fmt.Errorf("failed to create run: %w", err)
+	}
+	eventCtx := ctx
+	correlation := observability.CorrelationFromContext(eventCtx)
+	correlation.WorkflowRunID = run.ID
+	correlation.ProjectID = run.ProjectID
+	correlation.TaskID = run.TaskID
+	s.emitRunTransition(eventCtx, observability.EventTypeWorkflowRunQueued, observability.ExecutionStatusQueued, observability.SeverityInfo, correlation, int64(run.Attempt), nil)
+	for stageName := range run.StageStatuses {
+		stageCorrelation := correlation
+		stageCorrelation.StageID = stageName
+		s.emitRunTransition(eventCtx, observability.EventTypeWorkflowStageQueued, observability.ExecutionStatusQueued, observability.SeverityInfo, stageCorrelation, int64(run.Attempt), nil)
 	}
 
 	zap.L().Info("WorkflowRun created",
@@ -136,12 +158,39 @@ func (s *RunService) ListRunsByProject(ctx context.Context, projectID string) ([
 
 // UpdateRunStatus updates the status of a WorkflowRun.
 func (s *RunService) UpdateRunStatus(ctx context.Context, runID string, status RunStatus) error {
-	return s.runRepo.UpdateStatus(ctx, runID, status)
+	startedAt := time.Now()
+	if err := s.runRepo.UpdateStatus(ctx, runID, status); err != nil {
+		return err
+	}
+	eventType, executionStatus, severity := runStatusEvent(status)
+	if eventType == "" {
+		return nil
+	}
+	ctx = observability.EnsureCorrelation(ctx)
+	correlation := observability.CorrelationFromContext(ctx)
+	correlation.WorkflowRunID = runID
+	durationMs := time.Since(startedAt).Milliseconds()
+	s.emitRunTransition(ctx, eventType, executionStatus, severity, correlation, 1, &durationMs)
+	return nil
 }
 
 // UpdateStageStatus updates a single stage's status within a run.
 func (s *RunService) UpdateStageStatus(ctx context.Context, runID, stageName string, status StageStatus) error {
-	return s.runRepo.UpdateStageStatus(ctx, runID, stageName, status)
+	startedAt := time.Now()
+	if err := s.runRepo.UpdateStageStatus(ctx, runID, stageName, status); err != nil {
+		return err
+	}
+	eventType, executionStatus, severity := stageStatusEvent(status)
+	if eventType == "" {
+		return nil
+	}
+	ctx = observability.EnsureCorrelation(ctx)
+	correlation := observability.CorrelationFromContext(ctx)
+	correlation.WorkflowRunID = runID
+	correlation.StageID = stageName
+	durationMs := time.Since(startedAt).Milliseconds()
+	s.emitRunTransition(ctx, eventType, executionStatus, severity, correlation, 1, &durationMs)
+	return nil
 }
 
 // PauseRun pauses the run.
@@ -151,7 +200,60 @@ func (s *RunService) PauseRun(ctx context.Context, runID, reason string) error {
 
 // CancelRun cancels the run.
 func (s *RunService) CancelRun(ctx context.Context, runID string) error {
-	return s.runRepo.UpdateStatus(ctx, runID, RunCancelled)
+	return s.UpdateRunStatus(ctx, runID, RunCancelled)
+}
+
+func runStatusEvent(status RunStatus) (observability.EventType, observability.ExecutionStatus, observability.Severity) {
+	switch status {
+	case RunPending:
+		return observability.EventTypeWorkflowRunQueued, observability.ExecutionStatusQueued, observability.SeverityInfo
+	case RunRunning:
+		return observability.EventTypeWorkflowRunStarted, observability.ExecutionStatusStarted, observability.SeverityInfo
+	case RunCompleted:
+		return observability.EventTypeWorkflowRunCompleted, observability.ExecutionStatusCompleted, observability.SeverityInfo
+	case RunFailed:
+		return observability.EventTypeWorkflowRunFailed, observability.ExecutionStatusFailed, observability.SeverityError
+	case RunCancelled:
+		return observability.EventTypeWorkflowRunCancelled, observability.ExecutionStatusCancelled, observability.SeverityWarn
+	default:
+		return "", "", ""
+	}
+}
+
+func stageStatusEvent(status StageStatus) (observability.EventType, observability.ExecutionStatus, observability.Severity) {
+	switch status {
+	case StagePending:
+		return observability.EventTypeWorkflowStageQueued, observability.ExecutionStatusQueued, observability.SeverityInfo
+	case StageRunning:
+		return observability.EventTypeWorkflowStageStarted, observability.ExecutionStatusStarted, observability.SeverityInfo
+	case StageSucceeded:
+		return observability.EventTypeWorkflowStageCompleted, observability.ExecutionStatusCompleted, observability.SeverityInfo
+	case StageFailed:
+		return observability.EventTypeWorkflowStageFailed, observability.ExecutionStatusFailed, observability.SeverityError
+	case StageCancelled:
+		return observability.EventTypeWorkflowStageCancelled, observability.ExecutionStatusCancelled, observability.SeverityWarn
+	default:
+		return "", "", ""
+	}
+}
+
+func (s *RunService) emitRunTransition(ctx context.Context, eventType observability.EventType, status observability.ExecutionStatus, severity observability.Severity, correlation observability.Correlation, attempt int64, durationMs *int64) {
+	if s == nil {
+		return
+	}
+	observability.EmitSafely(ctx, s.events, "workflow", observability.Event{
+		EventType:   eventType,
+		MessageKey:  string(eventType),
+		Severity:    severity,
+		Correlation: correlation,
+		Execution: observability.Execution{
+			Status: status, Attempt: attempt, DurationMs: durationMs,
+		},
+		Privacy: observability.Privacy{
+			Classification: observability.PrivacyInternal,
+			RedactedFields: []string{"workflow.input", "workflow.output", "workflow.stage.payload"},
+		},
+	})
 }
 
 // jsonUnmarshal is a helper to unmarshal json.RawMessage.

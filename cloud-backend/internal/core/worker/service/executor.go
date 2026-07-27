@@ -19,6 +19,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/model/repository"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
@@ -38,6 +39,12 @@ type NodeExecutor struct {
 	localDispatcher localJobDispatcher
 	renderChecker   RenderDependencyChecker
 	projectResolver ProjectIDResolver
+	events          observability.EventEmitter
+}
+
+func (ne *NodeExecutor) WithObservability(emitter observability.EventEmitter) *NodeExecutor {
+	ne.events = emitter
+	return ne
 }
 
 type executorInterface interface {
@@ -228,7 +235,7 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	})
 
 	// Execute the tool on the cloud plane.
-	result, execErr := ne.executeTool(ctx, toolName, parameters, toolCtx, isLongRunning, progressCb)
+	result, execErr := ne.executeToolObserved(ctx, toolName, parameters, toolCtx, isLongRunning, progressCb, taskID, nodeID, idempotencyKey)
 
 	durationMs := time.Since(startTime).Milliseconds()
 
@@ -262,6 +269,115 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	}
 
 	ne.publishSuccess(ctx, taskID, nodeID, traceID, data, idempotencyKey)
+}
+
+func (ne *NodeExecutor) executeToolObserved(
+	ctx context.Context,
+	toolName string,
+	parameters map[string]interface{},
+	toolCtx tool.ToolContext,
+	isLongRunning bool,
+	progressCb tool.ProgressCallback,
+	taskID, nodeID, toolCallID string,
+) (result executor.ExecutionResult, retErr error) {
+	ctx = observability.EnsureCorrelation(ctx)
+	correlation := observability.CorrelationFromContext(ctx)
+	correlation.TaskID = taskID
+	correlation.StageID = nodeID
+	correlation.ToolCallID = toolCallID
+	attempt := int64(toolCtx.RetryCount + 1)
+	startedAt := time.Now()
+	ne.emitToolLifecycle(ctx, observability.EventTypeToolCallStarted, observability.ExecutionStatusStarted,
+		observability.SeverityInfo, correlation, attempt, nil, nil, nil)
+	auxiliary := auxiliaryToolLifecycles(toolName, attempt)
+	for _, lifecycle := range auxiliary {
+		ne.emitToolLifecycle(ctx, lifecycle.started, observability.ExecutionStatusStarted,
+			observability.SeverityInfo, correlation, attempt, nil, nil, nil)
+	}
+	defer func() {
+		durationMs := time.Since(startedAt).Milliseconds()
+		eventType := observability.EventTypeToolCallCompleted
+		status := observability.ExecutionStatusCompleted
+		severity := observability.SeverityInfo
+		var eventErr *observability.EventError
+		sizeBytes := int64(len(result.Stdout) + len(result.Stderr))
+		if recovered := recover(); recovered != nil {
+			eventType = observability.EventTypeToolCallFailed
+			status = observability.ExecutionStatusFailed
+			severity = observability.SeverityError
+			ne.emitToolLifecycle(ctx, eventType, status, severity, correlation, attempt, &durationMs, nil, &sizeBytes)
+			for _, lifecycle := range auxiliary {
+				ne.emitToolLifecycle(ctx, lifecycle.failed, observability.ExecutionStatusFailed,
+					observability.SeverityError, correlation, attempt, &durationMs, nil, &sizeBytes)
+			}
+			panic(recovered)
+		}
+		if retErr != nil || result.Error != "" || result.ExitCode != 0 {
+			eventType = observability.EventTypeToolCallFailed
+			status = observability.ExecutionStatusFailed
+			severity = observability.SeverityError
+			if strings.Contains(result.Error, inputSchemaInvalidCode) || strings.Contains(result.Error, "Invalid parameters") {
+				eventErr = observability.NormalizeError("TOOL.ARGUMENT.SCHEMA_INVALID", retErr, "worker-tool-executor", "")
+			}
+		}
+		ne.emitToolLifecycle(ctx, eventType, status, severity, correlation, attempt, &durationMs, eventErr, &sizeBytes)
+		for _, lifecycle := range auxiliary {
+			terminalType := lifecycle.completed
+			if status == observability.ExecutionStatusFailed {
+				terminalType = lifecycle.failed
+			}
+			ne.emitToolLifecycle(ctx, terminalType, status, severity, correlation, attempt, &durationMs, eventErr, &sizeBytes)
+		}
+	}()
+	return ne.executeTool(ctx, toolName, parameters, toolCtx, isLongRunning, progressCb)
+}
+
+type toolAuxiliaryLifecycle struct {
+	started   observability.EventType
+	completed observability.EventType
+	failed    observability.EventType
+}
+
+func auxiliaryToolLifecycles(toolName string, attempt int64) []toolAuxiliaryLifecycle {
+	normalized := strings.ToLower(toolName)
+	var lifecycles []toolAuxiliaryLifecycle
+	if strings.Contains(normalized, "verify") || strings.Contains(normalized, "checker") || strings.Contains(normalized, "quality") {
+		lifecycles = append(lifecycles, toolAuxiliaryLifecycle{
+			started: observability.EventTypeVerifyCheckStarted, completed: observability.EventTypeVerifyCheckPassed, failed: observability.EventTypeVerifyCheckFailed,
+		})
+	}
+	if strings.Contains(normalized, "correct") || strings.Contains(normalized, "repair") || strings.Contains(normalized, "polisher") {
+		lifecycles = append(lifecycles, toolAuxiliaryLifecycle{
+			started: observability.EventTypeCorrectOperationStarted, completed: observability.EventTypeCorrectOperationCompleted, failed: observability.EventTypeCorrectOperationFailed,
+		})
+	}
+	if attempt > 1 {
+		lifecycles = append(lifecycles, toolAuxiliaryLifecycle{
+			started: observability.EventTypeRecoveryRetryStarted, completed: observability.EventTypeRecoveryRetryCompleted, failed: observability.EventTypeRecoveryRetryFailed,
+		})
+	}
+	return lifecycles
+}
+
+func (ne *NodeExecutor) emitToolLifecycle(ctx context.Context, eventType observability.EventType, status observability.ExecutionStatus, severity observability.Severity, correlation observability.Correlation, attempt int64, durationMs *int64, eventErr *observability.EventError, sizeBytes *int64) {
+	if ne == nil {
+		return
+	}
+	observability.EmitSafely(ctx, ne.events, "worker-tool-executor", observability.Event{
+		EventType:   eventType,
+		MessageKey:  string(eventType),
+		Severity:    severity,
+		Correlation: correlation,
+		Execution: observability.Execution{
+			Status: status, Attempt: attempt, DurationMs: durationMs,
+		},
+		Evidence: observability.Evidence{SizeBytes: sizeBytes},
+		Error:    eventErr,
+		Privacy: observability.Privacy{
+			Classification: observability.PrivacyInternal,
+			RedactedFields: []string{"tool.arguments", "tool.result", "tool.stdout", "tool.stderr"},
+		},
+	})
 }
 
 // hydratePayloadFromDB reads image_urls and long-running metadata from the node

@@ -2,14 +2,94 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
+
+type agentEventSink struct {
+	mu     sync.Mutex
+	events []observability.Event
+}
+
+func (s *agentEventSink) Write(_ context.Context, event observability.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (*agentEventSink) Close(context.Context) error { return nil }
+
+func (s *agentEventSink) snapshot() []observability.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]observability.Event(nil), s.events...)
+}
+
+func TestRunnerStartEmitsPairedFailureWithoutPrivateRequestText(t *testing.T) {
+	const privateRequest = "PRIVATE_AGENT_REQUEST_SENTINEL"
+	sink := &agentEventSink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud-backend", Component: "agent-runtime", Environment: "test"},
+		observability.Runtime{},
+		sink,
+		32,
+	)
+	catalog := staticToolCatalog{}
+	runner := NewRunner(
+		&fakeOrchestrator{},
+		newMemoryRunStore(),
+		staticPlanner{err: errors.New("planner rejected request")},
+		NewPlanGuard(catalog, nil),
+		NewPlanCompiler(catalog),
+	).WithObservability(emitter)
+	ctx := observability.WithCorrelation(context.Background(), observability.Correlation{
+		TraceID: "4bf92f3577b34da6a3ce929d0e0e4736",
+		SpanID:  "00f067aa0ba902b7",
+	})
+
+	if _, err := runner.Start(ctx, StartRunRequest{UserID: "user-1", Message: privateRequest}); err == nil {
+		t.Fatal("Start returned nil error")
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	events := sink.snapshot()
+	var started, failed int
+	for _, event := range events {
+		switch event.EventType {
+		case observability.EventTypeAgentRunStarted:
+			started++
+		case observability.EventTypeAgentRunFailed:
+			failed++
+		}
+		if err := event.Validate(); err != nil {
+			t.Fatalf("invalid captured event: %v", err)
+		}
+		if event.Severity == observability.SeverityError && event.Error == nil {
+			t.Fatalf("ERROR event lacks stable normalized error: %+v", event)
+		}
+	}
+	if started != 1 || failed != 1 {
+		t.Fatalf("agent event pairing started=%d failed=%d events=%+v", started, failed, events)
+	}
+	wire, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), privateRequest) {
+		t.Fatalf("private request leaked into events: %s", wire)
+	}
+}
 
 func TestRunnerStart_CreatesTaskScopesDAGAndStoresRun(t *testing.T) {
 	store := newMemoryRunStore()

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,78 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
+
+type workerEventSink struct {
+	mu     sync.Mutex
+	events []observability.Event
+}
+
+func (s *workerEventSink) Write(_ context.Context, event observability.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (*workerEventSink) Close(context.Context) error { return nil }
+
+func (s *workerEventSink) snapshot() []observability.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]observability.Event(nil), s.events...)
+}
+
+func TestExecuteNodeEmitsPairedToolLifecycleWithoutArguments(t *testing.T) {
+	const privateArgument = "PRIVATE_TOOL_ARGUMENT_SENTINEL"
+	registry := tool.NewToolRegistry()
+	registry.Register(&contractExecutableTool{
+		name:   "observed_exec",
+		result: tool.SuccessResult(map[string]interface{}{"result": "ok"}),
+	})
+	publisher := &recordingEventPublisher{}
+	sink := &workerEventSink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud-backend", Component: "worker", Environment: "test"},
+		observability.Runtime{},
+		sink,
+		16,
+	)
+	nodeExecutor := NewNodeExecutor(registry, publisher, config.WorkerConfig{}, nil, nil, nil).
+		WithObservability(emitter)
+	ctx := observability.WithCorrelation(context.Background(), observability.Correlation{
+		TraceID: "4bf92f3577b34da6a3ce929d0e0e4736",
+		SpanID:  "00f067aa0ba902b7",
+	})
+	nodeExecutor.ExecuteNode(ctx, eventbus.Event{
+		TaskID: "task-private", NodeID: "node-private", Type: string(model.NodeTypeTool),
+		Payload: map[string]interface{}{
+			"tool": "observed_exec", "parameters": map[string]interface{}{"query": privateArgument},
+		},
+	})
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events := sink.snapshot()
+	var started, completed int
+	for _, event := range events {
+		switch event.EventType {
+		case observability.EventTypeToolCallStarted:
+			started++
+		case observability.EventTypeToolCallCompleted:
+			completed++
+		}
+	}
+	if started != 1 || completed != 1 {
+		t.Fatalf("tool event pairing started=%d completed=%d events=%+v", started, completed, events)
+	}
+	wire, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), privateArgument) {
+		t.Fatalf("private tool arguments leaked into events: %s", wire)
+	}
+}
 
 func TestProgressCheckpointAndHeartbeatPublishExecutionCorrelation(t *testing.T) {
 	publisher := &recordingEventPublisher{}

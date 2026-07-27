@@ -150,6 +150,7 @@ type Runner struct {
 	planJudge    PlanJudge
 	terminal     RunTerminalCallback
 	toolResolver RequestToolSnapshotResolver
+	events       observability.EventEmitter
 }
 
 const asyncRunStartTimeout = 10 * time.Minute
@@ -176,6 +177,11 @@ func (r *Runner) WithTerminalCallback(callback RunTerminalCallback) *Runner {
 
 func (r *Runner) WithRequestToolResolver(resolver RequestToolSnapshotResolver) *Runner {
 	r.toolResolver = resolver
+	return r
+}
+
+func (r *Runner) WithObservability(emitter observability.EventEmitter) *Runner {
+	r.events = emitter
 	return r
 }
 
@@ -342,7 +348,9 @@ func existingIdempotencyFingerprint(run *Run) string {
 }
 
 func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
-	ctx, cancel := context.WithTimeout(context.Background(), asyncRunStartTimeout)
+	correlation := observability.Correlation{TraceID: run.TraceID, AgentRunID: run.ID}
+	parent := observability.WithCorrelation(context.Background(), correlation)
+	ctx, cancel := context.WithTimeout(parent, asyncRunStartTimeout)
 	defer cancel()
 	if _, err := r.completeStart(ctx, req, run); err != nil {
 		if errors.Is(err, errRunCancelled) {
@@ -376,7 +384,52 @@ func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
 	}
 }
 
-func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Run) (*Run, error) {
+func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Run) (result *Run, retErr error) {
+	ctx = observability.EnsureCorrelation(ctx)
+	if run == nil {
+		run = newRunShell(req)
+	}
+	correlation := observability.CorrelationFromContext(ctx)
+	correlation.AgentRunID = run.ID
+	startedAt := time.Now()
+	r.emitLifecycle(ctx, observability.EventTypeAgentRunStarted, "agent.run.started",
+		observability.ExecutionStatusStarted, observability.SeverityInfo, correlation, nil, nil,
+		observability.Evidence{
+			InputHash: observability.HashText(req.Message),
+			SizeBytes: observability.ByteSize(req.Message),
+		})
+	defer func() {
+		durationMs := time.Since(startedAt).Milliseconds()
+		eventType := observability.EventTypeAgentRunCompleted
+		messageKey := "agent.run.completed"
+		status := observability.ExecutionStatusCompleted
+		severity := observability.SeverityInfo
+		var eventErr *observability.EventError
+		if recovered := recover(); recovered != nil {
+			eventType = observability.EventTypeAgentRunFailed
+			messageKey = "agent.run.failed"
+			status = observability.ExecutionStatusFailed
+			severity = observability.SeverityError
+			eventErr = observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", errors.New("agent run panic"), "agent-runtime", "")
+			r.emitLifecycle(ctx, eventType, messageKey, status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
+			panic(recovered)
+		}
+		if retErr != nil {
+			if errors.Is(retErr, errRunCancelled) || errors.Is(retErr, context.Canceled) {
+				eventType = observability.EventTypeAgentRunCancelled
+				messageKey = "agent.run.cancelled"
+				status = observability.ExecutionStatusCancelled
+				severity = observability.SeverityWarn
+			} else {
+				eventType = observability.EventTypeAgentRunFailed
+				messageKey = "agent.run.failed"
+				status = observability.ExecutionStatusFailed
+				severity = observability.SeverityError
+				eventErr = observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", retErr, "agent-runtime", "")
+			}
+		}
+		r.emitLifecycle(ctx, eventType, messageKey, status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
+	}()
 	if err := r.attachToolSnapshot(ctx, &req, run); err != nil {
 		return nil, err
 	}
@@ -389,16 +442,31 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 		guard = r.guard.withToolCatalog(req.requestToolSnapshot)
 		compiler = r.compiler.withToolCatalog(req.requestToolSnapshot)
 	}
+	planningStartedAt := time.Now()
+	planningCorrelation := correlation
+	planningCorrelation.StageID = "agent-planning"
+	r.emitStage(ctx, planningCorrelation, "agent.plan.started", observability.EventTypeWorkflowStageStarted, observability.ExecutionStatusStarted, observability.SeverityInfo, nil, nil)
 	plan, err := r.planner.GeneratePlan(ctx, req)
 	if err != nil {
+		durationMs := time.Since(planningStartedAt).Milliseconds()
+		r.emitStage(ctx, planningCorrelation, "agent.plan.failed", observability.EventTypeWorkflowStageFailed, observability.ExecutionStatusFailed, observability.SeverityError, &durationMs,
+			observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", err, "agent-planner", ""))
 		return nil, fmt.Errorf("generate agent plan: %w", err)
 	}
+	planningDurationMs := time.Since(planningStartedAt).Milliseconds()
+	r.emitStage(ctx, planningCorrelation, "agent.plan.completed", observability.EventTypeWorkflowStageCompleted, observability.ExecutionStatusCompleted, observability.SeverityInfo, &planningDurationMs, nil)
 	if err := r.abortIfCancelled(ctx, run); err != nil {
 		return nil, err
 	}
 	applyRequestPlanDefaults(plan, req)
 	plan = compiler.PreparePlan(plan)
 	applyShotRegenerationPlanScope(plan, req.Context)
+	validationStartedAt := time.Now()
+	validationCorrelation := correlation
+	validationCorrelation.StageID = "agent-plan-validation"
+	var validationDurationMs int64
+	r.emitLifecycle(ctx, observability.EventTypeAgentPlanValidationStarted, "agent.plan.validation.started",
+		observability.ExecutionStatusStarted, observability.SeverityInfo, validationCorrelation, nil, nil, observability.Evidence{})
 	if err := guard.ValidatePlan(ctx, req.UserID, plan); err != nil {
 		// Attempt plan repair with the same request-scoped tool snapshot. An old
 		// unscoped repairer is never used for a dynamic snapshot run because it
@@ -406,12 +474,24 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 		var repaired *AgentPlan
 		var repairErr error
 		canRepair := false
+		correctionStarted := false
+		correctionStartedAt := time.Time{}
+		correctionCorrelation := correlation
+		correctionCorrelation.StageID = "agent-plan-correction"
 		if repairer, ok := r.planner.(RequestScopedPlanRepairer); ok {
 			canRepair = true
+			correctionStarted = true
+			correctionStartedAt = time.Now()
+			r.emitLifecycle(ctx, observability.EventTypeCorrectOperationStarted, "correct.operation.started",
+				observability.ExecutionStatusStarted, observability.SeverityInfo, correctionCorrelation, nil, nil, observability.Evidence{})
 			repaired, repairErr = repairer.RepairPlanForRequest(ctx, req, plan, err.Error())
 		} else if req.requestToolSnapshot == nil {
 			if repairer, ok := r.planner.(PlanRepairer); ok {
 				canRepair = true
+				correctionStarted = true
+				correctionStartedAt = time.Now()
+				r.emitLifecycle(ctx, observability.EventTypeCorrectOperationStarted, "correct.operation.started",
+					observability.ExecutionStatusStarted, observability.SeverityInfo, correctionCorrelation, nil, nil, observability.Evidence{})
 				repaired, repairErr = repairer.RepairPlan(ctx, plan, err.Error())
 			}
 		}
@@ -427,6 +507,12 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 				if revalidateErr == nil {
 					plan = repaired
 					zap.L().Info("agent plan repaired successfully")
+					correctionDurationMs := time.Since(correctionStartedAt).Milliseconds()
+					r.emitLifecycle(ctx, observability.EventTypeCorrectOperationCompleted, "correct.operation.completed",
+						observability.ExecutionStatusCompleted, observability.SeverityInfo, correctionCorrelation, &correctionDurationMs, nil, observability.Evidence{})
+					validationDurationMs = time.Since(validationStartedAt).Milliseconds()
+					r.emitLifecycle(ctx, observability.EventTypeAgentPlanValidationCompleted, "agent.plan.validation.completed",
+						observability.ExecutionStatusCompleted, observability.SeverityInfo, validationCorrelation, &validationDurationMs, nil, observability.Evidence{})
 					goto planOK
 				}
 				zap.L().Warn("agent plan repair did not pass revalidation", zap.Error(revalidateErr))
@@ -436,8 +522,25 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 		} else if req.requestToolSnapshot != nil {
 			zap.L().Warn("agent plan repair skipped because planner has no request-scoped repair contract", zap.Error(err))
 		}
+		if correctionStarted {
+			correctionDurationMs := time.Since(correctionStartedAt).Milliseconds()
+			correctionErr := repairErr
+			if correctionErr == nil {
+				correctionErr = err
+			}
+			r.emitLifecycle(ctx, observability.EventTypeCorrectOperationFailed, "correct.operation.failed",
+				observability.ExecutionStatusFailed, observability.SeverityError, correctionCorrelation, &correctionDurationMs,
+				observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", correctionErr, "agent-plan-correction", ""), observability.Evidence{})
+		}
+		validationDurationMs = time.Since(validationStartedAt).Milliseconds()
+		r.emitLifecycle(ctx, observability.EventTypeAgentPlanValidationFailed, "agent.plan.validation.failed",
+			observability.ExecutionStatusFailed, observability.SeverityError, validationCorrelation, &validationDurationMs,
+			observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", err, "agent-plan-guard", ""), observability.Evidence{})
 		return nil, fmt.Errorf("guard agent plan: %w", err)
 	}
+	validationDurationMs = time.Since(validationStartedAt).Milliseconds()
+	r.emitLifecycle(ctx, observability.EventTypeAgentPlanValidationCompleted, "agent.plan.validation.completed",
+		observability.ExecutionStatusCompleted, observability.SeverityInfo, validationCorrelation, &validationDurationMs, nil, observability.Evidence{})
 planOK:
 	agentToolTrace := buildAgentToolTrace(plan, GuardDecisionTrace{Passed: true})
 	logAgentToolTrace(req, plan, agentToolTrace)
@@ -449,10 +552,19 @@ planOK:
 		return nil, fmt.Errorf("agent plan failed video beta validation: %s", summarizePlanJudgeWarnings(judgeReport.Warnings))
 	}
 
+	compilationStartedAt := time.Now()
+	compilationCorrelation := correlation
+	compilationCorrelation.StageID = "agent-plan-compilation"
+	r.emitStage(ctx, compilationCorrelation, "agent.plan.compilation.started", observability.EventTypeWorkflowStageStarted, observability.ExecutionStatusStarted, observability.SeverityInfo, nil, nil)
 	dag, err := compiler.Compile(plan)
 	if err != nil {
+		durationMs := time.Since(compilationStartedAt).Milliseconds()
+		r.emitStage(ctx, compilationCorrelation, "agent.plan.compilation.failed", observability.EventTypeWorkflowStageFailed, observability.ExecutionStatusFailed, observability.SeverityError, &durationMs,
+			observability.NormalizeError("AGENT.PLAN.VALIDATION_FAILED", err, "agent-plan-compiler", ""))
 		return nil, fmt.Errorf("compile agent plan: %w", err)
 	}
+	compilationDurationMs := time.Since(compilationStartedAt).Milliseconds()
+	r.emitStage(ctx, compilationCorrelation, "agent.plan.compilation.completed", observability.EventTypeWorkflowStageCompleted, observability.ExecutionStatusCompleted, observability.SeverityInfo, &compilationDurationMs, nil)
 	if providers := clientModelProvidersFromContext(req.Context); len(providers) > 0 {
 		injectClientModelProviders(dag, providers)
 	}
@@ -502,18 +614,34 @@ planOK:
 		taskInput["planJudgeWarnings"] = judgeReport.Warnings
 		taskInput["planJudgePassed"] = judgeReport.Passed
 	}
+	submissionStartedAt := time.Now()
+	submissionCorrelation := correlation
+	submissionCorrelation.StageID = "agent-dag-submission"
+	r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.started", observability.EventTypeWorkflowStageStarted, observability.ExecutionStatusStarted, observability.SeverityInfo, nil, nil)
 	task, err := r.orchestrator.CreateTask(ctx, req.UserID, taskInput)
 	if err != nil {
+		durationMs := time.Since(submissionStartedAt).Milliseconds()
+		r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.failed", observability.EventTypeWorkflowStageFailed, observability.ExecutionStatusFailed, observability.SeverityError, &durationMs, nil)
 		return nil, fmt.Errorf("create agent task: %w", err)
 	}
 	run.TaskID = task.ID
+	correlation.TaskID = task.ID
+	submissionCorrelation.TaskID = task.ID
+	r.emitLifecycle(ctx, observability.EventTypeTaskCreated, "task.created",
+		observability.ExecutionStatusCompleted, observability.SeverityInfo, correlation, nil, nil, observability.Evidence{})
 	if err := r.abortIfCancelled(ctx, run); err != nil {
+		durationMs := time.Since(submissionStartedAt).Milliseconds()
+		r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.cancelled", observability.EventTypeWorkflowStageCancelled, observability.ExecutionStatusCancelled, observability.SeverityWarn, &durationMs, nil)
 		return nil, err
 	}
 	if err := r.store.SaveRun(ctx, run); err != nil {
+		durationMs := time.Since(submissionStartedAt).Milliseconds()
+		r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.failed", observability.EventTypeWorkflowStageFailed, observability.ExecutionStatusFailed, observability.SeverityError, &durationMs, nil)
 		return nil, fmt.Errorf("store agent run task link: %w", err)
 	}
 	if err := r.abortIfCancelled(ctx, run); err != nil {
+		durationMs := time.Since(submissionStartedAt).Milliseconds()
+		r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.cancelled", observability.EventTypeWorkflowStageCancelled, observability.ExecutionStatusCancelled, observability.SeverityWarn, &durationMs, nil)
 		return nil, err
 	}
 
@@ -522,8 +650,12 @@ planOK:
 		run.Status = RunStatusFailed
 		run.UpdatedAt = time.Now()
 		_ = r.store.SaveRun(ctx, run)
+		durationMs := time.Since(submissionStartedAt).Milliseconds()
+		r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.failed", observability.EventTypeWorkflowStageFailed, observability.ExecutionStatusFailed, observability.SeverityError, &durationMs, nil)
 		return nil, fmt.Errorf("submit agent DAG: %w", err)
 	}
+	submissionDurationMs := time.Since(submissionStartedAt).Milliseconds()
+	r.emitStage(ctx, submissionCorrelation, "agent.dag.submission.completed", observability.EventTypeWorkflowStageCompleted, observability.ExecutionStatusCompleted, observability.SeverityInfo, &submissionDurationMs, nil)
 	if err := r.abortIfCancelled(ctx, run); err != nil {
 		return nil, err
 	}
@@ -534,6 +666,31 @@ planOK:
 		return nil, fmt.Errorf("store agent run: %w", err)
 	}
 	return run, nil
+}
+
+func (r *Runner) emitStage(ctx context.Context, correlation observability.Correlation, messageKey string, eventType observability.EventType, status observability.ExecutionStatus, severity observability.Severity, durationMs *int64, eventErr *observability.EventError) {
+	r.emitLifecycle(ctx, eventType, messageKey, status, severity, correlation, durationMs, eventErr, observability.Evidence{})
+}
+
+func (r *Runner) emitLifecycle(ctx context.Context, eventType observability.EventType, messageKey string, status observability.ExecutionStatus, severity observability.Severity, correlation observability.Correlation, durationMs *int64, eventErr *observability.EventError, evidence observability.Evidence) {
+	if r == nil {
+		return
+	}
+	observability.EmitSafely(ctx, r.events, "agent-runtime", observability.Event{
+		EventType:   eventType,
+		MessageKey:  messageKey,
+		Severity:    severity,
+		Correlation: correlation,
+		Execution: observability.Execution{
+			Status: status, Attempt: 1, DurationMs: durationMs,
+		},
+		Evidence: evidence,
+		Error:    eventErr,
+		Privacy: observability.Privacy{
+			Classification: observability.PrivacyInternal,
+			RedactedFields: []string{"request.message", "request.context", "plan.arguments"},
+		},
+	})
 }
 
 func (r *Runner) abortIfCancelled(ctx context.Context, run *Run) error {
@@ -783,7 +940,6 @@ func logAgentToolTrace(req StartRunRequest, plan *AgentPlan, trace map[string]in
 	candidates, _ := trace["candidateTools"].([]ToolCandidateTrace)
 	knowledgeInfo, _ := trace["knowledgeContext"].(map[string]interface{})
 	zap.L().Info("agent runtime tool trace",
-		zap.String("userInput", req.Message),
 		zap.String("domain", plan.Domain),
 		zap.Int("candidateToolCount", len(candidates)),
 		zap.Strings("plannedTools", planned),

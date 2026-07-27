@@ -14,8 +14,112 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/tangying-ai/aios-core/internal/core/auth"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
+
+type localJobEventSink struct {
+	mu     sync.Mutex
+	events []observability.Event
+}
+
+func (s *localJobEventSink) Write(_ context.Context, event observability.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (*localJobEventSink) Close(context.Context) error { return nil }
+
+func (s *localJobEventSink) snapshot() []observability.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]observability.Event(nil), s.events...)
+}
+
+func TestCompleteJobEmitsPairedLifecycleWithoutPayload(t *testing.T) {
+	const privatePayload = "PRIVATE_LOCAL_JOB_PAYLOAD_SENTINEL"
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_private", NodeID: "node_private", TaskID: "task_private",
+		Status: JobRunning, Payload: map[string]interface{}{"secretInput": privatePayload},
+	}}
+	sink := &localJobEventSink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud-backend", Component: "local-runner", Environment: "test"},
+		observability.Runtime{},
+		sink,
+		16,
+	)
+	router := gin.New()
+	NewHandler(service, nil).WithObservability(emitter).RegisterRoutes(router)
+	claimReq := httptest.NewRequest(http.MethodGet, "/api/local-runners/runner_001/jobs/claim", nil)
+	claimReq.Header.Set("X-Runner-ID", "runner_001")
+	claimRec := httptest.NewRecorder()
+	router.ServeHTTP(claimRec, claimReq)
+	if claimRec.Code != http.StatusOK {
+		t.Fatalf("claim status=%d body=%s", claimRec.Code, claimRec.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_private/complete",
+		bytes.NewBufferString(`{"success":true,"output":{"private":"`+privatePayload+`"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events := sink.snapshot()
+	var started, completed int
+	for _, event := range events {
+		switch event.EventType {
+		case observability.EventTypeLocalJobStarted:
+			started++
+		case observability.EventTypeLocalJobCompleted:
+			completed++
+		}
+	}
+	if started != 1 || completed != 1 {
+		t.Fatalf("local-job pairing started=%d completed=%d events=%+v", started, completed, events)
+	}
+	wire, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), privatePayload) {
+		t.Fatalf("private local-job payload leaked into events: %s", wire)
+	}
+}
+
+func TestClaimJobEmitsActualLocalJobStart(t *testing.T) {
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_claim", NodeID: "node_claim", TaskID: "task_claim", Status: JobClaimed,
+	}}
+	sink := &localJobEventSink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud-backend", Component: "local-runner", Environment: "test"},
+		observability.Runtime{}, sink, 8,
+	)
+	router := gin.New()
+	NewHandler(service, nil).WithObservability(emitter).RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/local-runners/runner_001/jobs/claim", nil)
+	req.Header.Set("X-Runner-ID", "runner_001")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events := sink.snapshot()
+	if len(events) != 1 || events[0].EventType != observability.EventTypeLocalJobStarted {
+		t.Fatalf("claim lifecycle=%+v", events)
+	}
+}
 
 func TestDeliverTerminalCallbacksClaimsEachPhaseExactlyOnceConcurrently(t *testing.T) {
 	service := &fakeRunnerService{job: &LocalJob{
