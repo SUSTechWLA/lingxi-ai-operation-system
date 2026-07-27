@@ -1,6 +1,10 @@
 package auth
 
-import "context"
+import (
+	"context"
+
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
+)
 
 type contextKey string
 
@@ -10,7 +14,7 @@ const (
 )
 
 func ContextWithUser(ctx context.Context, userID string) context.Context {
-	return context.WithValue(ctx, userIDContextKey, userID)
+	return context.WithValue(trustedcontext.WithUserID(ctx, userID), userIDContextKey, userID)
 }
 
 func ContextWithDevice(ctx context.Context, deviceID string) context.Context {

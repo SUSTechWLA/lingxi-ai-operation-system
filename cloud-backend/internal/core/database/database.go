@@ -620,6 +620,9 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    task_id VARCHAR(64),
 		    status VARCHAR(20) DEFAULT 'PENDING',
 		    attempt INT DEFAULT 1,
+		    trace_id VARCHAR(64),
+		    span_id VARCHAR(32),
+		    parent_span_id VARCHAR(32),
 		    input JSONB DEFAULT '{}',
 		    output JSONB DEFAULT '{}',
 		    stage_statuses JSONB DEFAULT '{}',
@@ -761,6 +764,9 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS artifact_policy JSONB DEFAULT '{}';
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS attempt INT DEFAULT 1;
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS trace_id VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS span_id VARCHAR(32);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS parent_span_id VARCHAR(32);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS result_callback_state VARCHAR(20) NOT NULL DEFAULT 'DELIVERED';
 		ALTER TABLE local_jobs ALTER COLUMN result_callback_state SET DEFAULT 'PENDING';
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS followup_callback_state VARCHAR(20) NOT NULL DEFAULT 'DELIVERED';

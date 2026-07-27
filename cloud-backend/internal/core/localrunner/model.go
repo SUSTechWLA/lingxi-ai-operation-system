@@ -136,6 +136,9 @@ type LocalJob struct {
 	ArtifactPolicy        LocalArtifactPolicy    `json:"artifactPolicy,omitempty"`
 	IdempotencyKey        string                 `json:"idempotencyKey,omitempty"`
 	Attempt               int                    `json:"attempt,omitempty"`
+	TraceID               string                 `json:"-"`
+	SpanID                string                 `json:"-"`
+	ParentSpanID          string                 `json:"-"`
 	ResultCallbackState   CallbackState          `json:"resultCallbackState,omitempty"`
 	FollowupCallbackState CallbackState          `json:"followupCallbackState,omitempty"`
 	LeaseExpiresAt        *time.Time             `json:"leaseExpiresAt,omitempty"`
@@ -228,6 +231,9 @@ type DispatchLocalJobRequest struct {
 	TimeoutSec         int                    `json:"timeoutSec,omitempty"`
 	ArtifactPolicy     LocalArtifactPolicy    `json:"artifactPolicy,omitempty"`
 	IdempotencyKey     string                 `json:"idempotencyKey,omitempty"`
+	TraceID            string                 `json:"-"`
+	SpanID             string                 `json:"-"`
+	ParentSpanID       string                 `json:"-"`
 }
 
 // Local command constants — single source of truth for all local job commands.

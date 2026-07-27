@@ -136,7 +136,7 @@ WITH accepted AS (
 		user_id, run_id, status, duration_ms, error_fingerprints, correlation, versions, updated_at, last_event_id
 	)
 	SELECT $2,$3,$9,$10,$11,$12,$13,$5,$1
-	WHERE EXISTS (SELECT 1 FROM accepted WHERE inserted)
+	WHERE $3 <> '' AND EXISTS (SELECT 1 FROM accepted WHERE inserted)
 	ON CONFLICT (user_id, run_id) DO UPDATE SET
 		status=CASE WHEN
 			(observability_run_summaries.status NOT IN ('COMPLETED','FAILED','CANCELLED','SKIPPED')
@@ -281,7 +281,7 @@ func eventRunID(event Event) (string, error) {
 	case agentRunID != "":
 		return agentRunID, nil
 	default:
-		return "", errors.New("observability event requires run identity")
+		return "", nil
 	}
 }
 

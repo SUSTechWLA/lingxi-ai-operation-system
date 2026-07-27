@@ -27,8 +27,8 @@ func TestEmitSafelyReservesErrorSeverityForStableNormalizedErrors(t *testing.T) 
 		EventType: EventTypeLocalJobFailed,
 		Severity:  SeverityError,
 	})
-	if emitter.event.Severity != SeverityWarn {
-		t.Fatalf("unclassified failure severity=%s, want WARN", emitter.event.Severity)
+	if emitter.event.EventType != "" {
+		t.Fatalf("unclassified ERROR must be rejected, got %+v", emitter.event)
 	}
 
 	stable := NormalizeError("TOOL.ARGUMENT.SCHEMA_INVALID", errors.New("private"), "tool", "")

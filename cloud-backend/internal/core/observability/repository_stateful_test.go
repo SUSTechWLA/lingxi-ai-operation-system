@@ -104,6 +104,9 @@ func (db *statefulRelayDB) save(args []interface{}) rowScanner {
 }
 
 func (db *statefulRelayDB) updateSummary(outbox *statefulOutboxRow, args []interface{}) {
+	if outbox.runID == "" {
+		return
+	}
 	var correlation Correlation
 	var versions RunVersions
 	_ = json.Unmarshal(args[11].([]byte), &correlation)

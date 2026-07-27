@@ -11,6 +11,7 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
 	"github.com/tangying-ai/aios-core/internal/core/observability"
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 )
 
 const (
@@ -37,6 +38,7 @@ type Event struct {
 	ParentSpanID   string                 `json:"parentSpanId,omitempty"`
 	IdempotencyKey string                 `json:"idempotencyKey,omitempty"`
 	ErrorMessage   string                 `json:"errorMessage,omitempty"`
+	OwnerUserID    string                 `json:"ownerUserId,omitempty"` // trusted internal transport metadata
 }
 
 type Producer struct {
@@ -185,6 +187,9 @@ func (h *consumerGroupHandler) handleEvent(event Event) error {
 		ParentSpanID: event.SpanID,
 	}
 	ctx := observability.WithCorrelation(context.Background(), correlation)
+	if event.OwnerUserID != "" {
+		ctx = trustedcontext.WithUserID(ctx, event.OwnerUserID)
+	}
 	return h.handlerFn(ctx, event)
 }
 
@@ -198,6 +203,9 @@ func eventWithCorrelation(ctx context.Context, event Event) Event {
 	}
 	if event.ParentSpanID == "" {
 		event.ParentSpanID = correlation.ParentSpanID
+	}
+	if event.OwnerUserID == "" {
+		event.OwnerUserID, _ = trustedcontext.UserID(ctx)
 	}
 	return event
 }

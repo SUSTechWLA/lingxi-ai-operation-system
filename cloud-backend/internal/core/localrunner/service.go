@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -415,6 +416,16 @@ func (s *Service) CreateJob(ctx context.Context, projectID, command, payload str
 }
 
 func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequest) (*LocalJob, error) {
+	correlation := observability.CorrelationFromContext(ctx)
+	if req.TraceID == "" {
+		req.TraceID = correlation.TraceID
+	}
+	if req.SpanID == "" {
+		req.SpanID = correlation.SpanID
+	}
+	if req.ParentSpanID == "" {
+		req.ParentSpanID = correlation.ParentSpanID
+	}
 	command := NormalizeCommand(req.Command)
 	if !IsValidCommand(command) {
 		return nil, fmt.Errorf("invalid command: %s", req.Command)
@@ -485,8 +496,8 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 		   (id, user_id, target_runner_id, catalog_revision, mcp_provider_id,
 		    mcp_logical_tool_name, mcp_remote_tool_name, project_id, task_id, node_id,
 		    tool_name, command, payload, status, progress, timeout_sec, artifact_policy,
-		    idempotency_key, created_at, updated_at)
-		  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,0,$15,$16::jsonb,$17,$18,$19)
+		    idempotency_key, trace_id, span_id, parent_span_id, created_at, updated_at)
+		  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,0,$15,$16::jsonb,$17,$18,$19,$20,$21,$22)
 		  ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''
 		  DO UPDATE SET
 		   user_id=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.user_id ELSE local_jobs.user_id END,
@@ -512,6 +523,9 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 		   lease_expires_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.lease_expires_at END,
 		   completed_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.completed_at END,
 		   attempt=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN local_jobs.attempt+1 ELSE local_jobs.attempt END,
+		   trace_id=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.trace_id ELSE local_jobs.trace_id END,
+		   span_id=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.span_id ELSE local_jobs.span_id END,
+		   parent_span_id=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.parent_span_id ELSE local_jobs.parent_span_id END,
 		   updated_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.updated_at ELSE local_jobs.updated_at END
 		  WHERE COALESCE(local_jobs.user_id,'')=COALESCE(EXCLUDED.user_id,'')
 		    AND (
@@ -523,7 +537,7 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 		jobID, req.UserID, nullableString(req.TargetRunnerID), nullableString(req.CatalogRevision), nullableString(req.MCPProviderID),
 		nullableString(req.MCPLogicalToolName), nullableString(req.MCPRemoteToolName), projectID, req.TaskID, req.NodeID,
 		req.ToolName, command, string(payloadJSON), string(JobPending), timeoutSec, string(artifactPolicyJSON),
-		idempotencyKey, now, now,
+		idempotencyKey, nullableString(req.TraceID), nullableString(req.SpanID), nullableString(req.ParentSpanID), now, now,
 	)
 	job, err := scanJob(row)
 	if err != nil {
@@ -1027,7 +1041,7 @@ func localJobSelectPrefix() string {
 	        status, progress, current_step, message, output, error_message, error_json,
 	        diagnostics, retryable, timeout_sec, artifact_policy, idempotency_key, attempt,
 	        result_callback_state, followup_callback_state,
-	        lease_expires_at, created_at, updated_at`
+	        trace_id, span_id, parent_span_id, lease_expires_at, created_at, updated_at`
 }
 
 type rowScanner interface {
@@ -1037,7 +1051,7 @@ type rowScanner interface {
 func scanJob(row rowScanner) (*LocalJob, error) {
 	var job LocalJob
 	var runnerID, userID, targetRunnerID, catalogRevision, mcpProviderID, mcpLogicalToolName, mcpRemoteToolName *string
-	var taskID, nodeID, toolName, payload, currentStep, message, output, errorMessage, idempotencyKey *string
+	var taskID, nodeID, toolName, payload, currentStep, message, output, errorMessage, idempotencyKey, traceID, spanID, parentSpanID *string
 	var status, resultCallbackState, followupCallbackState string
 	var errorJSON, diagnosticsJSON, artifactPolicyJSON []byte
 	err := row.Scan(
@@ -1045,7 +1059,7 @@ func scanJob(row rowScanner) (*LocalJob, error) {
 		&mcpLogicalToolName, &mcpRemoteToolName, &job.ProjectID, &taskID, &nodeID, &toolName, &job.Command, &payload,
 		&status, &job.Progress, &currentStep, &message, &output, &errorMessage, &errorJSON,
 		&diagnosticsJSON, &job.Retryable, &job.TimeoutSec, &artifactPolicyJSON, &idempotencyKey,
-		&job.Attempt, &resultCallbackState, &followupCallbackState,
+		&job.Attempt, &resultCallbackState, &followupCallbackState, &traceID, &spanID, &parentSpanID,
 		&job.LeaseExpiresAt, &job.CreatedAt, &job.UpdatedAt,
 	)
 	if err != nil {
@@ -1054,6 +1068,15 @@ func scanJob(row rowScanner) (*LocalJob, error) {
 	job.Status = JobStatus(status)
 	job.ResultCallbackState = CallbackState(resultCallbackState)
 	job.FollowupCallbackState = CallbackState(followupCallbackState)
+	if traceID != nil {
+		job.TraceID = *traceID
+	}
+	if spanID != nil {
+		job.SpanID = *spanID
+	}
+	if parentSpanID != nil {
+		job.ParentSpanID = *parentSpanID
+	}
 	if runnerID != nil {
 		job.RunnerID = *runnerID
 	}

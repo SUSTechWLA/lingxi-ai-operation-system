@@ -12,6 +12,7 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/observability"
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -247,9 +248,6 @@ func (h *Handler) completeJob(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	ctx, finishLifecycle := h.prepareLocalJobTerminal(c.Request.Context(), jobContext)
-	c.Request = c.Request.WithContext(ctx)
-	defer finishLifecycle(c)
 	if jobContext != nil && (jobContext.Status == JobCompleted || jobContext.Status == JobFailed) {
 		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, jobContext); err != nil {
 			writeCallbackError(c, err)
@@ -285,6 +283,7 @@ func (h *Handler) completeJob(c *gin.Context) {
 		writeJobMutationError(c, err)
 		return
 	}
+	h.emitAuthoritativeLocalJobTerminal(c.Request.Context(), job)
 	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
 		writeCallbackError(c, err)
 		return
@@ -343,6 +342,7 @@ func (h *Handler) failInvalidCompletion(c *gin.Context, identity JobMutationIden
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.emitAuthoritativeLocalJobTerminal(c.Request.Context(), failed)
 	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, failed); err != nil {
 		writeCallbackError(c, err)
 		return
@@ -549,9 +549,6 @@ func (h *Handler) failJob(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	ctx, finishLifecycle := h.prepareLocalJobTerminal(c.Request.Context(), existing)
-	c.Request = c.Request.WithContext(ctx)
-	defer finishLifecycle(c)
 	if existing != nil && (existing.Status == JobCompleted || existing.Status == JobFailed) {
 		if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, existing); err != nil {
 			writeCallbackError(c, err)
@@ -568,6 +565,7 @@ func (h *Handler) failJob(c *gin.Context) {
 		writeJobMutationError(c, err)
 		return
 	}
+	h.emitAuthoritativeLocalJobTerminal(c.Request.Context(), job)
 	if err := h.deliverTerminalCallbacks(c.Request.Context(), identity, job); err != nil {
 		writeCallbackError(c, err)
 		return
@@ -575,31 +573,26 @@ func (h *Handler) failJob(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-func (h *Handler) prepareLocalJobTerminal(ctx context.Context, job *LocalJob) (context.Context, func(*gin.Context)) {
-	ctx = observability.EnsureCorrelation(ctx)
+func (h *Handler) emitAuthoritativeLocalJobTerminal(ctx context.Context, job *LocalJob) {
+	if job == nil || (job.Status != JobCompleted && job.Status != JobFailed) {
+		return
+	}
+	ctx = trustedcontext.WithUserID(observability.EnsureCorrelation(ctx), job.UserID)
 	correlation, attempt := localJobCorrelation(ctx, job)
-	return ctx, func(c *gin.Context) {
-		var durationMs *int64
-		if job != nil && !job.CreatedAt.IsZero() {
-			value := time.Since(job.CreatedAt).Milliseconds()
-			if value >= 0 {
-				durationMs = &value
-			}
-		}
-		eventType := observability.EventTypeLocalJobCompleted
-		status := observability.ExecutionStatusCompleted
-		severity := observability.SeverityInfo
-		recovered := recover()
-		if recovered != nil || c == nil || c.Writer.Status() >= http.StatusBadRequest {
-			eventType = observability.EventTypeLocalJobFailed
-			status = observability.ExecutionStatusFailed
-			severity = observability.SeverityError
-		}
-		h.emitLocalJob(ctx, eventType, status, severity, correlation, attempt, durationMs, nil, nil)
-		if recovered != nil {
-			panic(recovered)
+	var durationMs *int64
+	if !job.CreatedAt.IsZero() {
+		value := time.Since(job.CreatedAt).Milliseconds()
+		if value >= 0 {
+			durationMs = &value
 		}
 	}
+	if job.Status == JobCompleted {
+		h.emitLocalJob(ctx, observability.EventTypeLocalJobCompleted, observability.ExecutionStatusCompleted, observability.SeverityInfo, correlation, attempt, durationMs, nil, nil)
+		return
+	}
+	// Failure is derived from the durable status. Keep ERROR reserved until a
+	// truthful stable local-execution code is present in the registry.
+	h.emitLocalJob(ctx, observability.EventTypeLocalJobFailed, observability.ExecutionStatusFailed, observability.SeverityWarn, correlation, attempt, durationMs, nil, nil)
 }
 
 func localJobCorrelation(ctx context.Context, job *LocalJob) (observability.Correlation, int64) {
@@ -607,6 +600,15 @@ func localJobCorrelation(ctx context.Context, job *LocalJob) (observability.Corr
 	attempt := int64(1)
 	if job == nil {
 		return correlation, attempt
+	}
+	if job.TraceID != "" {
+		correlation.TraceID = job.TraceID
+	}
+	if job.SpanID != "" {
+		correlation.SpanID = job.SpanID
+	}
+	if job.ParentSpanID != "" {
+		correlation.ParentSpanID = job.ParentSpanID
 	}
 	correlation.ProviderJobID = job.ID
 	correlation.ProjectID = job.ProjectID

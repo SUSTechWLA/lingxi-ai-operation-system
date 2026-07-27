@@ -338,19 +338,10 @@ type toolAuxiliaryLifecycle struct {
 	failed    observability.EventType
 }
 
-func auxiliaryToolLifecycles(toolName string, attempt int64) []toolAuxiliaryLifecycle {
-	normalized := strings.ToLower(toolName)
+func auxiliaryToolLifecycles(_ string, attempt int64) []toolAuxiliaryLifecycle {
 	var lifecycles []toolAuxiliaryLifecycle
-	if strings.Contains(normalized, "verify") || strings.Contains(normalized, "checker") || strings.Contains(normalized, "quality") {
-		lifecycles = append(lifecycles, toolAuxiliaryLifecycle{
-			started: observability.EventTypeVerifyCheckStarted, completed: observability.EventTypeVerifyCheckPassed, failed: observability.EventTypeVerifyCheckFailed,
-		})
-	}
-	if strings.Contains(normalized, "correct") || strings.Contains(normalized, "repair") || strings.Contains(normalized, "polisher") {
-		lifecycles = append(lifecycles, toolAuxiliaryLifecycle{
-			started: observability.EventTypeCorrectOperationStarted, completed: observability.EventTypeCorrectOperationCompleted, failed: observability.EventTypeCorrectOperationFailed,
-		})
-	}
+	// Verify/Correct events require explicit semantic metadata. Tool names are
+	// not authoritative roles; the current manifest has no such field.
 	if attempt > 1 {
 		lifecycles = append(lifecycles, toolAuxiliaryLifecycle{
 			started: observability.EventTypeRecoveryRetryStarted, completed: observability.EventTypeRecoveryRetryCompleted, failed: observability.EventTypeRecoveryRetryFailed,
@@ -424,7 +415,7 @@ func (ne *NodeExecutor) buildToolContext(ctx context.Context, nodeID, taskID str
 		NodeID:     nodeID,
 		RetryCount: 0,
 	}
-	if isLongRunning && ne.nodeRepo != nil {
+	if ne.nodeRepo != nil {
 		if node, err := ne.nodeRepo.FindByID(ctx, nodeID); err == nil && node != nil {
 			toolCtx.RetryCount = node.RetryCount
 		}
@@ -749,6 +740,9 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		TimeoutSec:     jobTimeoutSec,
 		ArtifactPolicy: localArtifactPolicyForManifest(manifest),
 		IdempotencyKey: idempotencyKey,
+		TraceID:        event.TraceID,
+		SpanID:         event.SpanID,
+		ParentSpanID:   event.ParentSpanID,
 	}
 	if localrunner.NormalizeCommand(command) == localrunner.CommandLocalMCPToolCall && firstString(parameters, nil, "targetRunnerId") != "" {
 		dispatchRequest.TargetRunnerID = firstString(parameters, nil, "targetRunnerId")
@@ -936,7 +930,7 @@ func (ne *NodeExecutor) publishFailure(ctx context.Context, taskID, nodeID, trac
 	ne.publishEvent(ctx, eventbus.TopicNodeResult, idempotencyKey, event)
 	zap.L().Info("Node execution failed",
 		zap.String("nodeId", nodeID),
-		zap.String("error", errMsg),
+		zap.String("errorFingerprint", observability.HashText(errMsg)),
 	)
 }
 

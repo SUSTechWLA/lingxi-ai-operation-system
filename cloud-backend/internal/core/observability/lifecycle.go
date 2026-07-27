@@ -38,11 +38,13 @@ func EmitSafely(ctx context.Context, emitter EventEmitter, component string, eve
 	if emitter == nil {
 		return
 	}
-	// ERROR is reserved for failures that can be represented by the stable
-	// registry. Unclassified terminal failures remain visible as WARN rather
-	// than inventing a misleading code.
+	// ERROR is reserved for failures represented by the stable registry. Never
+	// silently relabel a producer's semantics.
 	if event.Severity == SeverityError && event.Error == nil {
-		event.Severity = SeverityWarn
+		zap.L().Warn("observability lifecycle event rejected",
+			zap.String("component", component), zap.String("eventType", string(event.EventType)),
+			zap.String("errorClass", "missing_stable_error"), zap.String("diagnostic", "observability.emit.failed"))
+		return
 	}
 	if err := emitter.Emit(ctx, event); err != nil {
 		zap.L().Warn("observability lifecycle event rejected",

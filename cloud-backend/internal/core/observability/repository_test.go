@@ -18,6 +18,17 @@ type relayCall struct {
 	args  []interface{}
 }
 
+func TestEventRunIDAllowsRequestOnlyRelayWithoutInventingRun(t *testing.T) {
+	event := validEvent()
+	event.EventID = "evt-request-only"
+	event.EventType = EventTypeRequestAccepted
+	event.Correlation.WorkflowRunID = ""
+	runID, err := eventRunID(event)
+	if err != nil || runID != "" {
+		t.Fatalf("runID=%q err=%v", runID, err)
+	}
+}
+
 type fakeRelayDB struct {
 	row      relayRow
 	rows     *relayRows
@@ -419,7 +430,7 @@ func TestSaveSummarySQLKeepsTerminalStateMonotonicAndFingerprintSetBounded(t *te
 		"observability_event_outbox.redacted_payload - 'ingestedAt'",
 		"EXCLUDED.redacted_payload - 'ingestedAt'",
 		"RETURNING (xmax = 0) AS inserted",
-		"WHERE EXISTS (SELECT 1 FROM accepted WHERE inserted)",
+		"WHERE $3 <> '' AND EXISTS (SELECT 1 FROM accepted WHERE inserted)",
 		"last_event_id",
 		"observability_run_summaries.status NOT IN ('COMPLETED','FAILED','CANCELLED','SKIPPED')",
 		"EXCLUDED.status IN ('COMPLETED','FAILED','CANCELLED','SKIPPED')",

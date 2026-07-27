@@ -77,14 +77,16 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var backgroundWorkers sync.WaitGroup
+	// Infrastructure
+	pool := database.NewPool(ctx, cfg.Postgres)
+	defer pool.Close()
+
+	database.RunMigrations(ctx, pool)
+	observabilityRepository := observability.NewRepository(pool)
 	observabilityEmitter := observability.NewEmitter(
-		observability.Source{
-			Service:     "cloud-backend",
-			Component:   "http-server",
-			Environment: mode,
-		},
+		observability.Source{Service: "cloud-backend", Component: "http-server", Environment: mode},
 		observability.Runtime{},
-		logger.NewEventSink(zap.L()),
+		observability.NewCompositeSink(logger.NewEventSink(zap.L()), observability.NewRepositorySink(observabilityRepository)),
 		1024,
 	)
 	defer func() {
@@ -94,12 +96,6 @@ func main() {
 			zap.L().Error("Failed to close observability emitter", zap.Error(err))
 		}
 	}()
-
-	// Infrastructure
-	pool := database.NewPool(ctx, cfg.Postgres)
-	defer pool.Close()
-
-	database.RunMigrations(ctx, pool)
 
 	rdb := redisClient.NewClient(cfg.Redis)
 	defer rdb.Close()
@@ -174,7 +170,7 @@ func main() {
 	}
 
 	nodeExecutor := workerService.NewNodeExecutor(toolRegistry, producer, cfg.Worker, directExec, sandboxExec, nodeRepo).
-		WithObservability(observabilityEmitter)
+		WithObservability(observabilityEmitter.ForComponent(observability.ComponentWorker))
 	nodeExecutor.SetLocalJobDispatcher(localRunnerService)
 
 	// Publish
@@ -208,7 +204,7 @@ func main() {
 
 	// Translator — uses toolManifestSvc to inject available tool list into LLM prompt
 	nlService := translatorSvc.NewNlToDagService(serverModelConfig, cfg.Services.OrchestratorURL, toolManifestSvc).
-		WithObservability(observabilityEmitter)
+		WithObservability(observabilityEmitter.ForComponent(observability.ComponentTranslator))
 
 	// Kafka consumers
 	workerConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-worker-group",
@@ -340,7 +336,7 @@ func main() {
 	r := newHTTPRouter(allowedCORSOrigins, observabilityEmitter)
 
 	auth.NewHandler(authService).RegisterRoutes(r)
-	observability.NewHandler(observability.NewRepository(pool)).RegisterRoutes(r, requireAuth)
+	observability.NewHandler(observabilityRepository).RegisterRoutes(r, requireAuth)
 	orchestratorHandler.NewOrchestratorHandler(orchestratorService, stateMachine, taskExecutionCtrl, contextService).RegisterRoutes(r, requireAuth)
 	health.NewHandler([]health.DependencyCheck{
 		{Name: "postgres", Check: pool.Ping},
@@ -354,7 +350,7 @@ func main() {
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r, requireAuth)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r, requireAuth)
 	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, requireAuth).
-		WithObservability(observabilityEmitter)
+		WithObservability(observabilityEmitter.ForComponent(observability.ComponentLocalRunner))
 	localRunnerHandler.WithToolManifestResolver(toolRegistry)
 	localRunnerHandler.RegisterRoutes(r)
 	// Preflight: check local capabilities before starting a video pipeline.
@@ -439,7 +435,7 @@ func main() {
 			return pc
 		}(),
 	).WithPlanJudge(videoPlanJudge.NewRuntimeJudge()).
-		WithObservability(observabilityEmitter).
+		WithObservability(observabilityEmitter.ForComponent(observability.ComponentAgentRuntime)).
 		WithRequestToolResolver(agentruntime.NewLocalMCPRequestToolResolver(toolRegistry, localRunnerService))
 	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine).
 		WithRegenerationDispatcher(taskExecutionCtrl)
@@ -539,9 +535,9 @@ func main() {
 		workflowRunRepo := workflow.NewRunRepository(pool)
 		// Wire the state machine to sync node statuses to the workflow run's
 		// stage_statuses JSONB so the frontend progress panel shows live status.
-		stateMachine.SetStageStatusSyncer(&runStatusSyncer{runRepo: workflowRunRepo})
 		workflowRunSvc := workflow.NewRunService(workflowRepo, workflowRunRepo, orchestratorService).
-			WithObservability(observabilityEmitter)
+			WithObservability(observabilityEmitter.ForComponent(observability.ComponentWorkflow))
+		stateMachine.SetStageStatusSyncer(&runStatusSyncer{service: workflowRunSvc, resolver: workflowRunRepo})
 		stageApprovalSvc := workflow.NewStageApprovalService(workflowRunRepo, nodeRepo, stateMachine)
 
 		// Checkpoint store and service — persists stage boundaries for recovery.
@@ -724,15 +720,20 @@ func buildAgentPlanner(cfg *config.Config, toolRegistry *tool.ToolRegistry) agen
 // StageStatusSyncer interface, keeping the run's stage_statuses JSONB in
 // sync with the DAG node state machine.
 type runStatusSyncer struct {
-	runRepo *workflow.RunRepository
+	service interface {
+		UpdateStageStatus(context.Context, string, string, workflow.StageStatus) error
+	}
+	resolver interface {
+		FindRunIDByTaskID(context.Context, string) (string, error)
+	}
 }
 
 func (s *runStatusSyncer) UpdateStageStatus(ctx context.Context, runID, stageName string, status string) error {
-	return s.runRepo.UpdateStageStatus(ctx, runID, stageName, workflow.StageStatus(status))
+	return s.service.UpdateStageStatus(ctx, runID, stageName, workflow.StageStatus(status))
 }
 
 func (s *runStatusSyncer) FindRunIDByTaskID(ctx context.Context, taskID string) (string, error) {
-	return s.runRepo.FindRunIDByTaskID(ctx, taskID)
+	return s.resolver.FindRunIDByTaskID(ctx, taskID)
 }
 
 // taskProjectIDResolver resolves a project ID from a task ID by looking up
@@ -1499,12 +1500,16 @@ func (r *stageDirectorRegistry) Get(stageName string) agentruntime.StageDirector
 
 func (a *decisionLogAdapter) Save(ctx context.Context, r *agentruntime.DecisionLogRecord) error {
 	workflowRunID := strings.TrimSpace(r.WorkflowRunID)
-	if workflowRunID == "" && a.resolver != nil && strings.TrimSpace(r.TaskID) != "" {
+	if a.resolver != nil && strings.TrimSpace(r.TaskID) != "" {
 		resolved, err := a.resolver.FindRunIDByTaskID(ctx, r.TaskID)
 		if err != nil {
 			return fmt.Errorf("resolve decision workflowRunId: %w", err)
 		}
-		workflowRunID = strings.TrimSpace(resolved)
+		resolved = strings.TrimSpace(resolved)
+		if workflowRunID != "" && workflowRunID != resolved {
+			return fmt.Errorf("decision workflowRunId does not belong to task")
+		}
+		workflowRunID = resolved
 	}
 	if workflowRunID == "" {
 		return fmt.Errorf("decision workflowRunId is required")

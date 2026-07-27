@@ -6,7 +6,24 @@ import (
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/observability"
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 )
+
+func TestEventCorrelationCarriesTrustedOwnerAcrossKafkaBoundary(t *testing.T) {
+	ctx := trustedcontext.WithUserID(context.Background(), "user-1")
+	event := eventWithCorrelation(ctx, Event{TaskID: "task-1"})
+	if event.OwnerUserID != "user-1" {
+		t.Fatalf("owner=%q", event.OwnerUserID)
+	}
+	var got string
+	h := consumerGroupHandler{handlerFn: func(ctx context.Context, _ Event) error { got, _ = trustedcontext.UserID(ctx); return nil }}
+	if err := h.handleEvent(event); err != nil {
+		t.Fatal(err)
+	}
+	if got != "user-1" {
+		t.Fatalf("consumer owner=%q", got)
+	}
+}
 
 type recordingLegacyPublisher struct {
 	events []Event

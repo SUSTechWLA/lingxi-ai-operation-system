@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 )
 
 var (
@@ -24,7 +26,31 @@ type Sink interface {
 }
 
 type queuedEvent struct {
-	event Event
+	event       Event
+	ownerUserID string
+}
+
+type Component string
+
+const (
+	ComponentHTTPServer   Component = "http-server"
+	ComponentWorker       Component = "worker-tool-executor"
+	ComponentLocalRunner  Component = "local-runner"
+	ComponentAgentRuntime Component = "agent-runtime"
+	ComponentTranslator   Component = "translator"
+	ComponentWorkflow     Component = "workflow"
+)
+
+type componentEmitter struct {
+	emitter   *Emitter
+	component Component
+}
+
+func (e *Emitter) ForComponent(component Component) EventEmitter {
+	return &componentEmitter{emitter: e, component: component}
+}
+func (e *componentEmitter) Emit(ctx context.Context, event Event) error {
+	return e.emitter.emit(ctx, event, e.component)
 }
 
 type Emitter struct {
@@ -81,6 +107,10 @@ func NewEmitter(source Source, runtime Runtime, sink Sink, capacity int) *Emitte
 // Protected events are never silently lost: if no lower-priority event can be
 // evicted, Emit returns ErrQueueFull.
 func (e *Emitter) Emit(ctx context.Context, event Event) error {
+	return e.emit(ctx, event, "")
+}
+
+func (e *Emitter) emit(ctx context.Context, event Event, component Component) error {
 	if e == nil {
 		return errors.New("observability emitter requires a sink")
 	}
@@ -97,7 +127,11 @@ func (e *Emitter) Emit(ctx context.Context, event Event) error {
 	if err != nil {
 		return err
 	}
-	item := queuedEvent{event: prepared}
+	if component != "" {
+		prepared.Source.Component = string(component)
+	}
+	owner, _ := trustedcontext.UserID(ctx)
+	item := queuedEvent{event: prepared, ownerUserID: owner}
 
 	e.mu.Lock()
 	if e.closing {
@@ -213,6 +247,9 @@ func (e *Emitter) run() {
 		item, ok, closing := e.take()
 		if ok {
 			writeCtx, cancel := e.writeContext()
+			if item.ownerUserID != "" {
+				writeCtx = trustedcontext.WithUserID(writeCtx, item.ownerUserID)
+			}
 			if err := e.sink.Write(writeCtx, item.event); err != nil {
 				e.recordError(err)
 			}
