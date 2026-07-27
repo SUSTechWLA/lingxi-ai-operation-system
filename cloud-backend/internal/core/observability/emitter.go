@@ -56,6 +56,17 @@ func (e *componentEmitter) Emit(ctx context.Context, event Event) error {
 func (e *componentEmitter) EmitAndWait(ctx context.Context, event Event) error {
 	return e.emitter.emitAndWait(ctx, event, e.component)
 }
+func (e *componentEmitter) FreezeDurableEvent(ctx context.Context, event Event) (Event, error) {
+	prepared, err := e.emitter.prepare(ctx, event)
+	if err != nil {
+		return Event{}, err
+	}
+	prepared.Source.Component = string(e.component)
+	return prepared, nil
+}
+func (e *componentEmitter) EmitFrozenAndWait(ctx context.Context, event Event) error {
+	return e.emitter.emitFrozenAndWait(ctx, event)
+}
 
 type Emitter struct {
 	source   Source
@@ -118,12 +129,39 @@ func (e *Emitter) EmitAndWait(ctx context.Context, event Event) error {
 	return e.emitAndWait(ctx, event, "")
 }
 
+func (e *Emitter) FreezeDurableEvent(ctx context.Context, event Event) (Event, error) {
+	return e.prepare(ctx, event)
+}
+
+func (e *Emitter) EmitFrozenAndWait(ctx context.Context, event Event) error {
+	return e.emitFrozenAndWait(ctx, event)
+}
+
 func (e *Emitter) emitAndWait(ctx context.Context, event Event, component Component) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	result := make(chan error, 1)
 	if err := e.emit(ctx, event, component, result); err != nil {
+		return err
+	}
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (e *Emitter) emitFrozenAndWait(ctx context.Context, event Event) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := validateFrozenEvent(event); err != nil {
+		return err
+	}
+	result := make(chan error, 1)
+	if err := e.enqueuePrepared(ctx, event, result); err != nil {
 		return err
 	}
 	select {
@@ -154,6 +192,22 @@ func (e *Emitter) emit(ctx context.Context, event Event, component Component, re
 	if component != "" {
 		prepared.Source.Component = string(component)
 	}
+	return e.enqueuePrepared(ctx, prepared, result)
+}
+
+func (e *Emitter) enqueuePrepared(ctx context.Context, prepared Event, result chan error) error {
+	if e == nil {
+		return errors.New("observability emitter requires a sink")
+	}
+	e.mu.Lock()
+	closed := e.closing
+	e.mu.Unlock()
+	if closed {
+		return ErrEmitterClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	owner, _ := trustedcontext.UserID(ctx)
 	item := queuedEvent{event: prepared, ownerUserID: owner, result: result}
 
@@ -178,6 +232,16 @@ func (e *Emitter) emit(ctx context.Context, event Event, component Component, re
 	e.queue = append(e.queue, item)
 	e.mu.Unlock()
 	e.signal(e.wake)
+	return nil
+}
+
+func validateFrozenEvent(event Event) error {
+	if ContainsSecret(event) {
+		return errors.New("observability event contains secret material")
+	}
+	if err := event.Validate(); err != nil {
+		return fmt.Errorf("validate frozen observability event: %w", err)
+	}
 	return nil
 }
 

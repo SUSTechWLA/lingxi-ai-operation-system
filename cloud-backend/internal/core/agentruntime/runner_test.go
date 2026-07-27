@@ -1729,18 +1729,24 @@ func (o *fakeOrchestrator) GetTaskWithDetails(context.Context, string) (map[stri
 }
 
 type memoryRunStore struct {
-	mu              sync.RWMutex
-	runs            map[string]*Run
-	terminal        map[string]RunTerminalEvent
-	delivered       map[string]bool
-	terminalClaim   map[string]string
-	saveTerminalErr error
+	mu                     sync.RWMutex
+	runs                   map[string]*Run
+	terminal               map[string]RunTerminalEvent
+	terminalEventID        map[string]string
+	delivered              map[string]bool
+	terminalClaim          map[string]string
+	terminalLeaseUntil     map[string]time.Time
+	callbackDelivered      map[string]bool
+	observabilityDelivered map[string]bool
+	saveTerminalErr        error
 }
 
 func newMemoryRunStore() *memoryRunStore {
 	return &memoryRunStore{
 		runs: make(map[string]*Run), terminal: make(map[string]RunTerminalEvent),
-		delivered: make(map[string]bool), terminalClaim: make(map[string]string),
+		terminalEventID: make(map[string]string),
+		delivered:       make(map[string]bool), terminalClaim: make(map[string]string), terminalLeaseUntil: make(map[string]time.Time),
+		callbackDelivered: make(map[string]bool), observabilityDelivered: make(map[string]bool),
 	}
 }
 
@@ -1755,12 +1761,16 @@ func (s *memoryRunStore) SaveRunTerminal(_ context.Context, run *Run, event RunT
 	}
 	s.runs[run.ID] = run
 	s.terminal[run.ID] = event
+	s.terminalEventID[run.ID] = event.EventID
 	s.delivered[run.ID] = false
 	s.terminalClaim[run.ID] = ""
+	s.terminalLeaseUntil[run.ID] = time.Time{}
+	s.callbackDelivered[run.ID] = false
+	s.observabilityDelivered[run.ID] = false
 	return nil
 }
 
-func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, _ time.Time, claimToken string) ([]TerminalEventDelivery, error) {
+func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, leaseUntil time.Time, claimToken string) ([]TerminalEventDelivery, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	deliveries := make([]TerminalEventDelivery, 0, limit)
@@ -1768,35 +1778,79 @@ func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, _ tim
 		if len(deliveries) >= limit {
 			break
 		}
-		if s.delivered[runID] || s.terminalClaim[runID] != "" {
+		if s.delivered[runID] || s.terminalClaim[runID] != "" && s.terminalLeaseUntil[runID].After(time.Now()) {
 			continue
 		}
 		s.terminalClaim[runID] = claimToken
-		deliveries = append(deliveries, TerminalEventDelivery{RunID: runID, EventID: event.EventID, ClaimToken: claimToken, Event: event})
+		s.terminalLeaseUntil[runID] = leaseUntil
+		deliveries = append(deliveries, TerminalEventDelivery{
+			RunID: runID, EventID: s.terminalEventID[runID], ClaimToken: claimToken,
+			PayloadFrozen:     event.EventID != "" && event.CallbackIdempotencyKey != "" && event.ObservabilityEvent != nil,
+			CallbackDelivered: s.callbackDelivered[runID], ObservabilityDelivered: s.observabilityDelivered[runID],
+			Event: event,
+		})
 	}
 	return deliveries, nil
+}
+
+func (s *memoryRunStore) FreezeTerminalEvent(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.terminal[delivery.RunID]; !ok || s.terminalEventID[delivery.RunID] != delivery.EventID ||
+		s.terminalClaim[delivery.RunID] != delivery.ClaimToken || s.delivered[delivery.RunID] {
+		return false, nil
+	}
+	s.terminal[delivery.RunID] = delivery.Event
+	return true, nil
+}
+
+func (s *memoryRunStore) MarkTerminalCallbackDelivered(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.terminal[delivery.RunID]
+	if !ok || s.terminalEventID[delivery.RunID] != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken ||
+		s.delivered[delivery.RunID] || s.callbackDelivered[delivery.RunID] {
+		return false, nil
+	}
+	s.callbackDelivered[delivery.RunID] = true
+	return true, nil
+}
+
+func (s *memoryRunStore) MarkTerminalObservabilityDelivered(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.terminal[delivery.RunID]
+	if !ok || s.terminalEventID[delivery.RunID] != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken ||
+		s.delivered[delivery.RunID] || !s.callbackDelivered[delivery.RunID] || s.observabilityDelivered[delivery.RunID] {
+		return false, nil
+	}
+	s.observabilityDelivered[delivery.RunID] = true
+	return true, nil
 }
 
 func (s *memoryRunStore) AckTerminalEvent(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	current, ok := s.terminal[delivery.RunID]
-	if !ok || current.EventID != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken {
+	_, ok := s.terminal[delivery.RunID]
+	if !ok || s.terminalEventID[delivery.RunID] != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken ||
+		!s.callbackDelivered[delivery.RunID] || !s.observabilityDelivered[delivery.RunID] {
 		return false, nil
 	}
 	s.delivered[delivery.RunID] = true
 	s.terminalClaim[delivery.RunID] = ""
+	s.terminalLeaseUntil[delivery.RunID] = time.Time{}
 	return true, nil
 }
 
 func (s *memoryRunStore) ReleaseTerminalEvent(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	current, ok := s.terminal[delivery.RunID]
-	if !ok || current.EventID != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken {
+	_, ok := s.terminal[delivery.RunID]
+	if !ok || s.terminalEventID[delivery.RunID] != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken {
 		return false, nil
 	}
 	s.terminalClaim[delivery.RunID] = ""
+	s.terminalLeaseUntil[delivery.RunID] = time.Time{}
 	return true, nil
 }
 

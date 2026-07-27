@@ -142,8 +142,29 @@ const agentTerminalOutboxMigration = `
 	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_attempts INT NOT NULL DEFAULT 0;
 	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_lease_until TIMESTAMPTZ;
 	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_claim_token VARCHAR(96);
-	UPDATE agent_runs SET terminal_event_id='legacy_terminal_' || id || '_' || COALESCE(terminal_event_attempts, 0)::text
-		WHERE terminal_event_json IS NOT NULL AND terminal_event_id IS NULL;
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_callback_delivered_at TIMESTAMPTZ;
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_observability_delivered_at TIMESTAMPTZ;
+	UPDATE agent_runs
+	SET terminal_event_id=CASE
+		WHEN BTRIM(COALESCE(terminal_event_json->>'eventId','')) ~ '^evt_[A-Za-z0-9_-]+$'
+		 AND OCTET_LENGTH(BTRIM(terminal_event_json->>'eventId')) <= 96
+		THEN BTRIM(terminal_event_json->>'eventId')
+		ELSE 'evt_agent_terminal_legacy_' || MD5(id)
+	END
+	WHERE terminal_event_json IS NOT NULL
+	  AND (terminal_event_id IS NULL OR LEFT(terminal_event_id, 16)='legacy_terminal_');
+	UPDATE agent_runs
+	SET terminal_event_callback_delivered_at=COALESCE(terminal_event_callback_delivered_at, terminal_event_delivered_at),
+	    terminal_event_observability_delivered_at=COALESCE(terminal_event_observability_delivered_at, terminal_event_delivered_at)
+	WHERE terminal_event_delivered_at IS NOT NULL;
+	ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS agent_terminal_event_identity_required;
+	ALTER TABLE agent_runs ADD CONSTRAINT agent_terminal_event_identity_required
+		CHECK (terminal_event_json IS NULL OR terminal_event_id IS NOT NULL);
+	ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS agent_terminal_event_phase_order;
+	ALTER TABLE agent_runs ADD CONSTRAINT agent_terminal_event_phase_order CHECK (
+		(terminal_event_observability_delivered_at IS NULL OR terminal_event_callback_delivered_at IS NOT NULL)
+		AND (terminal_event_delivered_at IS NULL OR terminal_event_observability_delivered_at IS NOT NULL)
+	);
 	CREATE INDEX IF NOT EXISTS idx_agent_runs_terminal_pending
 		ON agent_runs(updated_at) WHERE terminal_event_json IS NOT NULL AND terminal_event_delivered_at IS NULL;
 `
@@ -236,6 +257,13 @@ type migrationExecer interface {
 func ensureVideoProjectConfigRevision(ctx context.Context, execer migrationExecer) error {
 	if _, err := execer.Exec(ctx, videoProjectConfigRevisionMigration); err != nil {
 		return fmt.Errorf("required video project config revision schema: %w", err)
+	}
+	return nil
+}
+
+func ensureAgentTerminalOutbox(ctx context.Context, execer migrationExecer) error {
+	if _, err := execer.Exec(ctx, agentTerminalOutboxMigration); err != nil {
+		return fmt.Errorf("required agent terminal outbox schema: %w", err)
 	}
 	return nil
 }
@@ -599,7 +627,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	if err := ensureVideoProjectConfigRevision(ctx, pool); err != nil {
 		zap.L().Fatal("Failed to install required video project config revision schema", zap.Error(err))
 	}
-	if _, err := pool.Exec(ctx, agentTerminalOutboxMigration); err != nil {
+	if err := ensureAgentTerminalOutbox(ctx, pool); err != nil {
 		zap.L().Fatal("Failed to install required agent terminal outbox schema", zap.Error(err))
 	}
 

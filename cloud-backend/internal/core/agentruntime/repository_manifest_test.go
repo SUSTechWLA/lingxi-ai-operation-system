@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/tangying-ai/aios-core/internal/core/database"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 )
 
 type agentRepositoryCall struct {
@@ -303,16 +304,18 @@ func TestRepositoryRunIdentityColumnBoundsAllowNilLineage(t *testing.T) {
 
 func TestRepositoryClaimTerminalEventsScansJSONAndClosesRows(t *testing.T) {
 	event := RunTerminalEvent{
-		EventID: "event-1",
-		RunID:   "run-1",
-		Status:  RunStatusSuccess,
-		Context: map[string]interface{}{"result": "ok"},
+		EventID:                "event-1",
+		CallbackIdempotencyKey: "event-1",
+		RunID:                  "run-1",
+		Status:                 RunStatusSuccess,
+		Context:                map[string]interface{}{"result": "ok"},
+		ObservabilityEvent:     &observability.Event{EventID: "event-1"},
 	}
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := &fakeAgentRunRows{rows: []manifestRow{{"run-1", "event-1", "claim-1", eventJSON}}}
+	rows := &fakeAgentRunRows{rows: []manifestRow{{"run-1", "event-1", "claim-1", true, false, eventJSON}}}
 	db := &fakeAgentRunDB{queryRows: rows}
 
 	deliveries, err := newRepositoryWithDB(db).ClaimTerminalEvents(
@@ -322,7 +325,9 @@ func TestRepositoryClaimTerminalEventsScansJSONAndClosesRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(deliveries) != 1 || deliveries[0].RunID != "run-1" || deliveries[0].EventID != "event-1" ||
-		deliveries[0].ClaimToken != "claim-1" || !reflect.DeepEqual(deliveries[0].Event, event) {
+		deliveries[0].ClaimToken != "claim-1" || !deliveries[0].PayloadFrozen ||
+		!deliveries[0].CallbackDelivered || deliveries[0].ObservabilityDelivered ||
+		!reflect.DeepEqual(deliveries[0].Event, event) {
 		t.Fatalf("deliveries = %#v", deliveries)
 	}
 	if !rows.closed {
@@ -330,6 +335,27 @@ func TestRepositoryClaimTerminalEventsScansJSONAndClosesRows(t *testing.T) {
 	}
 	if len(db.execs) != 1 || !strings.Contains(db.execs[0].query, "RETURNING runs.id") {
 		t.Fatalf("query calls = %#v", db.execs)
+	}
+}
+
+func TestRepositoryClaimTerminalEventsRecoversLegacySQLIdentity(t *testing.T) {
+	eventJSON := []byte(`{"runId":"run-legacy","userId":"owner-legacy","traceId":"trace-legacy","status":"SUCCESS","occurredAt":"2026-07-28T01:02:03Z"}`)
+	rows := &fakeAgentRunRows{rows: []manifestRow{{
+		"run-legacy", "evt_agent_terminal_legacy_run-legacy", "claim-legacy", false, false, eventJSON,
+	}}}
+	deliveries, err := newRepositoryWithDB(&fakeAgentRunDB{queryRows: rows}).ClaimTerminalEvents(
+		context.Background(), 1, time.Now().Add(time.Minute), "claim-legacy",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 {
+		t.Fatalf("deliveries=%#v", deliveries)
+	}
+	delivery := deliveries[0]
+	if delivery.PayloadFrozen || delivery.Event.EventID != delivery.EventID ||
+		delivery.Event.CallbackIdempotencyKey != delivery.EventID {
+		t.Fatalf("legacy delivery=%#v", delivery)
 	}
 }
 
@@ -355,7 +381,7 @@ func TestRepositoryClaimTerminalEventsClosesRowsOnRowErrors(t *testing.T) {
 		want error
 	}{
 		{name: "scan", rows: &fakeAgentRunRows{rows: []manifestRow{{"run-1"}}, scanErr: scanErr}, want: scanErr},
-		{name: "malformed JSON", rows: &fakeAgentRunRows{rows: []manifestRow{{"run-1", "event-1", "claim-1", []byte(`{"eventId":`)}}}},
+		{name: "malformed JSON", rows: &fakeAgentRunRows{rows: []manifestRow{{"run-1", "event-1", "claim-1", false, false, []byte(`{"eventId":`)}}}},
 		{name: "terminal rows error", rows: &fakeAgentRunRows{err: rowsErr}, want: rowsErr},
 	}
 	for _, test := range cases {

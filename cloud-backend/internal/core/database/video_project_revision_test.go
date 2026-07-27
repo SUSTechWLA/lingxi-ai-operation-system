@@ -27,13 +27,31 @@ func TestEnsureVideoProjectConfigRevisionReturnsStartupError(t *testing.T) {
 }
 
 func TestAgentTerminalOutboxMigrationIncludesEventAndClaimIdentity(t *testing.T) {
-	for _, column := range []string{"terminal_event_id", "terminal_event_claim_token"} {
+	for _, column := range []string{
+		"terminal_event_id", "terminal_event_claim_token",
+		"terminal_event_callback_delivered_at", "terminal_event_observability_delivered_at",
+	} {
 		if !strings.Contains(agentTerminalOutboxMigration, column) {
 			t.Fatalf("terminal outbox migration missing %s: %s", column, agentTerminalOutboxMigration)
 		}
 	}
-	if !strings.Contains(agentTerminalOutboxMigration, "UPDATE agent_runs SET terminal_event_id") {
-		t.Fatalf("terminal outbox migration does not backfill pending legacy events: %s", agentTerminalOutboxMigration)
+	for _, fragment := range []string{
+		"evt_agent_terminal_legacy_", "MD5(id)", "terminal_event_json->>'eventId'",
+		"agent_terminal_event_identity_required", "agent_terminal_event_phase_order",
+		"terminal_event_callback_delivered_at=COALESCE",
+		"terminal_event_observability_delivered_at=COALESCE",
+	} {
+		if !strings.Contains(agentTerminalOutboxMigration, fragment) {
+			t.Fatalf("terminal outbox migration missing %q: %s", fragment, agentTerminalOutboxMigration)
+		}
+	}
+}
+
+func TestEnsureAgentTerminalOutboxReturnsStartupError(t *testing.T) {
+	execer := revisionMigrationExecer{err: errors.New("permission denied")}
+	err := ensureAgentTerminalOutbox(context.Background(), execer)
+	if err == nil || !strings.Contains(err.Error(), "required agent terminal outbox schema") {
+		t.Fatalf("error=%v", err)
 	}
 }
 

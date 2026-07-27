@@ -20,6 +20,15 @@ type DurableEventEmitter interface {
 	EmitAndWait(context.Context, Event) error
 }
 
+// FrozenDurableEventEmitter prepares a durable event exactly once and later
+// replays that prepared envelope without changing timestamps, sequence,
+// source, runtime, correlation, error, or evidence fields.
+type FrozenDurableEventEmitter interface {
+	DurableEventEmitter
+	FreezeDurableEvent(context.Context, Event) (Event, error)
+	EmitFrozenAndWait(context.Context, Event) error
+}
+
 // EnsureCorrelation supplies product-independent trace/span identifiers when a
 // lifecycle operation starts outside HTTP or Kafka middleware.
 func EnsureCorrelation(ctx context.Context) context.Context {

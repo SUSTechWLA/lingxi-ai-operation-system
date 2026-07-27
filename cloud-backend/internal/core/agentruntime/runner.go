@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -72,6 +73,7 @@ type Run struct {
 
 type RunTerminalEvent struct {
 	EventID                string                 `json:"eventId"`
+	CallbackIdempotencyKey string                 `json:"callbackIdempotencyKey"`
 	RunID                  string                 `json:"runId"`
 	TaskID                 string                 `json:"taskId,omitempty"`
 	UserID                 string                 `json:"userId,omitempty"`
@@ -82,8 +84,12 @@ type RunTerminalEvent struct {
 	ErrorCode              string                 `json:"errorCode,omitempty"`
 	Error                  string                 `json:"error,omitempty"`
 	OccurredAt             time.Time              `json:"occurredAt"`
+	ObservabilityEvent     *observability.Event   `json:"observabilityEvent,omitempty"`
 }
 
+// RunTerminalCallback may be invoked again after a crash between the remote
+// side effect and its durable phase mark. Implementations must deduplicate by
+// event.CallbackIdempotencyKey or make the target transition idempotent.
 type RunTerminalCallback func(ctx context.Context, event RunTerminalEvent) error
 
 type Planner interface {
@@ -115,6 +121,9 @@ type RunStore interface {
 	SaveRunTerminal(ctx context.Context, run *Run, event RunTerminalEvent) error
 	FindRun(ctx context.Context, id string) (*Run, error)
 	ClaimTerminalEvents(ctx context.Context, limit int, leaseUntil time.Time, claimToken string) ([]TerminalEventDelivery, error)
+	FreezeTerminalEvent(ctx context.Context, delivery TerminalEventDelivery) (bool, error)
+	MarkTerminalCallbackDelivered(ctx context.Context, delivery TerminalEventDelivery) (bool, error)
+	MarkTerminalObservabilityDelivered(ctx context.Context, delivery TerminalEventDelivery) (bool, error)
 	AckTerminalEvent(ctx context.Context, delivery TerminalEventDelivery) (bool, error)
 	ReleaseTerminalEvent(ctx context.Context, delivery TerminalEventDelivery) (bool, error)
 }
@@ -124,10 +133,13 @@ type runByTaskStore interface {
 }
 
 type TerminalEventDelivery struct {
-	RunID      string
-	EventID    string
-	ClaimToken string
-	Event      RunTerminalEvent
+	RunID                  string
+	EventID                string
+	ClaimToken             string
+	PayloadFrozen          bool
+	CallbackDelivered      bool
+	ObservabilityDelivered bool
+	Event                  RunTerminalEvent
 }
 
 type PlanJudge interface {
@@ -1258,6 +1270,7 @@ func (r *Runner) persistAndDeliverTerminal(ctx context.Context, run *Run, event 
 	if strings.TrimSpace(event.EventID) == "" {
 		event.EventID = "evt_agent_terminal_" + uuid.NewString()
 	}
+	event.CallbackIdempotencyKey = event.EventID
 	event.RunID = run.ID
 	event.TaskID = run.TaskID
 	event.UserID = run.UserID
@@ -1273,6 +1286,11 @@ func (r *Runner) persistAndDeliverTerminal(ctx context.Context, run *Run, event 
 	if run.Status == RunStatusFailed && event.ErrorCode == "" {
 		event.ErrorCode = "AGENT.RUNTIME.INTERNAL_FAILURE"
 	}
+	frozenObservability, err := r.freezeTerminalObservability(ctx, event)
+	if err != nil {
+		return err
+	}
+	event.ObservabilityEvent = frozenObservability
 	if err := r.store.SaveRunTerminal(ctx, run, event); err != nil {
 		return fmt.Errorf("persist agent terminal event: %w", err)
 	}
@@ -1290,24 +1308,107 @@ func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int
 	}
 	var deliveryErrors []error
 	for _, delivery := range deliveries {
+		freezePayload := !delivery.PayloadFrozen
+		if strings.TrimSpace(delivery.Event.EventID) == "" {
+			delivery.Event.EventID = delivery.EventID
+			freezePayload = true
+		}
+		if strings.TrimSpace(delivery.Event.CallbackIdempotencyKey) == "" {
+			delivery.Event.CallbackIdempotencyKey = delivery.EventID
+			freezePayload = true
+		}
+		needsPreparedEnvelope := delivery.Event.ObservabilityEvent == nil
+		if _, ok := r.events.(observability.FrozenDurableEventEmitter); ok && delivery.Event.ObservabilityEvent != nil {
+			needsPreparedEnvelope = delivery.Event.ObservabilityEvent.Validate() != nil
+		}
+		if needsPreparedEnvelope {
+			frozenObservability, freezeErr := r.freezeTerminalObservability(ctx, delivery.Event)
+			if freezeErr != nil {
+				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery, freezeErr))
+				continue
+			}
+			delivery.Event.ObservabilityEvent = frozenObservability
+			freezePayload = true
+		}
+		if freezePayload {
+			frozen, freezeErr := r.store.FreezeTerminalEvent(ctx, delivery)
+			if freezeErr != nil {
+				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery,
+					fmt.Errorf("persist frozen terminal event for %s: %w", delivery.RunID, freezeErr)))
+				continue
+			}
+			if !frozen {
+				deliveryErrors = append(deliveryErrors, terminalClaimLostError(delivery, "freeze payload"))
+				continue
+			}
+			delivery.PayloadFrozen = true
+		}
 		deliveryCtx := terminalDeliveryContext(ctx, delivery.Event)
-		if r.terminal != nil {
+		if !delivery.CallbackDelivered && r.terminal != nil {
 			if callbackErr := r.terminal(deliveryCtx, delivery.Event); callbackErr != nil {
-				_, _ = r.store.ReleaseTerminalEvent(ctx, delivery)
-				deliveryErrors = append(deliveryErrors, fmt.Errorf("deliver terminal event for %s: %w", delivery.RunID, callbackErr))
+				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery,
+					fmt.Errorf("deliver terminal event for %s: %w", delivery.RunID, callbackErr)))
 				continue
 			}
 		}
-		if emitErr := r.emitDurableTerminal(deliveryCtx, delivery.Event); emitErr != nil {
-			_, _ = r.store.ReleaseTerminalEvent(ctx, delivery)
-			deliveryErrors = append(deliveryErrors, fmt.Errorf("emit terminal observability for %s: %w", delivery.RunID, emitErr))
+		if !delivery.CallbackDelivered {
+			marked, markErr := r.store.MarkTerminalCallbackDelivered(ctx, delivery)
+			if markErr != nil {
+				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery,
+					fmt.Errorf("mark terminal callback delivered for %s: %w", delivery.RunID, markErr)))
+				continue
+			}
+			if !marked {
+				deliveryErrors = append(deliveryErrors, terminalClaimLostError(delivery, "mark callback delivered"))
+				continue
+			}
+			delivery.CallbackDelivered = true
+		}
+		if !delivery.ObservabilityDelivered && r.events != nil {
+			if emitErr := r.emitDurableTerminal(deliveryCtx, delivery.Event); emitErr != nil {
+				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery,
+					fmt.Errorf("emit terminal observability for %s: %w", delivery.RunID, emitErr)))
+				continue
+			}
+		}
+		if !delivery.ObservabilityDelivered {
+			marked, markErr := r.store.MarkTerminalObservabilityDelivered(ctx, delivery)
+			if markErr != nil {
+				deliveryErrors = append(deliveryErrors, r.releaseTerminalDelivery(ctx, delivery,
+					fmt.Errorf("mark terminal observability delivered for %s: %w", delivery.RunID, markErr)))
+				continue
+			}
+			if !marked {
+				deliveryErrors = append(deliveryErrors, terminalClaimLostError(delivery, "mark observability delivered"))
+				continue
+			}
+			delivery.ObservabilityDelivered = true
+		}
+		acked, ackErr := r.store.AckTerminalEvent(ctx, delivery)
+		if ackErr != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("ack terminal event for %s: %w", delivery.RunID, ackErr))
 			continue
 		}
-		if _, ackErr := r.store.AckTerminalEvent(ctx, delivery); ackErr != nil {
-			deliveryErrors = append(deliveryErrors, fmt.Errorf("ack terminal event for %s: %w", delivery.RunID, ackErr))
+		if !acked {
+			deliveryErrors = append(deliveryErrors, terminalClaimLostError(delivery, "ack"))
 		}
 	}
 	return errors.Join(deliveryErrors...)
+}
+
+func (r *Runner) releaseTerminalDelivery(ctx context.Context, delivery TerminalEventDelivery, cause error) error {
+	released, err := r.store.ReleaseTerminalEvent(ctx, delivery)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("release terminal event for %s: %w", delivery.RunID, err))
+	}
+	if !released {
+		return errors.Join(cause, terminalClaimLostError(delivery, "release"))
+	}
+	return cause
+}
+
+func terminalClaimLostError(delivery TerminalEventDelivery, phase string) error {
+	return fmt.Errorf("terminal event claim lost during %s for %s", phase, delivery.RunID)
 }
 
 func terminalDeliveryContext(ctx context.Context, event RunTerminalEvent) context.Context {
@@ -1317,6 +1418,7 @@ func terminalDeliveryContext(ctx context.Context, event RunTerminalEvent) contex
 	existing := observability.CorrelationFromContext(ctx)
 	correlation := observability.Correlation{
 		TraceID:    event.TraceID,
+		SpanID:     terminalObservabilitySpanID(event.EventID),
 		AgentRunID: event.RunID,
 		TaskID:     event.TaskID,
 	}
@@ -1340,6 +1442,38 @@ func (r *Runner) emitDurableTerminal(ctx context.Context, terminal RunTerminalEv
 	if r == nil || r.events == nil {
 		return nil
 	}
+	event, err := frozenTerminalObservabilityValue(terminal)
+	if err != nil {
+		return err
+	}
+	if frozen, ok := r.events.(observability.FrozenDurableEventEmitter); ok {
+		return frozen.EmitFrozenAndWait(ctx, event)
+	}
+	if durable, ok := r.events.(observability.DurableEventEmitter); ok {
+		return durable.EmitAndWait(ctx, event)
+	}
+	return r.events.Emit(ctx, event)
+}
+
+func (r *Runner) freezeTerminalObservability(ctx context.Context, terminal RunTerminalEvent) (*observability.Event, error) {
+	event, err := frozenTerminalObservabilityValue(terminal)
+	if err != nil {
+		return nil, err
+	}
+	if frozen, ok := r.events.(observability.FrozenDurableEventEmitter); ok {
+		deliveryCtx := terminalDeliveryContext(ctx, terminal)
+		event, err = frozen.FreezeDurableEvent(deliveryCtx, event)
+		if err != nil {
+			return nil, fmt.Errorf("freeze terminal observability: %w", err)
+		}
+	}
+	return &event, nil
+}
+
+func frozenTerminalObservabilityValue(terminal RunTerminalEvent) (observability.Event, error) {
+	if terminal.ObservabilityEvent != nil {
+		return *terminal.ObservabilityEvent, nil
+	}
 	eventType := observability.EventTypeAgentRunCompleted
 	status := observability.ExecutionStatusCompleted
 	severity := observability.SeverityInfo
@@ -1360,15 +1494,15 @@ func (r *Runner) emitDurableTerminal(ctx context.Context, terminal RunTerminalEv
 		status = observability.ExecutionStatusCancelled
 		severity = observability.SeverityWarn
 	default:
-		return fmt.Errorf("terminal outbox event has non-terminal status %s", terminal.Status)
+		return observability.Event{}, fmt.Errorf("terminal outbox event has non-terminal status %s", terminal.Status)
 	}
-	event := observability.Event{
+	return observability.Event{
 		EventID:     terminal.EventID,
 		OccurredAt:  terminal.OccurredAt,
 		EventType:   eventType,
 		MessageKey:  string(eventType),
 		Severity:    severity,
-		Correlation: observability.CorrelationFromContext(ctx),
+		Correlation: terminalObservabilityCorrelation(terminal),
 		Execution: observability.Execution{
 			Status:  status,
 			Attempt: 1,
@@ -1381,11 +1515,28 @@ func (r *Runner) emitDurableTerminal(ctx context.Context, terminal RunTerminalEv
 			Classification: observability.PrivacyInternal,
 			RedactedFields: []string{"terminal.context", "terminal.error"},
 		},
+	}, nil
+}
+
+func terminalObservabilityCorrelation(event RunTerminalEvent) observability.Correlation {
+	correlation := observability.Correlation{
+		TraceID:    event.TraceID,
+		SpanID:     terminalObservabilitySpanID(event.EventID),
+		AgentRunID: event.RunID,
+		TaskID:     event.TaskID,
 	}
-	if durable, ok := r.events.(observability.DurableEventEmitter); ok {
-		return durable.EmitAndWait(ctx, event)
+	for _, key := range []string{"projectId", "videoProjectId"} {
+		if value := strings.TrimSpace(fmt.Sprint(event.Context[key])); value != "" && value != "<nil>" {
+			correlation.ProjectID = value
+			break
+		}
 	}
-	return r.events.Emit(ctx, event)
+	return correlation
+}
+
+func terminalObservabilitySpanID(eventID string) string {
+	digest := sha256.Sum256([]byte("agent-terminal-observability\x00" + strings.TrimSpace(eventID)))
+	return hex.EncodeToString(digest[:8])
 }
 
 func (r *Runner) RunTerminalDelivery(ctx context.Context, interval time.Duration, batchSize int) {

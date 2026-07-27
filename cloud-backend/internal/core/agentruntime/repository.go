@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -45,10 +46,26 @@ func (db pgxAgentRunDB) Query(ctx context.Context, sql string, args ...interface
 
 const ackTerminalEventSQL = `UPDATE agent_runs
 	SET terminal_event_delivered_at=NOW(), terminal_event_lease_until=NULL, terminal_event_claim_token=NULL
-	WHERE id=$1 AND terminal_event_id=$2 AND terminal_event_claim_token=$3 AND terminal_event_delivered_at IS NULL`
+	WHERE id=$1 AND terminal_event_id=$2 AND terminal_event_claim_token=$3 AND terminal_event_delivered_at IS NULL
+	  AND terminal_event_callback_delivered_at IS NOT NULL
+	  AND terminal_event_observability_delivered_at IS NOT NULL`
+
+const markTerminalCallbackDeliveredSQL = `UPDATE agent_runs
+	SET terminal_event_callback_delivered_at=COALESCE(terminal_event_callback_delivered_at, NOW())
+	WHERE id=$1 AND terminal_event_id=$2 AND terminal_event_claim_token=$3 AND terminal_event_delivered_at IS NULL
+	  AND terminal_event_callback_delivered_at IS NULL`
+
+const markTerminalObservabilityDeliveredSQL = `UPDATE agent_runs
+	SET terminal_event_observability_delivered_at=COALESCE(terminal_event_observability_delivered_at, NOW())
+	WHERE id=$1 AND terminal_event_id=$2 AND terminal_event_claim_token=$3 AND terminal_event_delivered_at IS NULL
+	  AND terminal_event_observability_delivered_at IS NULL`
 
 const releaseTerminalEventSQL = `UPDATE agent_runs
 	SET terminal_event_lease_until=NULL, terminal_event_claim_token=NULL
+	WHERE id=$1 AND terminal_event_id=$2 AND terminal_event_claim_token=$3 AND terminal_event_delivered_at IS NULL`
+
+const freezeTerminalEventSQL = `UPDATE agent_runs
+	SET terminal_event_json=$4
 	WHERE id=$1 AND terminal_event_id=$2 AND terminal_event_claim_token=$3 AND terminal_event_delivered_at IS NULL`
 
 func NewRepository(pool *pgxpool.Pool) *Repository {
@@ -110,15 +127,17 @@ func (r *Repository) SaveRunTerminal(ctx context.Context, run *Run, event RunTer
 	_, err = r.db.Exec(ctx,
 		`INSERT INTO agent_runs (id, task_id, user_id, domain, message, plan_json, status, budget_json, metadata_json,
 		 trace_id, tool_registry_snapshot_id, run_manifest, parent_run_id, replay_from_stage_id, created_at, updated_at,
-		 terminal_event_json, terminal_event_id, terminal_event_delivered_at, terminal_event_attempts, terminal_event_lease_until, terminal_event_claim_token)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULL,0,NULL,NULL)
+		 terminal_event_json, terminal_event_id, terminal_event_delivered_at, terminal_event_attempts, terminal_event_lease_until, terminal_event_claim_token,
+		 terminal_event_callback_delivered_at, terminal_event_observability_delivered_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULL,0,NULL,NULL,NULL,NULL)
 		 ON CONFLICT (id) DO UPDATE SET
 		   task_id=$2, user_id=$3, domain=$4, message=$5, plan_json=$6,
 		   status=$7, budget_json=$8, metadata_json=$9, trace_id=$10,
 		   tool_registry_snapshot_id=$11, run_manifest=$12, parent_run_id=$13,
 		   replay_from_stage_id=$14, updated_at=$16,
 		   terminal_event_json=$17, terminal_event_id=$18, terminal_event_delivered_at=NULL,
-		   terminal_event_attempts=0, terminal_event_lease_until=NULL, terminal_event_claim_token=NULL
+		   terminal_event_attempts=0, terminal_event_lease_until=NULL, terminal_event_claim_token=NULL,
+		   terminal_event_callback_delivered_at=NULL, terminal_event_observability_delivered_at=NULL
 		 WHERE agent_runs.terminal_event_json IS NULL`,
 		run.ID, run.TaskID, run.UserID, run.Domain, run.Message, planJSON,
 		string(run.Status), budgetJSON, metadataJSON, run.TraceID, run.ToolRegistrySnapshotID,
@@ -153,7 +172,10 @@ func (r *Repository) ClaimTerminalEvents(ctx context.Context, limit int, leaseUn
 		SET terminal_event_lease_until=$2, terminal_event_attempts=terminal_event_attempts+1, terminal_event_claim_token=$3
 		FROM candidates
 		WHERE runs.id=candidates.id
-		RETURNING runs.id, runs.terminal_event_id, runs.terminal_event_claim_token, runs.terminal_event_json`, limit, leaseUntil, claimToken,
+		RETURNING runs.id, runs.terminal_event_id, runs.terminal_event_claim_token,
+		          runs.terminal_event_callback_delivered_at IS NOT NULL,
+		          runs.terminal_event_observability_delivered_at IS NOT NULL,
+		          runs.terminal_event_json`, limit, leaseUntil, claimToken,
 	)
 	if err != nil {
 		return nil, err
@@ -163,15 +185,58 @@ func (r *Repository) ClaimTerminalEvents(ctx context.Context, limit int, leaseUn
 	for rows.Next() {
 		var delivery TerminalEventDelivery
 		var eventJSON []byte
-		if err := rows.Scan(&delivery.RunID, &delivery.EventID, &delivery.ClaimToken, &eventJSON); err != nil {
+		if err := rows.Scan(
+			&delivery.RunID,
+			&delivery.EventID,
+			&delivery.ClaimToken,
+			&delivery.CallbackDelivered,
+			&delivery.ObservabilityDelivered,
+			&eventJSON,
+		); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(eventJSON, &delivery.Event); err != nil {
 			return nil, err
 		}
+		delivery.PayloadFrozen = delivery.Event.EventID != "" &&
+			delivery.Event.CallbackIdempotencyKey != "" && delivery.Event.ObservabilityEvent != nil
+		if delivery.Event.EventID == "" {
+			delivery.Event.EventID = delivery.EventID
+		} else if delivery.Event.EventID != delivery.EventID {
+			return nil, fmt.Errorf("terminal event identity mismatch for run %s", delivery.RunID)
+		}
+		if delivery.Event.CallbackIdempotencyKey == "" {
+			delivery.Event.CallbackIdempotencyKey = delivery.EventID
+		}
 		deliveries = append(deliveries, delivery)
 	}
 	return deliveries, rows.Err()
+}
+
+func (r *Repository) FreezeTerminalEvent(ctx context.Context, delivery TerminalEventDelivery) (bool, error) {
+	eventJSON, err := json.Marshal(delivery.Event)
+	if err != nil {
+		return false, err
+	}
+	tag, err := r.db.Exec(
+		ctx,
+		freezeTerminalEventSQL,
+		delivery.RunID,
+		delivery.EventID,
+		delivery.ClaimToken,
+		eventJSON,
+	)
+	return err == nil && tag.RowsAffected() == 1, err
+}
+
+func (r *Repository) MarkTerminalCallbackDelivered(ctx context.Context, delivery TerminalEventDelivery) (bool, error) {
+	tag, err := r.db.Exec(ctx, markTerminalCallbackDeliveredSQL, delivery.RunID, delivery.EventID, delivery.ClaimToken)
+	return err == nil && tag.RowsAffected() == 1, err
+}
+
+func (r *Repository) MarkTerminalObservabilityDelivered(ctx context.Context, delivery TerminalEventDelivery) (bool, error) {
+	tag, err := r.db.Exec(ctx, markTerminalObservabilityDeliveredSQL, delivery.RunID, delivery.EventID, delivery.ClaimToken)
+	return err == nil && tag.RowsAffected() == 1, err
 }
 
 func (r *Repository) AckTerminalEvent(ctx context.Context, delivery TerminalEventDelivery) (bool, error) {

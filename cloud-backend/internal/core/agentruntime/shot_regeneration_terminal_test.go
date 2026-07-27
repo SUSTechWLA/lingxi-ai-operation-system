@@ -91,6 +91,12 @@ func TestRunnerFirstDurableTerminalWinsOverReplacementAttempt(t *testing.T) {
 	if err := store.SaveRunTerminal(context.Background(), run, second); err != nil {
 		t.Fatalf("save replacement event: %v", err)
 	}
+	if marked, err := store.MarkTerminalCallbackDelivered(context.Background(), claimed[0]); err != nil || !marked {
+		t.Fatalf("first terminal callback phase accepted=%v error=%v", marked, err)
+	}
+	if marked, err := store.MarkTerminalObservabilityDelivered(context.Background(), claimed[0]); err != nil || !marked {
+		t.Fatalf("first terminal observability phase accepted=%v error=%v", marked, err)
+	}
 	if acked, err := store.AckTerminalEvent(context.Background(), claimed[0]); err != nil || !acked {
 		t.Fatalf("first terminal ack accepted=%v error=%v", acked, err)
 	}

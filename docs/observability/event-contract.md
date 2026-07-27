@@ -77,6 +77,24 @@ sink: it is always attempted and failures are counted, but a logger outage does
 not prevent durable acknowledgement; a repository failure always leaves the
 phase pending for retry.
 
+Agent-run terminal delivery uses three monotonic durable phases: product
+callback, repository-backed observability, and final acknowledgement. The
+callback payload and the fully prepared observability envelope are frozen in
+the Agent outbox before either side effect. The callback's
+`callbackIdempotencyKey` is exactly the durable terminal `eventId`; receivers
+must deduplicate by that key or make the target transition a no-op when it is
+already applied. Built-in creator-project and shot-regeneration receivers use
+target-state no-ops.
+
+This is an effectively-once contract, not a claim of physical exactly-once
+invocation. A process can crash after a remote callback commits but before the
+callback phase is marked. The expired lease may then replay the callback with
+the same idempotency key. Likewise, a repository sink response can be lost
+after commit; replay uses the byte-identical observability event and the
+repository collapses it by `eventId`. Once a phase mark is durable, later
+phase failures never repeat that completed phase, and claim loss (including a
+false final acknowledgement result) is reported as an error.
+
 ## Tool snapshot
 
 Each new Agent or workflow run records the immutable tool-registry snapshot ID
