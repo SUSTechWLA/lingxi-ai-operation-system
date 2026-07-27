@@ -62,6 +62,59 @@ func TestEventRunIDUsesAgentOrTaskFallbackForStageLifecycle(t *testing.T) {
 	}
 }
 
+func TestEventRunIDAllowsOnlyExactTranslatorBootstrapLifecycle(t *testing.T) {
+	allowed := []struct {
+		eventType  EventType
+		messageKey string
+	}{
+		{EventTypeLLMCallStarted, "llm.call.started"},
+		{EventTypeLLMCallCompleted, "llm.call.completed"},
+		{EventTypeLLMCallFailed, "llm.call.failed"},
+		{EventTypeWorkflowStageStarted, "translator.dag.started"},
+		{EventTypeWorkflowStageCompleted, "translator.dag.completed"},
+		{EventTypeWorkflowStageFailed, "translator.dag.failed"},
+		{EventTypeWorkflowStageCancelled, "translator.dag.cancelled"},
+		{EventTypeRecoveryFallbackStarted, "recovery.fallback.started"},
+		{EventTypeRecoveryFallbackCompleted, "recovery.fallback.completed"},
+	}
+	for _, tt := range allowed {
+		event := validEvent()
+		event.Source.Component = "translator"
+		event.EventType = tt.eventType
+		event.MessageKey = tt.messageKey
+		event.Correlation = Correlation{TraceID: "trc_bootstrap", SpanID: "spn_bootstrap", StageID: "translator-llm-dag"}
+		if runID, err := eventRunID(event); err != nil || runID != "" {
+			t.Errorf("%s/%s runID=%q err=%v", tt.eventType, tt.messageKey, runID, err)
+		}
+	}
+}
+
+func TestEventRunIDRejectsTranslatorBootstrapLookalikes(t *testing.T) {
+	base := validEvent()
+	base.Source.Component = "translator"
+	base.EventType = EventTypeLLMCallStarted
+	base.MessageKey = "llm.call.started"
+	base.Correlation = Correlation{TraceID: "trc_bootstrap", SpanID: "spn_bootstrap", StageID: "translator-llm-dag"}
+	tests := []struct {
+		name   string
+		mutate func(*Event)
+	}{
+		{"component", func(event *Event) { event.Source.Component = "translator-lookalike" }},
+		{"stage", func(event *Event) { event.Correlation.StageID = "translator-other" }},
+		{"message", func(event *Event) { event.MessageKey = "llm.call.completed" }},
+		{"type", func(event *Event) { event.EventType = EventTypeToolCallStarted; event.MessageKey = "tool.call.started" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := base
+			tt.mutate(&event)
+			if _, err := eventRunID(event); err == nil {
+				t.Fatalf("lookalike accepted: %+v", event)
+			}
+		})
+	}
+}
+
 type fakeRelayDB struct {
 	row      relayRow
 	rows     *relayRows

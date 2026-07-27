@@ -552,7 +552,7 @@ func main() {
 
 		// Wire decision log into the agent runtime handler so approve/reject
 		// writes audit-trail entries automatically.
-		agentRuntimeHandler.WithDecisionLogWriter(&decisionLogAdapter{store: decisionLogStore, resolver: workflowRunRepo})
+		agentRuntimeHandler.WithDecisionLogWriter(&decisionLogAdapter{store: decisionLogStore})
 		agentRuntimeHandler.WithAtomicReviewReopener(agentruntime.NewPGXReviewReopener(pool))
 
 		artifactRepo := artifact.NewRepository(pool)
@@ -1478,8 +1478,7 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 // agentruntime.DecisionLogWriter interface, allowing the agent runtime
 // handler to write audit-trail entries without importing the workflow package.
 type decisionLogAdapter struct {
-	store    workflow.DecisionLogStore
-	resolver workflow.DecisionWorkflowRunResolver
+	store workflow.DecisionLogStore
 }
 
 // stageDirectorRegistry adapts videodirector.Registry to agentruntime.DirectorRegistry.
@@ -1505,23 +1504,11 @@ func (a *decisionLogAdapter) Save(ctx context.Context, r *agentruntime.DecisionL
 	if strings.TrimSpace(r.TaskID) == "" {
 		return fmt.Errorf("decision taskId is required")
 	}
-	workflowRunID := strings.TrimSpace(r.WorkflowRunID)
-	if a.resolver != nil && strings.TrimSpace(r.TaskID) != "" {
-		resolved, err := a.resolver.FindRunIDByTaskID(ctx, r.TaskID)
-		if err != nil {
-			return fmt.Errorf("resolve decision workflowRunId: %w", err)
-		}
-		resolved = strings.TrimSpace(resolved)
-		if workflowRunID != "" && workflowRunID != resolved {
-			return fmt.Errorf("decision workflowRunId does not belong to task")
-		}
-		workflowRunID = resolved
-	}
-	if workflowRunID == "" {
-		return fmt.Errorf("decision workflowRunId is required")
+	if a == nil || a.store == nil {
+		return fmt.Errorf("decision log store is required")
 	}
 	return a.store.Save(ctx, &workflow.DecisionLogRecord{
-		WorkflowRunID:  workflowRunID,
+		WorkflowRunID:  strings.TrimSpace(r.WorkflowRunID),
 		TaskID:         r.TaskID,
 		StageName:      r.StageName,
 		DecisionType:   r.DecisionType,

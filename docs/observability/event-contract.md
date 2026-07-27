@@ -22,6 +22,11 @@ stage identifiers. Plan validation uses `agent.plan.validation.*`; correction
 uses `correct.operation.*`, and the configured plan judge owns the genuine
 `verify.check.*` boundary.
 
+Agent deadlines are failures, not cancellations: the nested boundary uses
+`WORKFLOW.STAGE.TIMEOUT` and the outer run uses `AGENT.RUN.TIMEOUT`.
+Explicit cancellation and a persisted run-cancellation request remain
+`WARN`/`CANCELLED` terminals without an error object.
+
 HTTP middleware accepts W3C `traceparent`. Kafka propagation reconstructs the
 same correlation context. Producers may supply existing domain IDs (`wfr-`,
 UUIDs, or legacy values); the emitter converts them to schema-valid product IDs.
@@ -35,12 +40,17 @@ durations, stable error metadata, and SHA-256 input hashes only. They never
 contain request text, prompts, the translator system/full prompt, workflow
 input/output, local-job payload/output/diagnostics, tool arguments/results,
 tokens, credentials, or user comments. Zap diagnostics likewise omit raw
-`userInput` and translator `prompt` fields.
+`userInput` and translator `prompt` fields. Agent tool-trace logs contain only
+bounded safe tool names and counts; background, translator, and worker failure
+logs use registry code/class and a static code-plus-component fingerprint, not
+raw error text or a hash of provider/request content.
 
 `ERROR` severity is reserved for terminal events carrying a normalized code
 from the stable registry; both the Go validator and JSON schema reject an
 `ERROR` event without structured error metadata. Cancellation remains a
-`WARN`/`CANCELLED` terminal event.
+`WARN`/`CANCELLED` terminal event. The JSON Schema `error.code` enum is required
+to be exactly identical, including order and duplicate absence, to the stable
+registry.
 
 Emitter failure never fails a user workflow. Queue rejection or validation
 failure produces a bounded structured diagnostic containing only component,
@@ -54,7 +64,11 @@ terminal event ID, occurrence time, duration, attempt, correlation, and failure
 code are derived from the persisted job row. Queue rejection or sink failure
 leaves that phase pending for authenticated reconciliation while product result
 and follow-up callbacks continue independently; a sink acknowledgement is
-required before the observability phase is marked delivered.
+required before the observability phase is marked delivered. The repository is
+the required sink. Structured logging is an explicitly best-effort secondary
+sink: it is always attempted and failures are counted, but a logger outage does
+not prevent durable acknowledgement; a repository failure always leaves the
+phase pending for retry.
 
 ## Tool snapshot
 
@@ -75,3 +89,10 @@ Authenticated clients use:
 Relay rows are redacted before persistence and expire after 72 hours. The
 delivery cursor is the stable `occurredAt` plus `eventId` ordering, and pulls
 are capped at 500 events.
+
+The translator begins its LLM, stage, and fallback lifecycle before the
+orchestrator returns a task identity. Only component `translator`, stage
+`translator-llm-dag`, and the fixed emitted LLM/stage/fallback event-type plus
+message-key pairs are accepted as runless bootstrap events. They are stored in
+the authenticated owner's outbox with no fabricated run summary. Lookalike
+components, stages, types, or message keys remain rejected.

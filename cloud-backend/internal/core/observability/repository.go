@@ -265,6 +265,9 @@ func eventRunID(event Event) (string, error) {
 	if workflowRunID != "" && agentRunID != "" {
 		return "", errors.New("observability event has ambiguous run identity")
 	}
+	if workflowRunID == "" && agentRunID == "" && event.Correlation.TaskID == "" && translatorBootstrapEvent(event) {
+		return "", nil
+	}
 	switch {
 	case strings.HasPrefix(string(event.EventType), "workflow."):
 		if workflowRunID != "" {
@@ -296,6 +299,34 @@ func eventRunID(event Event) (string, error) {
 			return "", nil
 		}
 		return "", errors.New("observability lifecycle event requires run identity")
+	}
+}
+
+func translatorBootstrapEvent(event Event) bool {
+	if event.Source.Component != "translator" || event.Correlation.StageID != "translator-llm-dag" {
+		return false
+	}
+	switch event.EventType {
+	case EventTypeLLMCallStarted:
+		return event.MessageKey == "llm.call.started"
+	case EventTypeLLMCallCompleted:
+		return event.MessageKey == "llm.call.completed"
+	case EventTypeLLMCallFailed:
+		return event.MessageKey == "llm.call.failed"
+	case EventTypeWorkflowStageStarted:
+		return event.MessageKey == "translator.dag.started"
+	case EventTypeWorkflowStageCompleted:
+		return event.MessageKey == "translator.dag.completed"
+	case EventTypeWorkflowStageFailed:
+		return event.MessageKey == "translator.dag.failed"
+	case EventTypeWorkflowStageCancelled:
+		return event.MessageKey == "translator.dag.cancelled"
+	case EventTypeRecoveryFallbackStarted:
+		return event.MessageKey == "recovery.fallback.started"
+	case EventTypeRecoveryFallbackCompleted:
+		return event.MessageKey == "recovery.fallback.completed"
+	default:
+		return false
 	}
 }
 

@@ -812,10 +812,13 @@ func (ne *NodeExecutor) resolveLocalProjectID(ctx context.Context, event eventbu
 	if ne.projectResolver != nil && event.TaskID != "" {
 		resolved, err := ne.projectResolver.ResolveProjectID(ctx, event.TaskID)
 		if err != nil {
+			diagnostic := observability.NormalizeError("TOOL.EXECUTION.FAILED", nil, "worker-tool-executor", "")
 			zap.L().Warn("local dispatch: cannot resolve project ID from task",
 				zap.String("taskId", event.TaskID),
 				zap.String("nodeId", event.NodeID),
-				zap.Error(err),
+				zap.String("errorCode", diagnostic.Code),
+				zap.String("errorClass", string(diagnostic.Class)),
+				zap.String("errorFingerprint", diagnostic.Fingerprint),
 			)
 			return ""
 		}
@@ -929,9 +932,12 @@ func (ne *NodeExecutor) publishFailure(ctx context.Context, taskID, nodeID, trac
 	}
 
 	ne.publishEvent(ctx, eventbus.TopicNodeResult, idempotencyKey, event)
+	diagnostic := observability.NormalizeError("TOOL.EXECUTION.FAILED", nil, "worker-tool-executor", "")
 	zap.L().Info("Node execution failed",
 		zap.String("nodeId", nodeID),
-		zap.String("errorFingerprint", observability.HashText(errMsg)),
+		zap.String("errorCode", diagnostic.Code),
+		zap.String("errorClass", string(diagnostic.Class)),
+		zap.String("errorFingerprint", diagnostic.Fingerprint),
 	)
 }
 

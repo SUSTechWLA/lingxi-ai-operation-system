@@ -82,6 +82,7 @@ var errorRegistry = map[string]errorDefinition{
 	"AGENT.PLAN.GENERATION_FAILED":   {Class: ErrorClassExecution, Retryable: true, UserMessageKey: "error.agent.plan.generation.failed", SuggestedActionKey: "action.agent.retry.plan"},
 	"AGENT.PLAN.COMPILATION_FAILED":  {Class: ErrorClassExecution, Retryable: false, UserMessageKey: "error.agent.plan.compilation.failed", SuggestedActionKey: "action.agent.review.plan"},
 	"AGENT.DAG.SUBMISSION_FAILED":    {Class: ErrorClassConnection, Retryable: true, UserMessageKey: "error.agent.dag.submission.failed", SuggestedActionKey: "action.agent.retry.submission"},
+	"AGENT.RUN.TIMEOUT":              {Class: ErrorClassTimeout, Retryable: true, UserMessageKey: "error.agent.run.timeout", SuggestedActionKey: "action.agent.retry.run"},
 	"AGENT.RUNTIME.INTERNAL_FAILURE": {Class: ErrorClassExecution, Retryable: false, UserMessageKey: "error.agent.runtime.internal.failure", SuggestedActionKey: "action.agent.retry.run"},
 	"LLM.PROVIDER.RATE_LIMITED": {
 		Class:              ErrorClassProvider,

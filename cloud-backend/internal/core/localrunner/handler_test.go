@@ -24,6 +24,62 @@ type localJobEventSink struct {
 	events []observability.Event
 }
 
+type terminalPhaseSink struct {
+	calls      int
+	err        error
+	bestEffort bool
+}
+
+func (s *terminalPhaseSink) Write(context.Context, observability.Event) error {
+	s.calls++
+	return s.err
+}
+func (*terminalPhaseSink) Close(context.Context) error { return nil }
+func (s *terminalPhaseSink) BestEffort() bool          { return s.bestEffort }
+
+func TestDurableTerminalAcknowledgesRepositoryWhenLoggerPermanentlyFails(t *testing.T) {
+	completed := time.Now().UTC()
+	job := &LocalJob{ID: "local_job_best_effort", UserID: "user-1", TaskID: "task-1", NodeID: "node-1", Status: JobFailed, Attempt: 1, CreatedAt: completed.Add(-time.Second), UpdatedAt: completed, CompletedAt: &completed, ObservabilityCallbackState: CallbackPending}
+	service := &fakeRunnerService{job: job}
+	loggerSink := &terminalPhaseSink{err: errors.New("logger permanently unavailable"), bestEffort: true}
+	repositorySink := &terminalPhaseSink{}
+	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "local-runner", Environment: "test"}, observability.Runtime{}, observability.NewCompositeSink(loggerSink, repositorySink), 8)
+	handler := NewHandler(service, &fakeNodeResultSink{}).WithObservability(emitter)
+	identity := JobMutationIdentity{UserID: "user-1", RunnerID: "runner-1"}
+	handler.deliverTerminalObservability(context.Background(), identity, job)
+	handler.deliverTerminalObservability(context.Background(), identity, job)
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if job.ObservabilityCallbackState != CallbackDelivered || loggerSink.calls != 1 || repositorySink.calls != 1 {
+		t.Fatalf("state=%s loggerCalls=%d repositoryCalls=%d", job.ObservabilityCallbackState, loggerSink.calls, repositorySink.calls)
+	}
+}
+
+func TestDurableTerminalRetriesRepositoryFailureDespiteBestEffortLogger(t *testing.T) {
+	completed := time.Now().UTC()
+	job := &LocalJob{ID: "local_job_repo_retry", UserID: "user-1", TaskID: "task-1", NodeID: "node-1", Status: JobFailed, Attempt: 1, CreatedAt: completed.Add(-time.Second), UpdatedAt: completed, CompletedAt: &completed, ObservabilityCallbackState: CallbackPending}
+	service := &fakeRunnerService{job: job}
+	loggerSink := &terminalPhaseSink{err: errors.New("logger permanently unavailable"), bestEffort: true}
+	repositoryErr := errors.New("repository unavailable")
+	repositorySink := &terminalPhaseSink{err: repositoryErr}
+	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "local-runner", Environment: "test"}, observability.Runtime{}, observability.NewCompositeSink(loggerSink, repositorySink), 8)
+	handler := NewHandler(service, &fakeNodeResultSink{}).WithObservability(emitter)
+	identity := JobMutationIdentity{UserID: "user-1", RunnerID: "runner-1"}
+	handler.deliverTerminalObservability(context.Background(), identity, job)
+	if job.ObservabilityCallbackState != CallbackPending {
+		t.Fatalf("repository failure state=%s", job.ObservabilityCallbackState)
+	}
+	repositorySink.err = nil
+	handler.deliverTerminalObservability(context.Background(), identity, job)
+	if err := emitter.Close(context.Background()); !errors.Is(err, repositoryErr) {
+		t.Fatalf("close error=%v, want recorded repository failure", err)
+	}
+	if job.ObservabilityCallbackState != CallbackDelivered || loggerSink.calls != 2 || repositorySink.calls != 2 {
+		t.Fatalf("state=%s loggerCalls=%d repositoryCalls=%d", job.ObservabilityCallbackState, loggerSink.calls, repositorySink.calls)
+	}
+}
+
 type rejectOnceLocalEmitter struct {
 	calls  int
 	events []observability.Event

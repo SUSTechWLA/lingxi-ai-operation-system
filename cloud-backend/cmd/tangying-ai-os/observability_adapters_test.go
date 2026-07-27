@@ -31,24 +31,20 @@ func (r adapterResolver) FindRunIDByTaskID(context.Context, string) (string, err
 	return r.runID, r.err
 }
 
-func TestDecisionLogAdapterRejectsAgentRunIDAndUsesResolvedWorkflowRun(t *testing.T) {
+func TestDecisionLogAdapterForwardsClaimedIdentityToInvariantStore(t *testing.T) {
 	store := &adapterDecisionStore{}
-	adapter := &decisionLogAdapter{store: store, resolver: adapterResolver{runID: "wfr-real"}}
-	err := adapter.Save(context.Background(), &agentruntime.DecisionLogRecord{TaskID: "task-1", WorkflowRunID: "agent_run_false"})
-	if err == nil || store.saved != nil {
-		t.Fatalf("err=%v saved=%v", err, store.saved)
-	}
-	if err := adapter.Save(context.Background(), &agentruntime.DecisionLogRecord{TaskID: "task-1"}); err != nil {
+	adapter := &decisionLogAdapter{store: store}
+	if err := adapter.Save(context.Background(), &agentruntime.DecisionLogRecord{TaskID: "task-1", WorkflowRunID: "wfr-claimed"}); err != nil {
 		t.Fatal(err)
 	}
-	if store.saved.WorkflowRunID != "wfr-real" {
+	if store.saved.WorkflowRunID != "wfr-claimed" {
 		t.Fatalf("workflowRunID=%q", store.saved.WorkflowRunID)
 	}
 }
 
 func TestDecisionLogAdapterRejectsNonemptyRunWithoutTask(t *testing.T) {
 	store := &adapterDecisionStore{}
-	err := (&decisionLogAdapter{store: store, resolver: adapterResolver{runID: "wfr-real"}}).Save(context.Background(), &agentruntime.DecisionLogRecord{WorkflowRunID: "agent_run_false"})
+	err := (&decisionLogAdapter{store: store}).Save(context.Background(), &agentruntime.DecisionLogRecord{WorkflowRunID: "agent_run_false"})
 	if err == nil || store.saved != nil {
 		t.Fatalf("err=%v saved=%v", err, store.saved)
 	}

@@ -15,6 +15,8 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type workerEventSink struct {
@@ -89,6 +91,30 @@ func TestExecuteNodeEmitsPairedToolLifecycleWithoutArguments(t *testing.T) {
 	}
 	if strings.Contains(string(wire), privateArgument) {
 		t.Fatalf("private tool arguments leaked into events: %s", wire)
+	}
+}
+
+func TestWorkerFailureZapUsesStableFingerprintNotRawErrorHash(t *testing.T) {
+	const sentinel = "PRIVATE_TOOL_PROVIDER_BODY_SENTINEL"
+	core, logs := observer.New(zap.InfoLevel)
+	restore := zap.ReplaceGlobals(zap.New(core))
+	defer restore()
+	registry := tool.NewToolRegistry()
+	registry.Register(&contractExecutableTool{name: "failure_tool", result: tool.FailureResult(sentinel)})
+	nodeExecutor := NewNodeExecutor(registry, &recordingEventPublisher{}, config.WorkerConfig{}, nil, nil, newFakeNodeRepo())
+	nodeExecutor.ExecuteNode(context.Background(), eventbus.Event{TaskID: "task-1", NodeID: "node-1", Type: string(model.NodeTypeTool), Payload: map[string]interface{}{"tool": "failure_tool"}})
+	want := observability.NormalizeError("TOOL.EXECUTION.FAILED", nil, "worker-tool-executor", "").Fingerprint
+	entries := logs.FilterMessage("Node execution failed").All()
+	if len(entries) != 1 {
+		t.Fatalf("failure logs=%+v", logs.All())
+	}
+	fields := entries[0].ContextMap()
+	if fields["errorFingerprint"] != want || fields["errorFingerprint"] == observability.HashText(sentinel) {
+		t.Fatalf("fields=%+v want fingerprint=%s", fields, want)
+	}
+	wire, _ := json.Marshal(logs.All())
+	if strings.Contains(string(wire), sentinel) {
+		t.Fatalf("private worker error leaked to Zap: %s", wire)
 	}
 }
 

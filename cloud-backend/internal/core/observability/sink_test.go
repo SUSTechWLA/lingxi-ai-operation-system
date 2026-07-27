@@ -15,6 +15,10 @@ type ownerCapturingSink struct {
 	err    error
 }
 
+type bestEffortCapturingSink struct{ ownerCapturingSink }
+
+func (*bestEffortCapturingSink) BestEffort() bool { return true }
+
 func (s *ownerCapturingSink) Write(ctx context.Context, event Event) error {
 	owner, _ := trustedcontext.UserID(ctx)
 	s.owners = append(s.owners, owner)
@@ -56,6 +60,33 @@ func TestCompositeSinkAttemptsEverySinkAndJoinsErrors(t *testing.T) {
 	}
 	if !errors.Is(err, a.err) || !errors.Is(err, b.err) {
 		t.Fatalf("joined error=%v", err)
+	}
+}
+
+func TestCompositeSinkIgnoresAndCountsBestEffortFailureButReturnsRequiredFailure(t *testing.T) {
+	bestEffort := &bestEffortCapturingSink{ownerCapturingSink: ownerCapturingSink{err: errors.New("logger permanently unavailable")}}
+	required := &ownerCapturingSink{}
+	composite := NewCompositeSink(bestEffort, required)
+	event := validEvent()
+	if err := composite.Write(context.Background(), event); err != nil {
+		t.Fatalf("best-effort failure escaped: %v", err)
+	}
+	if len(bestEffort.events) != 1 || len(required.events) != 1 {
+		t.Fatalf("writes bestEffort=%d required=%d", len(bestEffort.events), len(required.events))
+	}
+	counter, ok := composite.(interface{ BestEffortFailures() uint64 })
+	if !ok {
+		t.Fatal("composite does not expose best-effort failure count")
+	}
+	if counter.BestEffortFailures() != 1 {
+		t.Fatalf("best-effort failure count=%d", counter.BestEffortFailures())
+	}
+	required.err = errors.New("repository unavailable")
+	if err := composite.Write(context.Background(), event); !errors.Is(err, required.err) {
+		t.Fatalf("required failure=%v", err)
+	}
+	if len(bestEffort.events) != 2 || len(required.events) != 2 {
+		t.Fatalf("all sinks not invoked bestEffort=%d required=%d", len(bestEffort.events), len(required.events))
 	}
 }
 

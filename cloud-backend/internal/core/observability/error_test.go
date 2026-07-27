@@ -73,6 +73,7 @@ func TestNormalizeErrorSupportsEveryApprovedCode(t *testing.T) {
 		{"AGENT.PLAN.GENERATION_FAILED", ErrorClassExecution, true, "error.agent.plan.generation.failed", "action.agent.retry.plan"},
 		{"AGENT.PLAN.COMPILATION_FAILED", ErrorClassExecution, false, "error.agent.plan.compilation.failed", "action.agent.review.plan"},
 		{"AGENT.DAG.SUBMISSION_FAILED", ErrorClassConnection, true, "error.agent.dag.submission.failed", "action.agent.retry.submission"},
+		{"AGENT.RUN.TIMEOUT", ErrorClassTimeout, true, "error.agent.run.timeout", "action.agent.retry.run"},
 		{"AGENT.RUNTIME.INTERNAL_FAILURE", ErrorClassExecution, false, "error.agent.runtime.internal.failure", "action.agent.retry.run"},
 		{"LLM.PROVIDER.RATE_LIMITED", ErrorClassProvider, true, "error.llm.provider.rate.limited", "action.llm.retry.later"},
 		{"LLM.RESPONSE.SCHEMA_INVALID", ErrorClassValidation, true, "error.llm.response.schema.invalid", "action.llm.retry"},

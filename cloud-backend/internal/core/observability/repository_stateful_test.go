@@ -45,6 +45,29 @@ func TestRepositoryTreatsProducerSequenceAsTransportMetadataForIdempotency(t *te
 	}
 }
 
+func TestRepositoryPersistsOwnerScopedTranslatorBootstrapWithoutSummary(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	db := newStatefulRelayDB(func() time.Time { return now })
+	repo := newRepositoryWithRelayDBAndClock(db, func() time.Time { return now })
+	event := validEvent()
+	event.EventID = "evt_translator_bootstrap"
+	event.OccurredAt = now
+	event.Source.Component = "translator"
+	event.EventType = EventTypeLLMCallStarted
+	event.MessageKey = "llm.call.started"
+	event.Correlation = Correlation{TraceID: "trc_bootstrap", SpanID: "spn_bootstrap", StageID: "translator-llm-dag"}
+	if err := repo.SaveSummary(context.Background(), "user_a", event); err != nil {
+		t.Fatal(err)
+	}
+	row := db.outbox[event.EventID]
+	if row == nil || row.userID != "user_a" || row.runID != "" {
+		t.Fatalf("outbox row=%+v", row)
+	}
+	if db.summaryWrites != 0 || len(db.summaries) != 0 {
+		t.Fatalf("bootstrap invented summary writes=%d summaries=%+v", db.summaryWrites, db.summaries)
+	}
+}
+
 type statefulOutboxRow struct {
 	userID, runID, traceID string
 	eventID                string

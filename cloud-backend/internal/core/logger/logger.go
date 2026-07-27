@@ -90,3 +90,8 @@ func (s *EventSink) Close(ctx context.Context) error {
 		return s.logger.Sync()
 	}
 }
+
+// BestEffort marks structured logging as secondary to the durable repository
+// sink. Composite delivery still invokes and counts logger failures, but a
+// logger outage must not prevent repository acknowledgement.
+func (*EventSink) BestEffort() bool { return true }

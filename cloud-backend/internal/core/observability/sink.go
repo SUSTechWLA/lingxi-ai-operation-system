@@ -9,7 +9,14 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 )
 
-type compositeSink struct{ sinks []Sink }
+type compositeSink struct {
+	sinks              []Sink
+	bestEffortFailures atomic.Uint64
+}
+
+type bestEffortSink interface {
+	BestEffort() bool
+}
 
 func NewCompositeSink(sinks ...Sink) Sink {
 	filtered := make([]Sink, 0, len(sinks))
@@ -33,6 +40,10 @@ func (s *compositeSink) Write(ctx context.Context, event Event) error {
 	var errs []error
 	for _, sink := range s.sinks {
 		if err := sink.Write(ctx, event); err != nil {
+			if policy, ok := sink.(bestEffortSink); ok && policy.BestEffort() {
+				s.bestEffortFailures.Add(1)
+				continue
+			}
 			errs = append(errs, err)
 		}
 	}
@@ -42,11 +53,16 @@ func (s *compositeSink) Close(ctx context.Context) error {
 	var errs []error
 	for _, sink := range s.sinks {
 		if err := sink.Close(ctx); err != nil {
+			if policy, ok := sink.(bestEffortSink); ok && policy.BestEffort() {
+				s.bestEffortFailures.Add(1)
+				continue
+			}
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
 }
+func (s *compositeSink) BestEffortFailures() uint64 { return s.bestEffortFailures.Load() }
 
 type summaryRepository interface {
 	SaveSummary(context.Context, string, Event) error

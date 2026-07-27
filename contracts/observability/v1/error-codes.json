@@ -8,6 +8,7 @@
   { "code": "AGENT.PLAN.GENERATION_FAILED", "class": "EXECUTION", "retryable": true, "userMessageKey": "error.agent.plan.generation.failed", "suggestedActionKey": "action.agent.retry.plan" },
   { "code": "AGENT.PLAN.COMPILATION_FAILED", "class": "EXECUTION", "retryable": false, "userMessageKey": "error.agent.plan.compilation.failed", "suggestedActionKey": "action.agent.review.plan" },
   { "code": "AGENT.DAG.SUBMISSION_FAILED", "class": "CONNECTION", "retryable": true, "userMessageKey": "error.agent.dag.submission.failed", "suggestedActionKey": "action.agent.retry.submission" },
+  { "code": "AGENT.RUN.TIMEOUT", "class": "TIMEOUT", "retryable": true, "userMessageKey": "error.agent.run.timeout", "suggestedActionKey": "action.agent.retry.run" },
   { "code": "AGENT.RUNTIME.INTERNAL_FAILURE", "class": "EXECUTION", "retryable": false, "userMessageKey": "error.agent.runtime.internal.failure", "suggestedActionKey": "action.agent.retry.run" },
   { "code": "LLM.PROVIDER.RATE_LIMITED", "class": "PROVIDER", "retryable": true, "userMessageKey": "error.llm.provider.rate.limited", "suggestedActionKey": "action.llm.retry.later" },
   { "code": "LLM.RESPONSE.SCHEMA_INVALID", "class": "VALIDATION", "retryable": true, "userMessageKey": "error.llm.response.schema.invalid", "suggestedActionKey": "action.llm.retry" },

@@ -15,6 +15,7 @@ const approvedCodes = [
   'AGENT.PLAN.GENERATION_FAILED',
   'AGENT.PLAN.COMPILATION_FAILED',
   'AGENT.DAG.SUBMISSION_FAILED',
+  'AGENT.RUN.TIMEOUT',
   'AGENT.RUNTIME.INTERNAL_FAILURE',
   'LLM.PROVIDER.RATE_LIMITED',
   'LLM.RESPONSE.SCHEMA_INVALID',
@@ -125,6 +126,15 @@ assert.deepEqual(validateEvent(fixture), [], 'fixture does not satisfy the event
 validateRegistry(errors)
 assert.deepEqual(errors.map((item) => item.code), approvedCodes, 'error registry must exactly match the approved v1 codes')
 assert.equal(new Set(errors.map((item) => item.code)).size, errors.length)
+const schemaErrorCodes = schema.$defs.error.properties.code.enum
+assert.ok(Array.isArray(schemaErrorCodes), 'error.code must be a closed enum')
+assert.deepEqual(schemaErrorCodes, errors.map((item) => item.code), 'schema error codes and registry must be byte-order identical')
+assert.equal(new Set(schemaErrorCodes).size, schemaErrorCodes.length, 'schema error codes must not contain duplicates')
+for (const code of schemaErrorCodes) {
+  const knownCodeEvent = structuredClone(fixture)
+  knownCodeEvent.error.code = code
+  assert.deepEqual(validate(knownCodeEvent, schema), [], `known schema error code ${code} was rejected`)
+}
 const fixtureCode = errors.find((item) => item.code === fixture.error.code)
 assert.ok(fixtureCode, 'fixture error code is not in the registry')
 assert.deepEqual(
@@ -166,6 +176,7 @@ assertInvalidEvent('raw developer detail', unsafeDeveloperDetail)
 const unregisteredErrorCode = structuredClone(fixture)
 unregisteredErrorCode.error.code = 'RENDER.FFMPEG.UNKNOWN'
 assertInvalidEvent('unregistered error code', unregisteredErrorCode)
+assert.notDeepEqual(validate(unregisteredErrorCode, schema), [], 'JSON Schema alone accepted an unknown error code')
 
 const missingStructuredError = structuredClone(fixture)
 missingStructuredError.error = null

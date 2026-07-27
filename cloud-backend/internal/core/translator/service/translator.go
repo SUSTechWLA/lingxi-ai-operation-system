@@ -145,7 +145,12 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (res
 		var err error
 		toolsDesc, err = s.toolManifestSvc.FormatForPrompt(ctx)
 		if err != nil {
-			zap.L().Warn("Failed to query tool manifests for translator, using fallback", zap.Error(err))
+			diagnostic := observability.NormalizeError("LLM.TRANSPORT.UNAVAILABLE", nil, "translator", "")
+			zap.L().Warn("Failed to query tool manifests for translator, using fallback",
+				zap.String("errorCode", diagnostic.Code),
+				zap.String("errorClass", string(diagnostic.Class)),
+				zap.String("errorFingerprint", diagnostic.Fingerprint),
+			)
 		}
 	}
 	if toolsDesc == "" {

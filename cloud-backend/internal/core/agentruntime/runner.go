@@ -221,7 +221,7 @@ func (r *Runner) StartAsync(ctx context.Context, req StartRunRequest) (*Run, err
 			return nil, ErrIdempotencyConflict
 		}
 		if deliverErr := r.DeliverPendingTerminalEventsOnce(ctx, 1); deliverErr != nil {
-			zap.L().Warn("existing agent run terminal reconciliation failed", zap.String("runId", run.ID), zap.Error(deliverErr))
+			zap.L().Warn("existing agent run terminal reconciliation failed", append([]zap.Field{zap.String("runId", run.ID)}, stableAgentDiagnosticFields("AGENT.RUNTIME.INTERNAL_FAILURE")...)...)
 		}
 		return existing, nil
 	}
@@ -377,15 +377,9 @@ func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run, ownerU
 			Context: sanitizedRunContext(req.Context), Error: err.Error(),
 		}
 		if saveErr := r.persistAndDeliverTerminal(context.Background(), &failed, event); saveErr != nil {
-			zap.L().Warn("failed to persist or deliver async agent run failure",
-				zap.String("runId", run.ID),
-				zap.Error(saveErr),
-			)
+			zap.L().Warn("failed to persist or deliver async agent run failure", append([]zap.Field{zap.String("runId", run.ID)}, stableAgentDiagnosticFields("AGENT.RUNTIME.INTERNAL_FAILURE")...)...)
 		}
-		zap.L().Warn("async agent run start failed",
-			zap.String("runId", run.ID),
-			zap.Error(err),
-		)
+		zap.L().Warn("async agent run start failed", append([]zap.Field{zap.String("runId", run.ID)}, stableAgentDiagnosticFields(agentErrorCode(err))...)...)
 	}
 }
 
@@ -430,7 +424,11 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 				messageKey = "agent.run.failed"
 				status = observability.ExecutionStatusFailed
 				severity = observability.SeverityError
-				eventErr = observability.NormalizeError(agentErrorCode(retErr), retErr, "agent-runtime", "")
+				code := agentErrorCode(retErr)
+				if errors.Is(retErr, context.DeadlineExceeded) {
+					code = "AGENT.RUN.TIMEOUT"
+				}
+				eventErr = observability.NormalizeError(code, retErr, "agent-runtime", "")
 			}
 		}
 		r.emitLifecycle(ctx, eventType, messageKey, status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
@@ -488,7 +486,7 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 		correctionCorrelation := correlation
 		correctionCorrelation.StageID = "agent-plan-correction"
 		var repaired *AgentPlan
-		repairErr := r.observeAgentBoundary(ctx, correctionCorrelation, agentBoundarySpec{started: observability.EventTypeCorrectOperationStarted, completed: observability.EventTypeCorrectOperationCompleted, failed: observability.EventTypeCorrectOperationFailed, cancelled: observability.EventTypeCorrectOperationFailed, startKey: "correct.operation.started", completeKey: "correct.operation.completed", failKey: "correct.operation.failed", cancelKey: "correct.operation.cancelled", errorCode: "AGENT.PLAN.VALIDATION_FAILED", component: "agent-plan-correction"}, func() error {
+		repairErr := r.observeAgentBoundary(ctx, correctionCorrelation, agentBoundarySpec{started: observability.EventTypeCorrectOperationStarted, completed: observability.EventTypeCorrectOperationCompleted, failed: observability.EventTypeCorrectOperationFailed, cancelled: observability.EventTypeWorkflowStageCancelled, startKey: "correct.operation.started", completeKey: "correct.operation.completed", failKey: "correct.operation.failed", cancelKey: "correct.operation.cancelled", errorCode: "AGENT.PLAN.VALIDATION_FAILED", component: "agent-plan-correction"}, func() error {
 			var err error
 			repaired, err = repair()
 			if err != nil {
@@ -516,7 +514,7 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 		return nil, fmt.Errorf("guard agent plan: %w", err)
 	}
 	agentToolTrace := buildAgentToolTrace(plan, GuardDecisionTrace{Passed: true})
-	logAgentToolTrace(req, plan, agentToolTrace)
+	logAgentToolTrace(plan, agentToolTrace)
 	judgeReport := PlanJudgeReport{Passed: true}
 	if r.planJudge != nil {
 		judgeCorrelation := correlation
@@ -669,6 +667,9 @@ func classifyAgentError(code string, err error) error {
 	return &classifiedAgentError{code: code, err: err}
 }
 func agentErrorCode(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "AGENT.RUN.TIMEOUT"
+	}
 	var classified *classifiedAgentError
 	if errors.As(err, &classified) && classified.code != "" {
 		return classified.code
@@ -690,7 +691,10 @@ func (r *Runner) observeAgentBoundary(ctx context.Context, correlation observabi
 			panic(recovered)
 		}
 		if retErr != nil {
-			if errors.Is(retErr, context.Canceled) || errors.Is(retErr, context.DeadlineExceeded) {
+			if errors.Is(retErr, context.DeadlineExceeded) {
+				eventType, key, status, severity = spec.failed, spec.failKey, observability.ExecutionStatusFailed, observability.SeverityError
+				eventErr = observability.NormalizeError("WORKFLOW.STAGE.TIMEOUT", retErr, spec.component, "")
+			} else if errors.Is(retErr, errRunCancelled) || errors.Is(retErr, context.Canceled) {
 				eventType, key, status, severity = spec.cancelled, spec.cancelKey, observability.ExecutionStatusCancelled, observability.SeverityWarn
 			} else {
 				eventType, key, status, severity = spec.failed, spec.failKey, observability.ExecutionStatusFailed, observability.SeverityError
@@ -969,18 +973,64 @@ func isSensitiveModelProviderContextKey(key string) bool {
 	return normalized == "modelprovider" || normalized == "modelproviders"
 }
 
-func logAgentToolTrace(req StartRunRequest, plan *AgentPlan, trace map[string]interface{}) {
+func logAgentToolTrace(plan *AgentPlan, trace map[string]interface{}) {
 	planned, _ := trace["plannedTools"].([]string)
 	candidates, _ := trace["candidateTools"].([]ToolCandidateTrace)
 	knowledgeInfo, _ := trace["knowledgeContext"].(map[string]interface{})
+	candidateNames := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidateNames = append(candidateNames, candidate.Name)
+	}
+	itemCount, _ := knowledgeInfo["itemCount"].(int)
+	sourceCount, _ := knowledgeInfo["sourceCount"].(int)
 	zap.L().Info("agent runtime tool trace",
-		zap.String("domain", plan.Domain),
+		zap.String("domainHash", observability.HashText(plan.Domain)),
 		zap.Int("candidateToolCount", len(candidates)),
-		zap.Strings("plannedTools", planned),
-		zap.Any("candidateTools", candidates),
-		zap.Any("knowledgeContext", knowledgeInfo),
+		zap.Strings("plannedTools", boundedSafeToolNames(planned)),
+		zap.Strings("candidateToolNames", boundedSafeToolNames(candidateNames)),
+		zap.Int("knowledgeItemCount", itemCount),
+		zap.Int("knowledgeSourceCount", sourceCount),
 		zap.Bool("guardPassed", true),
 	)
+}
+
+const maxLoggedToolNames = 64
+
+func boundedSafeToolNames(names []string) []string {
+	out := make([]string, 0, min(len(names), maxLoggedToolNames))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || len(name) > 128 || !safeToolLogName(name) {
+			continue
+		}
+		out = append(out, name)
+		if len(out) == maxLoggedToolNames {
+			break
+		}
+	}
+	return out
+}
+
+func safeToolLogName(name string) bool {
+	for _, char := range name {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || strings.ContainsRune("_.:-/", char) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func stableAgentDiagnosticFields(code string) []zap.Field {
+	diagnostic := observability.NormalizeError(code, nil, "agent-runtime", "")
+	if diagnostic == nil {
+		diagnostic = observability.NormalizeError("AGENT.RUNTIME.INTERNAL_FAILURE", nil, "agent-runtime", "")
+	}
+	return []zap.Field{
+		zap.String("errorCode", diagnostic.Code),
+		zap.String("errorClass", string(diagnostic.Class)),
+		zap.String("errorFingerprint", diagnostic.Fingerprint),
+	}
 }
 
 func buildAgentToolTrace(plan *AgentPlan, guard GuardDecisionTrace) map[string]interface{} {
@@ -1182,7 +1232,7 @@ func (r *Runner) RunTerminalDelivery(ctx context.Context, interval time.Duration
 			return
 		case <-ticker.C:
 			if err := r.DeliverPendingTerminalEventsOnce(ctx, batchSize); err != nil {
-				zap.L().Warn("agent terminal event retry failed", zap.Error(err))
+				zap.L().Warn("agent terminal event retry failed", stableAgentDiagnosticFields("AGENT.RUNTIME.INTERNAL_FAILURE")...)
 			}
 		}
 	}
