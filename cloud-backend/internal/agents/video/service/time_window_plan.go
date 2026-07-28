@@ -4,9 +4,135 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
 )
+
+// NormalizeNarrationForComparison removes presentation-only whitespace while
+// preserving authored words and punctuation. It is intentionally exported so
+// every pipeline boundary can apply the same coverage rule.
+func NormalizeNarrationForComparison(text string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(text))
+}
+
+// ValidateCanonicalTimeWindowPlan proves that a talking-head Shot sequence is
+// a lossless partition of the audio master. Downstream tools may enrich these
+// windows, but they must never invent their own narration or timing.
+func ValidateCanonicalTimeWindowPlan(master model.AudioMasterTimeline, plan model.TimeWindowPlan) []ValidationIssue {
+	issues := make([]ValidationIssue, 0)
+	if master.Revision == "" || master.DurationMs <= 0 {
+		return append(issues, ValidationIssue{
+			Code: "audio_master_invalid", Field: "audioMaster", Severity: "error",
+			Message: "canonical shot validation requires a revisioned audio master with positive duration",
+		})
+	}
+	if plan.TimelineRevision != master.Revision {
+		issues = append(issues, ValidationIssue{
+			Code: "shot_timeline_revision_mismatch", Field: "timelineRevision", Severity: "error",
+			Message: fmt.Sprintf("time-window revision %q does not match audio master %q", plan.TimelineRevision, master.Revision),
+		})
+	}
+	if len(plan.Windows) == 0 {
+		return append(issues, ValidationIssue{
+			Code: "shot_timeline_empty", Field: "windows", Severity: "error",
+			Message: "canonical shot timeline must contain at least one window",
+		})
+	}
+
+	windowRanges := make([][2]int64, 0, len(plan.Windows))
+	windowNarration := strings.Builder{}
+	var previousEnd int64
+	for index, window := range plan.Windows {
+		startMs := window.StartMs
+		endMs := window.EndMs
+		if startMs == 0 && window.StartSec != 0 {
+			startMs = MillisecondsFromSeconds(window.StartSec)
+		}
+		if endMs == 0 && window.EndSec != 0 {
+			endMs = MillisecondsFromSeconds(window.EndSec)
+		}
+		if endMs <= startMs && window.DurationMs > 0 {
+			endMs = startMs + window.DurationMs
+		}
+		if endMs <= startMs && window.DurationSec > 0 {
+			endMs = startMs + MillisecondsFromSeconds(window.DurationSec)
+		}
+		if index == 0 && startMs != 0 {
+			issues = append(issues, ValidationIssue{
+				Code: "shot_timeline_gap", Field: "windows", Severity: "error",
+				Message: fmt.Sprintf("first shot starts at %d ms instead of 0", startMs),
+			})
+		}
+		if index > 0 && startMs > previousEnd {
+			issues = append(issues, ValidationIssue{
+				Code: "shot_timeline_gap", Field: "windows", Severity: "error",
+				Message: fmt.Sprintf("gap before %s: previous end %d ms, start %d ms", window.ShotID, previousEnd, startMs),
+			})
+		}
+		if index > 0 && startMs < previousEnd {
+			issues = append(issues, ValidationIssue{
+				Code: "shot_timeline_overlap", Field: "windows", Severity: "error",
+				Message: fmt.Sprintf("overlap before %s: previous end %d ms, start %d ms", window.ShotID, previousEnd, startMs),
+			})
+		}
+		if startMs < 0 || endMs <= startMs || endMs > master.DurationMs {
+			issues = append(issues, ValidationIssue{
+				Code: "shot_timeline_window_invalid", Field: "windows", Severity: "error",
+				Message: fmt.Sprintf("shot %s range [%d,%d) is outside audio master duration %d", window.ShotID, startMs, endMs, master.DurationMs),
+			})
+		}
+		if window.TimelineRevision != "" && window.TimelineRevision != master.Revision {
+			issues = append(issues, ValidationIssue{
+				Code: "shot_timeline_revision_mismatch", Field: "windows", Severity: "error",
+				Message: fmt.Sprintf("shot %s uses timeline revision %q instead of %q", window.ShotID, window.TimelineRevision, master.Revision),
+			})
+		}
+		windowRanges = append(windowRanges, [2]int64{startMs, endMs})
+		windowNarration.WriteString(window.ScriptText)
+		previousEnd = endMs
+	}
+	if previousEnd < master.DurationMs {
+		issues = append(issues, ValidationIssue{
+			Code: "shot_timeline_gap", Field: "windows", Severity: "error",
+			Message: fmt.Sprintf("shot timeline ends at %d ms before audio master duration %d", previousEnd, master.DurationMs),
+		})
+	} else if previousEnd > master.DurationMs {
+		issues = append(issues, ValidationIssue{
+			Code: "shot_timeline_window_invalid", Field: "windows", Severity: "error",
+			Message: fmt.Sprintf("shot timeline ends at %d ms after audio master duration %d", previousEnd, master.DurationMs),
+		})
+	}
+
+	expectedNarration := strings.Builder{}
+	for _, cue := range master.Sentences {
+		expectedNarration.WriteString(cue.Text)
+		coverage := 0
+		for _, windowRange := range windowRanges {
+			if cue.StartMs >= windowRange[0] && cue.EndMs <= windowRange[1] {
+				coverage++
+			}
+		}
+		if coverage != 1 {
+			issues = append(issues, ValidationIssue{
+				Code: "shot_narration_cue_coverage_invalid", Field: "windows", Severity: "error",
+				Message: fmt.Sprintf("audio cue %s is covered by %d shot windows, want exactly one", cue.ID, coverage),
+			})
+		}
+	}
+	if NormalizeNarrationForComparison(windowNarration.String()) != NormalizeNarrationForComparison(expectedNarration.String()) {
+		issues = append(issues, ValidationIssue{
+			Code: "shot_narration_coverage_mismatch", Field: "windows.scriptText", Severity: "error",
+			Message: "concatenated shot narration does not equal the canonical audio-master narration",
+		})
+	}
+	return issues
+}
 
 const (
 	minAIGCWindowDurationSec    = 3.0
