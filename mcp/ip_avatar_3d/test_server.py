@@ -82,6 +82,23 @@ def test_wav_bytes(*, sample_rate: int = 48000, channels: int = 1) -> bytes:
 
 
 class IPAvatar3DMCPTests(unittest.TestCase):
+    def test_synthesize_reference_voice_delegates_to_shared_service(self) -> None:
+        server = load_server()
+        expected = {
+            "schemaVersion": "tangying-reference-voice-result/v1",
+            "status": "ready",
+            "success": True,
+        }
+        with mock.patch.object(server, "synthesize_reference_voice_service", return_value=expected) as service:
+            result = server.synthesize_reference_voice(
+                text="测试口播",
+                outputDir="/tmp/project-output",
+                characterProfilePath="/tmp/profile.json",
+            )
+        self.assertEqual(result, expected)
+        self.assertEqual(service.call_args.kwargs["text"], "测试口播")
+        self.assertEqual(service.call_args.kwargs["output_dir"], "/tmp/project-output")
+
     def test_packaged_macos_runtime_checks_absolute_media_tool_paths(self) -> None:
         server = load_server()
         with mock.patch.object(server, "_tool_path", return_value="/opt/homebrew/bin/ffmpeg") as tool_path:

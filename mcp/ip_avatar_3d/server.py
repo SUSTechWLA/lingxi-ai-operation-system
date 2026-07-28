@@ -31,6 +31,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from rig_semantics import has_presenter_controls, resolve_bone_roles
 from master_asset import MASTER_COLLECTION, MASTER_VERSION
 from gpt_sovits_client import GPTSoVITSClient
+from reference_voice import synthesize_reference_voice_service
 import aroll_actions
 from voice_policy import (
     PRODUCTION_PROVIDERS,
@@ -2154,6 +2155,40 @@ def check_gpt_sovits_voice(characterProfilePath: str) -> dict[str, Any]:
         "provider": provider,
         "voice": provenance,
     }
+
+
+@mcp.tool()
+def synthesize_reference_voice(
+    text: str,
+    outputDir: str,
+    mode: str = "default_ip",
+    characterProfilePath: str = "",
+    provider: str = "gpt_sovits_local",
+    voiceId: str = "",
+    referenceAudioPath: str = "",
+    referenceText: str = "",
+    referenceTextVerified: bool = False,
+    usageRightsConfirmed: bool = False,
+    language: str = "zh",
+    speed: float = 1.0,
+    expectedReferenceAudioSha256: str = "",
+) -> dict[str, Any]:
+    """Synthesize a verified GPT-SoVITS production narration master."""
+    return synthesize_reference_voice_service(
+        text=text,
+        output_dir=outputDir,
+        mode=mode,
+        character_profile_path=characterProfilePath,
+        provider=provider,
+        voice_id=voiceId,
+        reference_audio_path=referenceAudioPath,
+        reference_text=referenceText,
+        reference_text_verified=referenceTextVerified,
+        usage_rights_confirmed=usageRightsConfirmed,
+        language=language,
+        speed=speed,
+        expected_reference_audio_sha256=expectedReferenceAudioSha256,
+    )
 
 
 @mcp.tool()
