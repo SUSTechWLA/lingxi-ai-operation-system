@@ -86,6 +86,33 @@ export function projectCreatorReviewArtifacts(
     })
 }
 
+export function currentCreatorReviewArtifacts(
+  artifacts: readonly CreatorArtifactDescriptor[],
+): CreatorReviewArtifact[] {
+  return projectCreatorReviewArtifacts(artifacts).filter(artifact => artifact.isCurrent)
+}
+
+export function shouldShowCreatorArtifactSwitcher(
+  artifacts: readonly CreatorReviewArtifact[],
+): boolean {
+  return artifacts.length > 1
+}
+
+export type CreatorArtifactTabNavigationKey = 'ArrowLeft' | 'ArrowRight' | 'Home' | 'End'
+
+export function nextCreatorArtifactTabIndex(
+  currentIndex: number,
+  key: CreatorArtifactTabNavigationKey,
+  itemCount: number,
+): number {
+  if (itemCount <= 0) return -1
+  const safeIndex = Math.min(Math.max(0, currentIndex), itemCount - 1)
+  if (key === 'Home') return 0
+  if (key === 'End') return itemCount - 1
+  if (key === 'ArrowRight') return (safeIndex + 1) % itemCount
+  return (safeIndex - 1 + itemCount) % itemCount
+}
+
 export function selectCreatorReviewArtifact(
   artifacts: readonly CreatorReviewArtifact[],
   explicitArtifactId?: string,

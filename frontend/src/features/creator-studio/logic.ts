@@ -38,6 +38,14 @@ export const CREATOR_WORKSPACE_STEP_IDS: readonly CreatorStepId[] = [
   'requirements', 'direction', 'script', 'shots', 'preview', 'delivery',
 ]
 
+export function creatorProgressSteps(steps: readonly CreatorStep[]): CreatorStep[] {
+  const stepById = new Map(steps.map(step => [step.id, step]))
+  return CREATOR_WORKSPACE_STEP_IDS.flatMap(stepId => {
+    const step = stepById.get(stepId)
+    return step ? [step] : []
+  })
+}
+
 export function creatorProjectProgress(
   projectStatus: string,
   view?: Pick<CreationView, 'steps'>,

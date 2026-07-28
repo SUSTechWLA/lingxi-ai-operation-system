@@ -358,6 +358,42 @@ try {
   assert.equal(projectedReviewArtifacts[0].reviewCategory, 'text')
   assert.equal(projectedReviewArtifacts[0].reviewLabel, '文字内容', 'kind-only text artifacts use the closed generic label')
   assert.equal(projectedReviewArtifacts[0].shotLabel, 'SHOT_02')
+  const currentReviewArtifacts = reviewArtifacts.currentCreatorReviewArtifacts([
+    { artifactId: 'script-v1', kind: 'VIDEO_SCRIPT', name: 'script-v1.json', version: 1, isCurrent: false, isStale: true },
+    { artifactId: 'script-v2', kind: 'VIDEO_SCRIPT', name: 'script-v2.json', version: 2, isCurrent: false, isStale: true },
+    { artifactId: 'script-v3', kind: 'VIDEO_SCRIPT', name: 'script-v3.json', version: 3, isCurrent: true, isStale: false },
+    { artifactId: 'shot-01-current', kind: 'SHOT_VIDEO_CLIP', name: 'shot-01.mp4', relatedShotId: 'SHOT_01', version: 4, isCurrent: true, isStale: false },
+    { artifactId: 'shot-02-current-stale', kind: 'SHOT_VIDEO_CLIP', name: 'shot-02.mp4', relatedShotId: 'SHOT_02', version: 5, isCurrent: true, isStale: true },
+  ])
+  assert.deepEqual(
+    currentReviewArtifacts.map(item => item.artifactId),
+    ['shot-01-current', 'script-v3', 'shot-02-current-stale'],
+    'creator-facing content shows only the latest current result for each generated output, including a current result that needs updating',
+  )
+  assert.equal(
+    currentReviewArtifacts.some(item => item.artifactId === 'script-v1' || item.artifactId === 'script-v2'),
+    false,
+    'previous optimization attempts remain hidden from the primary creator surface',
+  )
+  assert.equal(
+    typeof reviewArtifacts.shouldShowCreatorArtifactSwitcher,
+    'function',
+    'current artifact navigation exposes one tested visibility rule',
+  )
+  assert.equal(reviewArtifacts.shouldShowCreatorArtifactSwitcher([]), false)
+  assert.equal(reviewArtifacts.shouldShowCreatorArtifactSwitcher(currentReviewArtifacts.slice(0, 1)), false)
+  assert.equal(reviewArtifacts.shouldShowCreatorArtifactSwitcher(currentReviewArtifacts.slice(0, 2)), true)
+  assert.equal(
+    typeof reviewArtifacts.nextCreatorArtifactTabIndex,
+    'function',
+    'current artifact keyboard navigation is testable without a rendered sidebar',
+  )
+  assert.equal(reviewArtifacts.nextCreatorArtifactTabIndex(0, 'ArrowRight', 3), 1)
+  assert.equal(reviewArtifacts.nextCreatorArtifactTabIndex(2, 'ArrowRight', 3), 0)
+  assert.equal(reviewArtifacts.nextCreatorArtifactTabIndex(0, 'ArrowLeft', 3), 2)
+  assert.equal(reviewArtifacts.nextCreatorArtifactTabIndex(1, 'Home', 3), 0)
+  assert.equal(reviewArtifacts.nextCreatorArtifactTabIndex(1, 'End', 3), 2)
+  assert.equal(reviewArtifacts.nextCreatorArtifactTabIndex(0, 'ArrowRight', 0), -1)
   const maliciousNamedArtifacts = reviewArtifacts.projectCreatorReviewArtifacts([
     {
       artifactId: 'path-image', kind: 'IMAGE', mimeType: 'image/png', name: '/private/tmp/foo.png',
@@ -634,6 +670,20 @@ try {
   assert.deepEqual(logic.CREATOR_WORKSPACE_STEP_IDS, [
     'requirements', 'direction', 'script', 'shots', 'preview', 'delivery',
   ], 'workspace must keep the six creation steps in their real order')
+  const canonicalProgressSteps = logic.creatorProgressSteps([
+    { id: 'preview', label: '旧成片预览', state: 'confirmed' },
+    { id: 'shots', label: '分镜与素材', state: 'confirmed' },
+    { id: 'preview', label: '当前成片预览', state: 'needs_review' },
+    { id: 'requirements', label: '需求', state: 'confirmed' },
+    { id: 'shots', label: '当前分镜与素材', state: 'confirmed' },
+  ])
+  assert.deepEqual(
+    canonicalProgressSteps.map(step => step.id),
+    ['requirements', 'shots', 'preview'],
+    'creator progress renders each canonical step at most once and in workflow order',
+  )
+  assert.equal(canonicalProgressSteps[1].label, '当前分镜与素材', 'the latest current-step projection wins over duplicate input')
+  assert.equal(canonicalProgressSteps[2].label, '当前成片预览', 'historical preview events cannot create duplicate progress rows')
   assert.deepEqual(
     logic.creatorProjectProgress('COMPLETED', { steps: logic.CREATOR_WORKSPACE_STEP_IDS.map(id => ({ id, state: 'idle' })) }),
     { label: '已完成 6/6 个步骤', percent: 100 },
@@ -1355,8 +1405,10 @@ try {
   const projectionSource = readFileSync(projectionUrl, 'utf8')
   const timelineSource = readFileSync(new URL('../src/features/creator-studio/components/CreatorProcessTimeline.tsx', import.meta.url), 'utf8')
   const reviewArtifactsSource = readFileSync(new URL('../src/features/creator-studio/creatorReviewArtifacts.ts', import.meta.url), 'utf8')
+  const artifactSwitcherUrl = new URL('../src/features/creator-studio/components/CreatorCurrentArtifactSwitcher.tsx', import.meta.url)
+  assert.equal(existsSync(artifactSwitcherUrl), true, 'multiple current artifacts need one compact top switcher')
+  const artifactSwitcherSource = existsSync(artifactSwitcherUrl) ? readFileSync(artifactSwitcherUrl, 'utf8') : ''
   const contentLibraryUrl = new URL('../src/features/creator-studio/components/CreatorContentLibrary.tsx', import.meta.url)
-  const contentLibrarySource = existsSync(contentLibraryUrl) ? readFileSync(contentLibraryUrl, 'utf8') : ''
   const projectBriefUrl = new URL('../src/features/creator-studio/components/ProjectBriefPanel.tsx', import.meta.url)
   assert.equal(existsSync(projectBriefUrl), true, 'requirements need a readable persisted project record')
   const projectBriefSource = readFileSync(projectBriefUrl, 'utf8')
@@ -1393,7 +1445,7 @@ try {
     ['ProjectWorkspacePage.tsx', workspaceSource],
     ['CreatorProcessTimeline.tsx', timelineSource],
     ['ArtifactReviewPanel.tsx', reviewSource],
-    ['CreatorContentLibrary.tsx', contentLibrarySource],
+    ['CreatorCurrentArtifactSwitcher.tsx', artifactSwitcherSource],
     ['CreationStrip.tsx', stripSource],
     ['StepRegenerationDialog.tsx', regenerationDialogSource],
     ['ShotInspector.tsx', inspectorSource],
@@ -1485,20 +1537,21 @@ try {
   assert.match(workspaceSource, /selectedShotId/)
   assert.match(workspaceSource, /retryLatestFailedAgentNode/)
   assert.match(workspaceSource, /CreatorProcessTimeline/)
-  assert.match(workspaceSource, /import CreatorContentLibrary from '.\/components\/CreatorContentLibrary'/, 'workspace imports the creator content library')
-  assert.match(workspaceSource, /<CreatorContentLibrary\b/, 'workspace renders the creator content library')
+  assert.match(workspaceSource, /import CreatorCurrentArtifactSwitcher from '.\/components\/CreatorCurrentArtifactSwitcher'/, 'workspace imports the compact current-artifact switcher')
+  assert.match(workspaceSource, /<CreatorCurrentArtifactSwitcher\b/, 'workspace renders the compact current-artifact switcher')
+  assert.doesNotMatch(workspaceSource, /CreatorContentLibrary/, 'the permanent artifact sidebar is retired')
   assert.doesNotMatch(workspaceSource, /StepArtifactDrawer/, 'the audit drawer is retired from creator workspace usage')
-  assert.match(workspaceSource, /const visibleArtifacts = (?:useMemo\([^]*?)?projectCreatorReviewArtifacts\(/, 'creator artifacts are projected before workspace use')
+  assert.match(workspaceSource, /const visibleArtifacts = (?:useMemo\([^]*?)?currentCreatorReviewArtifacts\(/, 'creator workspace consumes only the latest current artifacts')
   assert.ok(
-    workspaceSource.indexOf('projectCreatorReviewArtifacts(') < workspaceSource.indexOf('selectCreatorReviewArtifact('),
-    'projection happens before artifact selection',
+    workspaceSource.indexOf('currentCreatorReviewArtifacts(') < workspaceSource.indexOf('selectCreatorReviewArtifact('),
+    'current-only projection happens before artifact selection',
   )
   assert.match(workspaceSource, /artifacts=\{visibleArtifacts\}/, 'library counts and cards receive visible artifacts only')
   assert.match(workspaceSource, /artifact=\{selectedArtifact\}/, 'the review panel receives the projected selected artifact')
   assert.match(workspaceSource, /ProjectBriefPanel/)
   assert.match(workspaceSource, /creatorArtifactLoadState/)
   assert.match(workspaceSource, /重新读取当前内容/)
-  assert.match(workspaceSource, /view\.processTimeline/)
+  assert.doesNotMatch(workspaceSource, /view\.processTimeline/, 'creator workspace keeps audit history out of the user-facing progress summary')
   assert.match(workspaceSource, /view\?\.stepArtifacts/)
   assert.match(workspaceSource, /creatorPollingSignature\(view\)/, 'workspace polling uses the tested authoritative view predicate')
   assert.match(workspaceSource, /重试失败步骤/)
@@ -1618,8 +1671,6 @@ try {
     /技术数据|查看原文|parsed\.raw|JSON\.stringify|JsonTree|downloadText|navigator\.clipboard|<pre\b/,
     'creator JSON proofing must never expose raw payloads or technical field views',
   )
-  assert.match(contentLibrarySource, /creatorReviewExcerpt\(preview\.content\)/)
-  assert.doesNotMatch(contentLibrarySource, /function readableExcerpt/)
   assert.match(proofingSource, /projectCreatorReviewContent/)
   assert.match(projectionSource, /creatorPayloadCandidates/)
   assert.match(projectionSource, /MAX_CREATOR_PAYLOAD_DEPTH = 6/)
@@ -1641,6 +1692,26 @@ try {
     'creator Markdown proofing must preserve readable Markdown without raw source, copy, download, or serialization controls',
   )
   assert.match(creatorStylesSource, /\.artifact-review-document/)
+  assert.match(
+    creatorStylesSource,
+    /\.creator-content-workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+    'the completed-project workspace keeps one full-width proofing column',
+  )
+  assert.doesNotMatch(
+    creatorStylesSource,
+    /grid-template-columns:\s*minmax\((?:240px|280px),\s*(?:280px|320px)\)\s+minmax\(0,\s*1fr\)/,
+    'no creator breakpoint reserves a permanent artifact sidebar',
+  )
+  assert.match(
+    creatorStylesSource,
+    /\.creator-current-artifact-switcher[^}]*overflow-x:\s*auto/,
+    'multiple current artifacts scroll horizontally without narrowing the proofing canvas',
+  )
+  assert.match(
+    creatorStylesSource,
+    /\.artifact-review-document\s*\{[^}]*width:\s*min\(100%,\s*78ch\)[^}]*margin-inline:\s*auto/,
+    'long review documents keep a readable line length',
+  )
   for (const label of ['更精炼', '增强画面感', '优化节奏', '自定义修改']) {
     assert.match(textSelectionAssistantSource, new RegExp(label), `text selection assistant includes ${label}`)
   }
@@ -1663,35 +1734,33 @@ try {
   assert.match(reviewSource, /instructionRef\.current\?\.focus\(\)/)
   assert.match(timelineSource, /创作进度/)
   assert.match(timelineSource, /onSelect: \(stepId: CreatorStepId\) => void/)
-  assert.match(timelineSource, /onClick=\{\(\) => onSelect\(event\.stepId\)\}/)
-  assert.match(timelineSource, /aria-current=\{event\.stepId === selectedStepId \? 'step' : undefined\}/)
-  assert.doesNotMatch(timelineSource, /event\.(?:title|summary|attempt)|formatEventTime|可审计记录/, 'timeline uses only safe step labels, friendly state, and creator action copy')
-  for (const stateLabel of ['生成中', '等待审阅', '已完成', '需要处理']) {
+  assert.match(timelineSource, /steps: readonly CreatorStep\[\]/, 'creator progress consumes the canonical current steps, not the audit-event history')
+  assert.match(timelineSource, /creatorProgressSteps\(steps\)/, 'creator progress uses the tested canonical step projection')
+  assert.match(timelineSource, /key=\{step\.id\}/, 'each canonical creator step renders at most once')
+  assert.match(timelineSource, /onClick=\{\(\) => onSelect\(step\.id\)\}/)
+  assert.match(timelineSource, /aria-current=\{step\.id === selectedStepId \? 'step' : undefined\}/)
+  assert.doesNotMatch(timelineSource, /events\.map|CreatorProcessEvent|event\.(?:title|summary|attempt)|formatEventTime|可审计记录/, 'creator progress never expands the complete audit history into duplicate rows')
+  for (const stateLabel of ['未开始', '生成中', '等待审阅', '已完成', '需要处理']) {
     assert.match(timelineSource, new RegExp(stateLabel), `timeline includes the friendly ${stateLabel} state`)
   }
-  assert.match(workspaceSource, /<CreatorProcessTimeline[\s\S]*onSelect=\{navigateToStep\}/, 'timeline selection reuses creator step navigation')
-  assert.equal(existsSync(contentLibraryUrl), true, 'the four-tab creator content library must exist')
-  for (const tabLabel of ['文字与提示词', '参考图', '视频片段', '语音']) {
-    assert.match(contentLibrarySource, new RegExp(tabLabel), `content library includes the ${tabLabel} tab`)
-  }
-  assert.match(contentLibrarySource, /getCreatorArtifactContent/)
-  assert.match(contentLibrarySource, /resolveCreatorArtifactMediaUrl/)
-  assert.match(contentLibrarySource, /AbortController/)
-  assert.ok((contentLibrarySource.match(/onError=\{handleMediaError\}/g) || []).length >= 3, 'image, video, and audio previews enter the bounded retry state on decode or load failure')
-  assert.ok((contentLibrarySource.match(/key=\{mediaLoadKey\}/g) || []).length >= 3, 'retry remounts every media element')
-  assert.match(contentLibrarySource, /preload="auto"/, 'video cards load enough media to expose a real first frame')
-  assert.match(contentLibrarySource, /#t=0\.001/, 'video card source requests a safe initial frame')
-  assert.match(contentLibrarySource, /id=\{tabId\(tab\.category\)\}/)
-  assert.match(contentLibrarySource, /aria-controls=\{tabPanelId\(tab\.category\)\}/)
-  assert.match(contentLibrarySource, /id=\{tabPanelId\(tab\.category\)\}/)
-  assert.match(contentLibrarySource, /aria-labelledby=\{tabId\(tab\.category\)\}/)
-  assert.match(contentLibrarySource, /role="tab"[\s\S]*aria-selected=\{activeCategory === tab\.category\}/, 'content categories expose tab semantics and selected state')
+  assert.match(workspaceSource, /<CreatorProcessTimeline\s+steps=\{displaySteps\}[\s\S]*onSelect=\{navigateToStep\}/, 'timeline uses the deduplicated current-step projection and reuses creator step navigation')
+  assert.doesNotMatch(workspaceSource, /<CreatorProcessTimeline\s+events=\{view\.processTimeline/, 'the creator surface must not render raw audit history as progress')
+  assert.equal(existsSync(contentLibraryUrl), false, 'the completed-project workspace no longer ships a permanent artifact sidebar')
+  assert.match(artifactSwitcherSource, /role="tablist"/)
+  assert.match(artifactSwitcherSource, /role="tab"[\s\S]*aria-selected=\{selected\}/, 'current artifacts expose tab semantics and selected state')
+  assert.match(artifactSwitcherSource, /tabIndex=\{selected \? 0 : -1\}/, 'the switcher uses roving keyboard focus')
+  assert.match(artifactSwitcherSource, /nextCreatorArtifactTabIndex/)
+  assert.match(artifactSwitcherSource, /getCreatorArtifactContent/)
+  assert.match(artifactSwitcherSource, /resolveCreatorArtifactMediaUrl/)
+  assert.match(artifactSwitcherSource, /AbortController/)
+  assert.match(artifactSwitcherSource, /Math\.min\(3, mediaArtifacts\.length\)/, 'compact media metadata loads with bounded concurrency')
+  assert.doesNotMatch(artifactSwitcherSource, /<(?:video|audio)\b/, 'the compact switcher never mounts a competing media player')
   assert.doesNotMatch(reviewArtifactsSource, /reviewLabel:\s*artifact\.name/, 'review labels never alias raw artifact names')
   assert.match(reviewArtifactsSource, /text:\s*'文字内容'/, 'unknown text artifacts have a semantic generic label')
   for (const [surfaceName, surfaceSource] of [
     ['ArtifactReviewPanel', reviewSource],
     ['ArtifactProofingCanvas', proofingSource],
-    ['CreatorContentLibrary', contentLibrarySource],
+    ['CreatorCurrentArtifactSwitcher', artifactSwitcherSource],
     ['ImageReviewDialog', imageReviewDialogSource],
     ['SimpleVideoPlayer', playerSource],
     ['SimpleAudioPlayer', audioPlayerSource],
@@ -1702,12 +1771,11 @@ try {
       `${surfaceName} never falls back from semantic labels to raw artifact names`,
     )
   }
-  assert.match(contentLibrarySource, /关键内容仍在准备中，生成完成后会显示在这里。/)
-  assert.match(contentLibrarySource, /<img[\s\S]*loading="lazy"/, 'every image card uses a lazy real thumbnail')
+  assert.match(artifactSwitcherSource, /<img[\s\S]*loading="lazy"/, 'image tabs use a lazy real thumbnail')
   assert.doesNotMatch(
-    contentLibrarySource,
+    creatorRenderedSurface(artifactSwitcherSource, 'CreatorCurrentArtifactSwitcher.tsx'),
     /\b(?:attempt|sizeBytes|storageType|storageRef|contentHash|promptHash|artifactType|kind)\b/,
-    'creator content cards never render technical artifact descriptors',
+    'current artifact tabs never render technical artifact descriptors',
   )
   for (const sourcePattern of [
     /role="dialog"/,
@@ -1777,7 +1845,6 @@ try {
   assert.match(regenerationDialogSource, /confirmedAffectedStepIds/)
   assert.match(regenerationDialogSource, /旧版本仍然保留/)
   assert.match(regenerationDialogSource, /triggerRef[\s\S]*trigger\?\.focus\(\)/, 'step regeneration dialog restores focus to its launch control')
-  assert.match(contentLibrarySource, /creator-content-preview-error" role="alert"/, 'preview failures are announced as errors')
   assert.match(agentReviewSource, /approvalBlocked && <p className="creator-form-error" role="alert">/, 'blocking creator review errors use an alert live region')
   assert.match(creatorStylesSource, /\.creator-root :focus-visible\s*\{[^}]*outline:/, 'creator keyboard focus is visibly distinct')
   assert.match(creatorStylesSource, /@media \(max-width: 390px\)[\s\S]*\.creator-workspace[^}]*min-width:\s*0/, '390 px creator workspace constrains intrinsic widths')

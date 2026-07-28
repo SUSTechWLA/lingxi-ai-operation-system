@@ -1,39 +1,41 @@
-import type { CreatorProcessEvent, CreatorStepId } from '../types'
-import { creatorStepLabel } from '../logic'
+import type { CreatorStep, CreatorStepId } from '../types'
+import { creatorProgressSteps, creatorStepLabel } from '../logic'
 
-const eventCopy: Record<CreatorProcessEvent['state'], { state: string; action: string }> = {
-  started: { state: '生成中', action: '正在准备内容，完成后即可审阅。' },
-  generated: { state: '等待审阅', action: '内容已经准备好，请打开查看。' },
+const stepCopy: Record<CreatorStep['state'], { state: string; action: string }> = {
+  not_started: { state: '未开始', action: '完成前一步后，会继续到这里。' },
+  generating: { state: '生成中', action: '正在准备内容，完成后即可审阅。' },
   needs_review: { state: '等待审阅', action: '内容已经准备好，请打开查看并确认。' },
   confirmed: { state: '已完成', action: '内容已确认；需要调整时，可以打开后重新生成。' },
+  needs_attention: { state: '需要处理', action: '前面的内容有更新，请打开检查并重新生成。' },
   failed: { state: '需要处理', action: '这一步尚未完成，请打开后重试或调整。' },
-  stale: { state: '需要处理', action: '前面的内容有更新，请打开检查并重新生成。' },
 }
 
 export default function CreatorProcessTimeline({
-  events,
+  steps,
   selectedStepId,
   onSelect,
 }: {
-  events: readonly CreatorProcessEvent[]
+  steps: readonly CreatorStep[]
   selectedStepId: CreatorStepId
   onSelect: (stepId: CreatorStepId) => void
 }) {
+  const visibleSteps = creatorProgressSteps(steps)
+
   return (
     <details className="creator-process-timeline" open>
       <summary>
         <span><strong>创作进度</strong><small>每一步都可以回看和继续调整</small></span>
         <span aria-hidden="true">展开 / 收起</span>
       </summary>
-      {events.length === 0 ? <p className="artifact-empty">创作开始后，进度会显示在这里。</p> : (
+      {visibleSteps.length === 0 ? <p className="artifact-empty">创作开始后，进度会显示在这里。</p> : (
         <ol aria-live="polite" aria-relevant="additions text">
-          {events.map(event => {
-            const copy = eventCopy[event.state]
-            return <li key={event.id} className={`is-${event.state}${event.stepId === selectedStepId ? ' is-selected-step' : ''}`}>
+          {visibleSteps.map(step => {
+            const copy = step.isStale ? stepCopy.needs_attention : stepCopy[step.state]
+            return <li key={step.id} className={`is-${step.state}${step.isStale ? ' is-stale' : ''}${step.id === selectedStepId ? ' is-selected-step' : ''}`}>
               <span className="creator-process-marker" aria-hidden="true" />
-              <button type="button" aria-current={event.stepId === selectedStepId ? 'step' : undefined} onClick={() => onSelect(event.stepId)}>
+              <button type="button" aria-current={step.id === selectedStepId ? 'step' : undefined} onClick={() => onSelect(step.id)}>
                 <div className="creator-process-event-heading">
-                  <strong>{creatorStepLabel(event.stepId)}</strong>
+                  <strong>{creatorStepLabel(step.id)}</strong>
                   <span>{copy.state}</span>
                 </div>
                 <p>{copy.action}</p>

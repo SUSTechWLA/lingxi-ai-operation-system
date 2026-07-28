@@ -34,13 +34,15 @@ import ShotInspector from './components/ShotInspector'
 import PreviewDeliveryPanel from './components/PreviewDeliveryPanel'
 import AgentReviewGatePanel from './components/AgentReviewGatePanel'
 import CreatorProcessTimeline from './components/CreatorProcessTimeline'
-import CreatorContentLibrary from './components/CreatorContentLibrary'
+import CreatorCurrentArtifactSwitcher from './components/CreatorCurrentArtifactSwitcher'
 import StepRegenerationDialog from './components/StepRegenerationDialog'
 import ProjectBriefPanel from './components/ProjectBriefPanel'
 import {
   authoritativeDeliveryReviewArtifacts,
+  currentCreatorReviewArtifacts,
   projectCreatorReviewArtifacts,
   selectCreatorReviewArtifact,
+  shouldShowCreatorArtifactSwitcher,
   type CreatorReviewArtifact,
 } from './creatorReviewArtifacts'
 import { projectHistoricalShots } from './completedShotProjection'
@@ -144,7 +146,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
     if (stepId === 'delivery') {
       return authoritativeDeliveryReviewArtifacts(view?.stepArtifacts, view?.finalDeliveryArtifactId)
     }
-    return projectCreatorReviewArtifacts(view?.stepArtifacts?.[stepId] ?? [])
+    return currentCreatorReviewArtifacts(view?.stepArtifacts?.[stepId] ?? [])
   }, [stepId, view?.finalDeliveryArtifactId, view?.stepArtifacts])
   const explicitArtifactId = selectedArtifactIds[stepId] ?? (stepId === 'delivery' ? view?.finalDeliveryArtifactId : undefined)
   const explicitArtifact = explicitArtifactId
@@ -158,6 +160,9 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
     visibleArtifacts,
     selectedBecameStale ? undefined : explicitArtifactId,
   )
+  const showArtifactSwitcher = !isShotsStep &&
+    !historicalShotMode &&
+    shouldShowCreatorArtifactSwitcher(visibleArtifacts)
   const currentArtifactId = selectedArtifact?.artifactId
   const currentVersion = selectedArtifact?.version
   const artifactSelection = useMemo<WorkspaceArtifactSelection | null>(() => (
@@ -424,7 +429,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       </header>
       <CreationStrip steps={displaySteps} currentStepId={stepId} onSelect={navigateToStep} />
       <TaskRecoveryBanner tasks={view.activeTasks} />
-      <CreatorProcessTimeline events={view.processTimeline ?? []} selectedStepId={stepId} onSelect={navigateToStep} />
+      <CreatorProcessTimeline steps={displaySteps} selectedStepId={stepId} onSelect={navigateToStep} />
       <div className="creator-step-commandbar">
         <div>
           <strong>{creatorStepLabel(stepId)}</strong>
@@ -441,13 +446,13 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
         />}
       </div>
       <div className="creator-content-workspace">
-        {!historicalShotMode && <CreatorContentLibrary
+        {showArtifactSwitcher && <CreatorCurrentArtifactSwitcher
           projectId={projectId}
           artifacts={visibleArtifacts}
           selectedArtifactId={selectedArtifact?.artifactId}
           onSelect={artifact => setSelectedArtifactIds(current => ({ ...current, [stepId]: artifact.artifactId }))}
         />}
-        <div className="creator-proofing-canvas">
+        <div id="creator-proofing-canvas" className="creator-proofing-canvas">
       {pendingAgentReview && currentRunId ? <AgentReviewGatePanel
         runId={currentRunId}
         review={pendingAgentReview}
