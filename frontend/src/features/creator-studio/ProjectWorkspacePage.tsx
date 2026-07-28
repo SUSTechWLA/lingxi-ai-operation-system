@@ -459,7 +459,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
           await refreshAgentBridge(currentRunId)
           await refreshView()
         }}
-      /> : isRequirementsRecord ? <ProjectBriefPanel project={view.project} /> : isShotsStep ? <div className="shot-review-workspace">
+      /> : isRequirementsRecord ? <ProjectBriefPanel project={view.project} /> : isShotsStep ? <div className={`shot-review-workspace${historicalShotMode ? ' is-historical' : ''}`}>
         <ShotReviewQueue
           items={shotItems}
           total={filteredShotTotal}

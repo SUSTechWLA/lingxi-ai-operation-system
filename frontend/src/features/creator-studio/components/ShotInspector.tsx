@@ -218,7 +218,8 @@ function HistoricalShotInspector({ projectId, shot }: { projectId: string; shot:
       {review.narration && <section className="historical-shot-narration" aria-labelledby="historical-shot-narration-title">
         <p className="creator-eyebrow">旁白</p>
         <h3 id="historical-shot-narration-title">这一镜说什么</h3>
-        <blockquote>{review.narration}</blockquote>
+        <blockquote className="historical-shot-text-preview">{review.narration}</blockquote>
+        <HistoricalTextDisclosure text={review.narration} label="查看完整旁白" />
       </section>}
 
       {(review.details.length > 0 || review.screenText.length > 0) && <section className="historical-shot-section" aria-labelledby="historical-shot-visual-title">
@@ -226,7 +227,7 @@ function HistoricalShotInspector({ projectId, shot }: { projectId: string; shot:
           <div><p className="creator-eyebrow">镜头设计</p><h3 id="historical-shot-visual-title">画面与动作</h3></div>
           {review.screenText.length > 0 && <div className="historical-shot-screen-text" aria-label="画面文字">{review.screenText.map(text => <span key={text}>{text}</span>)}</div>}
         </div>
-        <dl className="historical-shot-details">{review.details.map(item => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
+        <dl className="historical-shot-details">{review.details.map(item => <div key={item.label}><dt>{item.label}</dt><dd><span className="historical-shot-text-preview">{item.value}</span><HistoricalTextDisclosure text={item.value} /></dd></div>)}</dl>
       </section>}
 
       <section className="historical-shot-section" aria-labelledby="historical-shot-layers-title">
@@ -258,7 +259,12 @@ function HistoricalShotInspector({ projectId, shot }: { projectId: string; shot:
 }
 
 function HistoricalLayerCard({ index, title, summary, empty }: { index: string; title: string; summary?: string; empty: string }) {
-  return <article><span>{index}</span><h4>{title}</h4><p>{summary || empty}</p></article>
+  const text = summary || empty
+  return <article><span>{index}</span><h4>{title}</h4><p className="historical-shot-text-preview">{text}</p><HistoricalTextDisclosure text={text} /></article>
+}
+
+function HistoricalTextDisclosure({ text, label = '查看完整内容' }: { text: string; label?: string }) {
+  return <details className="historical-shot-disclosure"><summary>{label}</summary><p>{text}</p></details>
 }
 
 function layerSummary(review: HistoricalShotReview, key: HistoricalShotReview['layers'][number]['key']): string | undefined {
