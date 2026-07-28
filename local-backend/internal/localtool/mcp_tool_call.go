@@ -19,6 +19,7 @@ import (
 type mcpToolCallExecutor struct {
 	loadProviders MCPProviderLoader
 	dataDir       string
+	voiceRunner   voiceCommandRunner
 }
 
 var mcpTimedSegmentPattern = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)\s*[-~—到至]\s*(\d+(?:\.\d+)?)\s*(秒|s)`)
@@ -79,7 +80,43 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 	if requests := slicePayload(job.Payload, "externalGenerationRequests"); len(requests) > 0 {
 		return e.executeExternalGenerationBatch(operationCtx, client, provider.ID, toolName, job, requests)
 	}
-	args := mapPayload(job.Payload, "arguments")
+	args := copyMap(mapPayload(job.Payload, "arguments"))
+	if isIPArollRenderTool(provider.ID, toolName) {
+		if voiceSelection, ok := args["voiceSelection"].(map[string]interface{}); ok && len(voiceSelection) > 0 {
+			projectID := stringPayload(job.Payload, "projectId")
+			if projectID == "" {
+				projectID = stringPayload(job.Payload, "videoProjectId")
+			}
+			if err := validateLocalSegment(projectID); err != nil {
+				return nil, fmt.Errorf("projectId is required and must be safe for IP A-roll voice preparation: %w", err)
+			}
+			if strings.TrimSpace(e.dataDir) == "" {
+				return nil, errors.New("local data directory is required for IP A-roll voice preparation")
+			}
+			prepared, prepareErr := e.prepareIPArollVoice(
+				operationCtx,
+				client,
+				projectID,
+				voiceSelection,
+				stringPayload(args, "script"),
+				voiceRunID(projectID, job.ID, stringPayload(args, "script"), voiceSelection),
+				args,
+			)
+			if prepareErr != nil {
+				return nil, prepareErr
+			}
+			args["audioPath"] = prepared.AudioPath
+			args["outputDir"] = prepared.OutputDir
+			for _, privateKey := range []string{
+				"voiceSelection", "referenceArtifactId", "referenceStorageRef", "referenceContentHash",
+				"referenceMimeType", "recordedNarrationArtifactId", "recordedNarrationStorageRef",
+				"recordedNarrationContentHash", "recordedNarrationMimeType", "referenceAudioPath",
+				"referenceText", "referenceTextVerified", "usageRightsConfirmed",
+			} {
+				delete(args, privateKey)
+			}
+		}
+	}
 	callResult, err := client.CallTool(operationCtx, toolName, args)
 	if err != nil {
 		return nil, err
