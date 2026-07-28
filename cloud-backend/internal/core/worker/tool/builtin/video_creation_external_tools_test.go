@@ -1391,6 +1391,11 @@ func TestShotSplitterPromptRequiresShotProductionPackets(t *testing.T) {
 		"reviewPacket",
 		"shotQueue",
 		"SHOT_REVIEW_PACKET",
+		"startMs",
+		"endMs",
+		"durationMs",
+		"timelineRevision",
+		"拼接后必须等于完整口播稿",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("shot splitter prompt should contain %q, got:\n%s", required, prompt)
@@ -1434,6 +1439,11 @@ func TestVideoPromptGeneratorPromptRequiresIndependentShotGeneration(t *testing.
 		"SHOT_VIDEO_CLIP",
 		"SHOT_AUDIO",
 		"SHOT_SUBTITLE",
+		"visualAnchor",
+		"primaryReferenceImage",
+		"hyperKeyframes",
+		"IP A-roll、HyperFrames 和 AIGC",
+		"文学化",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("video prompt generator prompt should contain %q, got:\n%s", required, prompt)
@@ -1712,6 +1722,106 @@ func TestVideoPromptGeneratorPrefersCanonicalTimeWindowsOverDerivedPlans(t *test
 		prompt, _ := mapValue(prompts[index])
 		if got := firstStringInMap(prompt, "narrationText"); got != want {
 			t.Fatalf("prompt %d narration = %q, want canonical %q", index, got, want)
+		}
+	}
+}
+
+func TestVideoPromptGeneratorBuildsCoordinatedTimedLayers(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "工作室口播", "", map[string]interface{}{
+		"topic": "工作室口播",
+		"shotList": []interface{}{map[string]interface{}{
+			"shotId": "SHOT_01", "durationSec": 6, "startMs": int64(2_000), "endMs": int64(8_000), "durationMs": int64(6_000),
+			"timelineRevision": "audio-master-3", "narrationText": "做一条好视频，不该从十几个工具间来回搬运开始。",
+			"visual": "树懒在暖色工作室正对镜头，把散乱工具卡片汇聚成一条清楚的创作流程。",
+			"camera": "65mm 中景缓慢推进", "composition": "树懒居中偏左，右侧保留信息区", "lighting": "左前柔和主光，右后暖色轮廓光",
+			"screenText":      []interface{}{"一条清楚的创作流程"},
+			"actionBeats":     []interface{}{"树懒抬眼建立交流", "手掌将卡片聚拢", "微笑并稳定看向镜头"},
+			"referenceImages": []interface{}{map[string]interface{}{"id": "keyframe_SHOT_01", "label": "Shot 主参考图", "role": "keyframe", "storageRef": "local://shot-01-keyframe.png"}},
+		}},
+	}, tool.ToolContext{TaskID: "task-coordinated-layers", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("video_prompt_generator failed: %s", result.Error)
+	}
+	packages := interfaceSliceFromAny(result.Data["shotAssetPackages"])
+	if len(packages) != 1 {
+		t.Fatalf("package count = %d", len(packages))
+	}
+	pkg, _ := mapValue(packages[0])
+	anchor, ok := mapValue(pkg["visualAnchor"])
+	if !ok || firstStringInMap(anchor, "anchorId") == "" || firstStringInMap(anchor, "thesis") == "" {
+		t.Fatalf("visual anchor missing identity or thesis: %#v", anchor)
+	}
+	primaryReference, ok := mapValue(anchor["primaryReferenceImage"])
+	if !ok || firstStringInMap(primaryReference, "id") != "keyframe_SHOT_01" {
+		t.Fatalf("primary reference = %#v", anchor["primaryReferenceImage"])
+	}
+	anchorBeats := interfaceSliceFromAny(anchor["timelineBeats"])
+	if len(anchorBeats) != 3 {
+		t.Fatalf("visual anchor beats = %#v, want opening/development/settle", anchorBeats)
+	}
+
+	layers, _ := mapValue(pkg["visualLayers"])
+	anchorRef := firstStringInMap(anchor, "anchorId")
+	for _, layerName := range []string{"ipAroll", "hyperframes", "aigc"} {
+		layer, ok := mapValue(layers[layerName])
+		if !ok || firstStringInMap(layer, "visualAnchorRef") != anchorRef {
+			t.Fatalf("layer %s must reference shared anchor %q: %#v", layerName, anchorRef, layer)
+		}
+		if timeline := interfaceSliceFromAny(layer["timeline"]); len(timeline) != 3 {
+			t.Fatalf("layer %s timeline = %#v", layerName, timeline)
+		}
+	}
+
+	ipPlan, _ := mapValue(pkg["ipArollPlan"])
+	for _, item := range interfaceSliceFromAny(ipPlan["timeline"]) {
+		beat, _ := mapValue(item)
+		for _, key := range []string{"subjectPlacement", "framing", "action", "camera", "lighting"} {
+			if strings.TrimSpace(ensureStringValue(beat[key])) == "" {
+				t.Fatalf("IP beat missing %s: %#v", key, beat)
+			}
+		}
+	}
+	hyperframesPlan, _ := mapValue(pkg["hyperframesPlan"])
+	keyframes := interfaceSliceFromAny(hyperframesPlan["hyperKeyframes"])
+	if len(keyframes) != 3 {
+		t.Fatalf("HyperKeyframes = %#v", keyframes)
+	}
+	for _, item := range keyframes {
+		frame, _ := mapValue(item)
+		for _, key := range []string{"exactText", "style", "position", "startMs", "endMs"} {
+			if _, exists := frame[key]; !exists || strings.TrimSpace(ensureStringValue(frame[key])) == "" {
+				t.Fatalf("HyperKeyframe missing %s: %#v", key, frame)
+			}
+		}
+	}
+}
+
+func TestVibePromptSeparatesCreativeDirectionFromDeliveryMechanics(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "情绪化产品口播", "", map[string]interface{}{
+		"topic": "情绪化产品口播",
+		"shotList": []interface{}{map[string]interface{}{
+			"shotId": "SHOT_VIBE", "durationSec": 6, "narrationText": "把复杂的创作过程，变成一条让人安心的路。",
+			"visual":      "暖色工作室里，树懒身边凌乱的信息逐渐形成一条有秩序的光路。",
+			"lighting":    "窗外冷色晨光与室内暖光形成安静层次",
+			"actionBeats": []interface{}{"凌乱卡片轻轻漂浮", "光路在桌面连成线", "空间平静下来"},
+		}},
+	}, tool.ToolContext{TaskID: "task-vibe-prompt", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("video_prompt_generator failed: %s", result.Error)
+	}
+	prompts := interfaceSliceFromAny(result.Data["videoPrompts"])
+	promptMap, _ := mapValue(prompts[0])
+	vibe := firstStringInMap(promptMap, "aigcPrompt")
+	for _, required := range []string{"开场", "发展", "收束", "感受", "环境", "光"} {
+		if !strings.Contains(vibe, required) {
+			t.Fatalf("Vibe prompt missing %q: %s", required, vibe)
+		}
+	}
+	for _, mechanical := range []string{"FFmpeg", "fps", "像素格式", "分辨率", "codec"} {
+		if strings.Contains(vibe, mechanical) {
+			t.Fatalf("Vibe prompt must keep delivery mechanics outside creative direction, found %q in %s", mechanical, vibe)
 		}
 	}
 }
