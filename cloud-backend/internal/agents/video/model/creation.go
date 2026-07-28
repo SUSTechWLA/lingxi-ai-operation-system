@@ -586,19 +586,24 @@ type ShotVisualLayerContract struct {
 }
 
 type ShotGenerationPlan struct {
-	ShotID         string                  `json:"shotId"`
-	Mode           string                  `json:"mode"`
-	PrimaryTool    string                  `json:"primaryTool,omitempty"`
-	SecondaryTools []string                `json:"secondaryTools,omitempty"`
-	Reason         string                  `json:"reason,omitempty"`
-	Confidence     float64                 `json:"confidence,omitempty"`
-	RiskLevel      string                  `json:"riskLevel,omitempty"`
-	RequiredAssets []ShotAssetNeed         `json:"requiredAssets,omitempty"`
-	RenderInputs   map[string]interface{}  `json:"renderInputs,omitempty"`
-	FusionPlan     FusionPlan              `json:"fusionPlan"`
-	FallbackPlan   *ShotGenerationFallback `json:"fallbackPlan,omitempty"`
-	ReviewFocus    []string                `json:"reviewFocus,omitempty"`
-	VisualLayers   ShotVisualLayerContract `json:"visualLayers"`
+	ShotID           string                  `json:"shotId"`
+	StartMs          int64                   `json:"startMs,omitempty"`
+	EndMs            int64                   `json:"endMs,omitempty"`
+	DurationMs       int64                   `json:"durationMs,omitempty"`
+	TimelineRevision string                  `json:"timelineRevision,omitempty"`
+	NarrationText    string                  `json:"narrationText,omitempty"`
+	Mode             string                  `json:"mode"`
+	PrimaryTool      string                  `json:"primaryTool,omitempty"`
+	SecondaryTools   []string                `json:"secondaryTools,omitempty"`
+	Reason           string                  `json:"reason,omitempty"`
+	Confidence       float64                 `json:"confidence,omitempty"`
+	RiskLevel        string                  `json:"riskLevel,omitempty"`
+	RequiredAssets   []ShotAssetNeed         `json:"requiredAssets,omitempty"`
+	RenderInputs     map[string]interface{}  `json:"renderInputs,omitempty"`
+	FusionPlan       FusionPlan              `json:"fusionPlan"`
+	FallbackPlan     *ShotGenerationFallback `json:"fallbackPlan,omitempty"`
+	ReviewFocus      []string                `json:"reviewFocus,omitempty"`
+	VisualLayers     ShotVisualLayerContract `json:"visualLayers"`
 }
 
 type ShotGenerationFallback struct {

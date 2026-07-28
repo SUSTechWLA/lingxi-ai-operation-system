@@ -752,6 +752,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		manifest.Capabilities = []string{"video_creation", "render_strategy", "asset_routing", "shot_planning"}
 		manifest.Parameters = map[string]tool.ParamDef{
 			"shotList":             {Type: "array", Description: "Approved shot list", Required: true},
+			"timeWindows":          {Type: "array", Description: "Canonical millisecond Shot windows", Required: false},
 			"visualPlans":          {Type: "array", Description: "Optional per-shot visual plans", Required: false},
 			"renderPreference":     {Type: "object", Description: "Optional render preference snapshot", Required: false},
 			"aigcAvailable":        {Type: "boolean", Description: "Whether AIGC video/image generation is available", Required: false},
@@ -2563,6 +2564,10 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 		if endMs <= startMs {
 			endMs = startMs + durationMs
 		}
+		shot["startMs"] = startMs
+		shot["endMs"] = endMs
+		shot["durationMs"] = endMs - startMs
+		shot["timelineRevision"] = firstNonEmptyString(window, "timelineRevision")
 		nextStartMs = endMs
 		if isBrollRoute || route == "screen_recording" {
 			sourceType := "generated"
@@ -3181,6 +3186,10 @@ func shotUnitsFromToolValue(value interface{}) []videomodel.ShotUnit {
 			SequenceIndex:     i,
 			Title:             firstStringInMap(item, "title", "name"),
 			DurationSec:       intFromInterface(firstExistingValue(item, "durationSec", "duration", "seconds"), 0),
+			StartMs:           int64FromAny(firstExistingValue(item, "startMs"), 0),
+			EndMs:             int64FromAny(firstExistingValue(item, "endMs"), 0),
+			DurationMs:        int64FromAny(firstExistingValue(item, "durationMs"), 0),
+			TimelineRevision:  firstStringInMap(item, "timelineRevision"),
 			SceneSummary:      firstStringInMap(item, "sceneSummary", "visual", "description"),
 			SingleScene:       true,
 			VisualChangeLevel: videomodel.VisualChangeLow,
@@ -3600,7 +3609,7 @@ func enrichShotGenerationPlanInputs(values map[string]interface{}, plan *videomo
 	if parentShotID := firstNonEmptyString(values, "parentShotId"); parentShotID != "" {
 		plan.RenderInputs["parentShotId"] = parentShotID
 	}
-	for _, key := range []string{"referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
+	for _, key := range []string{"narrationText", "scriptText", "startMs", "endMs", "durationMs", "timelineRevision", "referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
 		if value, ok := values[key]; ok && value != nil {
 			plan.RenderInputs[key] = value
 		}
@@ -3617,6 +3626,10 @@ func shotUnitFromToolMap(values map[string]interface{}, fallbackIndex int) video
 		SequenceIndex:     fallbackIndex,
 		Title:             firstNonEmptyString(values, "title", "name"),
 		DurationSec:       normalizedDurationSec(firstValueInMap(values, "durationSec", "duration", "seconds")),
+		StartMs:           int64FromAny(firstExistingValue(values, "startMs"), 0),
+		EndMs:             int64FromAny(firstExistingValue(values, "endMs"), 0),
+		DurationMs:        int64FromAny(firstExistingValue(values, "durationMs"), 0),
+		TimelineRevision:  firstNonEmptyString(values, "timelineRevision"),
 		SceneSummary:      firstNonEmptyString(values, "sceneSummary", "visual", "description"),
 		SingleScene:       true,
 		VisualChangeLevel: videomodel.VisualChangeLow,
@@ -3723,21 +3736,26 @@ func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan vid
 	if timeWindowID != "" {
 		planMap["timeWindowId"] = timeWindowID
 	}
-	for _, key := range []string{"referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
+	for _, key := range []string{"narrationText", "scriptText", "startMs", "endMs", "durationMs", "timelineRevision", "referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
 		if value, ok := shotMap[key]; ok && value != nil {
 			planMap[key] = value
 		}
 	}
 	pkg := map[string]interface{}{
-		"shotId":         plan.ShotID,
-		"durationSec":    normalizedDurationSec(firstValueInMap(shotMap, "durationSec", "duration", "seconds")),
-		"visual":         firstNonEmptyString(shotMap, "visual", "visualIntent", "description", "sceneSummary"),
-		"generationPlan": planMap,
-		"visualLayers":   planMap["visualLayers"],
-		"requiredAssets": planMap["requiredAssets"],
-		"fusionPlan":     planMap["fusionPlan"],
-		"status":         videomodel.ReviewStatusPending,
-		"reviewStatus":   videomodel.ReviewStatusPending,
+		"shotId":           plan.ShotID,
+		"durationSec":      normalizedDurationSec(firstValueInMap(shotMap, "durationSec", "duration", "seconds")),
+		"startMs":          plan.StartMs,
+		"endMs":            plan.EndMs,
+		"durationMs":       plan.DurationMs,
+		"timelineRevision": plan.TimelineRevision,
+		"narrationText":    plan.NarrationText,
+		"visual":           firstNonEmptyString(shotMap, "visual", "visualIntent", "description", "sceneSummary"),
+		"generationPlan":   planMap,
+		"visualLayers":     planMap["visualLayers"],
+		"requiredAssets":   planMap["requiredAssets"],
+		"fusionPlan":       planMap["fusionPlan"],
+		"status":           videomodel.ReviewStatusPending,
+		"reviewStatus":     videomodel.ReviewStatusPending,
 	}
 	if len(refs) > 0 {
 		pkg["referenceImages"] = refs
@@ -3746,7 +3764,7 @@ func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan vid
 	if timeWindowID != "" {
 		pkg["timeWindowId"] = timeWindowID
 	}
-	for _, key := range []string{"referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
+	for _, key := range []string{"narrationText", "scriptText", "startMs", "endMs", "durationMs", "timelineRevision", "referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
 		if value, ok := shotMap[key]; ok && value != nil {
 			pkg[key] = value
 		}
@@ -4844,10 +4862,15 @@ func ensureVideoPromptShotAssetPackages(pkg map[string]interface{}) {
 		}
 		narration := firstStringInMap(prompt, "narrationText", "voiceoverText", "scriptText")
 		subtitle := firstStringInMap(prompt, "subtitleText", "narrationText")
+		startMs, endMs, durationMs, timelineRevision := canonicalShotTiming(prompt, duration)
 		packageItem := map[string]interface{}{
-			"shotId":          shotID,
-			"durationSec":     duration,
-			"referenceImages": references,
+			"shotId":           shotID,
+			"durationSec":      duration,
+			"startMs":          startMs,
+			"endMs":            endMs,
+			"durationMs":       durationMs,
+			"timelineRevision": timelineRevision,
+			"referenceImages":  references,
 			"prompts": map[string]interface{}{
 				"videoPrompt":    firstStringInMap(prompt, "prompt", "videoPrompt"),
 				"negativePrompt": firstStringInMap(prompt, "negativePrompt"),
@@ -4892,8 +4915,86 @@ func ensureVideoPromptShotAssetPackages(pkg map[string]interface{}) {
 	}
 }
 
+func canonicalShotTiming(values map[string]interface{}, durationSec int) (startMs, endMs, durationMs int64, timelineRevision string) {
+	startMs = int64FromAny(firstExistingValue(values, "startMs"), 0)
+	endMs = int64FromAny(firstExistingValue(values, "endMs"), 0)
+	durationMs = int64FromAny(firstExistingValue(values, "durationMs"), 0)
+	if durationMs <= 0 && endMs > startMs {
+		durationMs = endMs - startMs
+	}
+	if durationMs <= 0 && durationSec > 0 {
+		durationMs = int64(durationSec) * 1000
+	}
+	if endMs <= startMs && durationMs > 0 {
+		endMs = startMs + durationMs
+	}
+	timelineRevision = firstStringInMap(values, "timelineRevision")
+	return startMs, endMs, durationMs, timelineRevision
+}
+
+func canonicalVideoPromptShotItems(params map[string]interface{}) []map[string]interface{} {
+	canonical := normalizeShotItemsForAssetDecision(params["timeWindows"])
+	shotList := normalizeShotItemsForAssetDecision(params["shotList"])
+	if len(canonical) == 0 {
+		canonical = shotList
+	} else {
+		canonical = mergeShotCollections(canonical, shotList)
+	}
+	plans := normalizeShotItemsForAssetDecision(params["shotGenerationPlans"])
+	if len(canonical) == 0 {
+		canonical = plans
+	} else {
+		canonical = mergeShotCollections(canonical, plans)
+	}
+	return canonical
+}
+
+func mergeShotCollections(canonical, enrichments []map[string]interface{}) []map[string]interface{} {
+	result := make([]map[string]interface{}, 0, len(canonical))
+	byID := make(map[string]map[string]interface{}, len(enrichments))
+	for _, enrichment := range enrichments {
+		if shotID := firstStringInMap(enrichment, "shotId", "id", "cardId"); shotID != "" {
+			byID[shotID] = enrichment
+		}
+	}
+	for index, item := range canonical {
+		merged := copyStringMap(item)
+		shotID := firstStringInMap(item, "shotId", "id", "cardId")
+		enrichment := byID[shotID]
+		if enrichment == nil && index < len(enrichments) {
+			enrichment = enrichments[index]
+		}
+		mergeMissingShotFields(merged, enrichment)
+		result = append(result, merged)
+	}
+	return result
+}
+
+func mergeMissingShotFields(canonical, enrichment map[string]interface{}) {
+	if len(enrichment) == 0 {
+		return
+	}
+	hasNarration := firstStringInMap(canonical, "narrationText", "scriptText", "voiceoverText", "text") != ""
+	for key, value := range enrichment {
+		if value == nil {
+			continue
+		}
+		switch key {
+		case "shotId", "id", "cardId":
+			continue
+		case "narrationText", "scriptText", "voiceoverText", "text":
+			if hasNarration {
+				continue
+			}
+		}
+		if _, exists := canonical[key]; !exists {
+			canonical[key] = value
+		}
+	}
+}
+
 func buildDeterministicVideoPromptData(toolName, skillName, topic string, params map[string]interface{}) (map[string]interface{}, bool) {
-	shots := normalizeShotItemsForAssetDecision(params["shotList"])
+	shots := canonicalVideoPromptShotItems(params)
 	if len(shots) == 0 {
 		return nil, false
 	}
@@ -4914,6 +5015,7 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		}
 		unitShotID := sanitizeUnitPart(shotID)
 		duration := normalizedDurationSec(firstExistingValue(shot, "durationSec", "duration", "seconds"))
+		startMs, endMs, durationMs, timelineRevision := canonicalShotTiming(shot, duration)
 		narration := firstStringInMap(shot, "narrationText", "scriptText", "voiceover", "text", "claim", "mainAction", "sceneSummary")
 		if narration == "" {
 			narration = fmt.Sprintf("%s 的第 %d 个独立镜头口播。", compactTopicForPrompt(topic), i+1)
@@ -4964,20 +5066,24 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			ipExecutionPolicy = "required"
 		}
 		ipArollPlan := map[string]interface{}{
-			"layerKey":        "ip_aroll",
-			"designed":        true,
-			"enabled":         true,
-			"required":        ipRequired,
-			"executionPolicy": ipExecutionPolicy,
-			"role":            "character_aroll_subject",
-			"description":     "使用正式 3D IP 角色拍摄为 2D A-roll，承载口播、口型、眼神、表情和角色连续性。",
-			"prompt":          fmt.Sprintf("树懒 IP 在正式演播室中完成 %s 的口播与表演：%s", shotID, narration),
-			"renderer":        "ip_avatar_3d",
-			"artifactKinds":   []string{"IP_AROLL_VIDEO", "AROLL_ASSET_PACKAGE"},
-			"safeArea":        "IP 主体不得遮挡字幕、标题和关键数据；为 AIGC 插入层与文字层保留构图安全区。",
-			"zIndex":          10,
-			"startSec":        0,
-			"durationSec":     duration,
+			"layerKey":         "ip_aroll",
+			"designed":         true,
+			"enabled":          true,
+			"required":         ipRequired,
+			"executionPolicy":  ipExecutionPolicy,
+			"role":             "character_aroll_subject",
+			"description":      "使用正式 3D IP 角色拍摄为 2D A-roll，承载口播、口型、眼神、表情和角色连续性。",
+			"prompt":           fmt.Sprintf("树懒 IP 在正式演播室中完成 %s 的口播与表演：%s", shotID, narration),
+			"renderer":         "ip_avatar_3d",
+			"artifactKinds":    []string{"IP_AROLL_VIDEO", "AROLL_ASSET_PACKAGE"},
+			"safeArea":         "IP 主体不得遮挡字幕、标题和关键数据；为 AIGC 插入层与文字层保留构图安全区。",
+			"zIndex":           10,
+			"startSec":         0,
+			"durationSec":      duration,
+			"startMs":          startMs,
+			"endMs":            endMs,
+			"durationMs":       durationMs,
+			"timelineRevision": timelineRevision,
 		}
 		submitExternalRequest := aigcExecutionEnabled && shouldSubmitExternalVideoRequest(shot, visual, materialHints)
 		aigcExecutionPolicy := "optional"
@@ -5000,6 +5106,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"requiresBlankArea":   true,
 			"canBeFullBackground": true,
 			"canBePartialInsert":  true,
+			"startMs":             startMs,
+			"endMs":               endMs,
+			"durationMs":          durationMs,
+			"timelineRevision":    timelineRevision,
 		}
 		hyperframesPlan := map[string]interface{}{
 			"layerKey":         "hyperframes_text",
@@ -5013,6 +5123,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"textRenderer":     "local_hyperframes",
 			"keyframeStrategy": "local_precise_layout",
 			"locks":            []string{"中文文字", "字幕", "标题", "流程标签", "UI 卡片"},
+			"startMs":          startMs,
+			"endMs":            endMs,
+			"durationMs":       durationMs,
+			"timelineRevision": timelineRevision,
 		}
 		ffmpegFusionPlan := map[string]interface{}{
 			"mode":               "three_layer_shot_composition",
@@ -5043,6 +5157,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		shotGuide := map[string]interface{}{
 			"shotId":               shotID,
 			"durationSec":          duration,
+			"startMs":              startMs,
+			"endMs":                endMs,
+			"durationMs":           durationMs,
+			"timelineRevision":     timelineRevision,
 			"narration":            narration,
 			"visualChange":         fallbackText(visual, "根据口播内容设计本 shot 的画面变化。"),
 			"productionRoute":      routeLabel,
@@ -5070,6 +5188,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		videoPrompts = append(videoPrompts, map[string]interface{}{
 			"shotId":               shotID,
 			"durationSec":          duration,
+			"startMs":              startMs,
+			"endMs":                endMs,
+			"durationMs":           durationMs,
+			"timelineRevision":     timelineRevision,
 			"narrationText":        narration,
 			"visualText":           fallbackText(visual, "根据口播内容设计本 shot 的画面变化。"),
 			"prompt":               videoPrompt,
@@ -5110,6 +5232,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 				"kind":                "video",
 				"shotId":              shotID,
 				"narrationText":       narration,
+				"startMs":             startMs,
+				"endMs":               endMs,
+				"durationMs":          durationMs,
+				"timelineRevision":    timelineRevision,
 				"visualText":          fallbackText(visual, "根据口播内容设计本 shot 的画面变化。"),
 				"prompt":              layerPlan.AIGCPrompt,
 				"promptText":          layerPlan.AIGCPrompt,
@@ -5139,6 +5265,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		packages = append(packages, map[string]interface{}{
 			"shotId":            shotID,
 			"durationSec":       duration,
+			"startMs":           startMs,
+			"endMs":             endMs,
+			"durationMs":        durationMs,
+			"timelineRevision":  timelineRevision,
 			"referenceImages":   references,
 			"assetRoute":        assetRoute,
 			"productionRoute":   routeLabel,

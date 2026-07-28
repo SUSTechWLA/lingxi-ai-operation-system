@@ -1639,6 +1639,83 @@ func TestVideoPromptGeneratorSplitsAIGCHyperframesAndFusionPlans(t *testing.T) {
 	}
 }
 
+func TestVideoPromptGeneratorPreservesPerShotNarrationAndTiming(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "不应成为单镜旁白的完整项目主题", "", map[string]interface{}{
+		"topic": "不应成为单镜旁白的完整项目主题",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId": "SHOT_01", "durationSec": 3, "startMs": int64(0), "endMs": int64(3_000), "durationMs": int64(3_000),
+				"timelineRevision": "audio-master-1", "scriptText": "第一镜旁白。", "visual": "树懒正对镜头开场。",
+			},
+			map[string]interface{}{
+				"shotId": "SHOT_02", "durationSec": 4, "startMs": int64(3_000), "endMs": int64(7_000), "durationMs": int64(4_000),
+				"timelineRevision": "audio-master-1", "scriptText": "第二镜旁白。", "visual": "树懒继续解释。",
+			},
+		},
+		"shotGenerationPlans": []interface{}{
+			map[string]interface{}{"shotId": "SHOT_01", "mode": "html_only"},
+			map[string]interface{}{"shotId": "SHOT_02", "mode": "html_only"},
+		},
+	}, tool.ToolContext{TaskID: "task-canonical-shot-context", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("video_prompt_generator failed: %s", result.Error)
+	}
+	prompts := interfaceSliceFromAny(result.Data["videoPrompts"])
+	packages := interfaceSliceFromAny(result.Data["shotAssetPackages"])
+	if len(prompts) != 2 || len(packages) != 2 {
+		t.Fatalf("prompt/package counts = %d/%d", len(prompts), len(packages))
+	}
+	wantNarration := []string{"第一镜旁白。", "第二镜旁白。"}
+	wantStart := []int64{0, 3_000}
+	wantEnd := []int64{3_000, 7_000}
+	for i := range prompts {
+		prompt, _ := mapValue(prompts[i])
+		pkg, _ := mapValue(packages[i])
+		if got := firstStringInMap(prompt, "narrationText"); got != wantNarration[i] {
+			t.Fatalf("prompt %d narration = %q, want %q", i, got, wantNarration[i])
+		}
+		if int64FromAny(prompt["startMs"], -1) != wantStart[i] || int64FromAny(prompt["endMs"], -1) != wantEnd[i] {
+			t.Fatalf("prompt %d timing = %#v", i, prompt)
+		}
+		voiceover, _ := mapValue(pkg["voiceover"])
+		if got := firstStringInMap(voiceover, "text"); got != wantNarration[i] {
+			t.Fatalf("package %d voiceover = %q, want %q", i, got, wantNarration[i])
+		}
+		if int64FromAny(pkg["startMs"], -1) != wantStart[i] || int64FromAny(pkg["endMs"], -1) != wantEnd[i] || firstStringInMap(pkg, "timelineRevision") != "audio-master-1" {
+			t.Fatalf("package %d canonical context = %#v", i, pkg)
+		}
+	}
+}
+
+func TestVideoPromptGeneratorPrefersCanonicalTimeWindowsOverDerivedPlans(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "整篇项目主题不能替代分镜旁白", "", map[string]interface{}{
+		"topic": "整篇项目主题不能替代分镜旁白",
+		"shotList": []interface{}{
+			map[string]interface{}{"shotId": "SHOT_01", "mode": "html_only", "durationSec": 3},
+			map[string]interface{}{"shotId": "SHOT_02", "mode": "html_only", "durationSec": 4},
+		},
+		"timeWindows": []interface{}{
+			map[string]interface{}{"shotId": "SHOT_01", "durationSec": 3, "startMs": int64(0), "endMs": int64(3_000), "durationMs": int64(3_000), "timelineRevision": "audio-master-2", "scriptText": "只属于第一镜。"},
+			map[string]interface{}{"shotId": "SHOT_02", "durationSec": 4, "startMs": int64(3_000), "endMs": int64(7_000), "durationMs": int64(4_000), "timelineRevision": "audio-master-2", "scriptText": "只属于第二镜。"},
+		},
+	}, tool.ToolContext{TaskID: "task-canonical-window-priority", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("video_prompt_generator failed: %s", result.Error)
+	}
+	prompts := interfaceSliceFromAny(result.Data["videoPrompts"])
+	if len(prompts) != 2 {
+		t.Fatalf("prompt count = %d", len(prompts))
+	}
+	for index, want := range []string{"只属于第一镜。", "只属于第二镜。"} {
+		prompt, _ := mapValue(prompts[index])
+		if got := firstStringInMap(prompt, "narrationText"); got != want {
+			t.Fatalf("prompt %d narration = %q, want canonical %q", index, got, want)
+		}
+	}
+}
+
 func TestVideoPromptGeneratorKeepsAIGCDesignWhenExecutionDisabled(t *testing.T) {
 	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "纯本地三层口播", "", map[string]interface{}{
 		"topic":        "纯本地三层口播",
