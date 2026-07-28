@@ -358,6 +358,15 @@ try {
   assert.equal(projectedReviewArtifacts[0].reviewCategory, 'text')
   assert.equal(projectedReviewArtifacts[0].reviewLabel, '文字内容', 'kind-only text artifacts use the closed generic label')
   assert.equal(projectedReviewArtifacts[0].shotLabel, 'SHOT_02')
+  const proposalReviewArtifacts = reviewArtifacts.projectCreatorReviewArtifacts([
+    { artifactId: 'proposal', stepId: 'direction', kind: 'JSON', mimeType: 'application/json', name: 'proposal_packet.json', version: 1, isCurrent: true, isStale: false },
+    { artifactId: 'strategy', stepId: 'direction', kind: 'JSON', mimeType: 'application/json', name: 'shot_generation_plans.json', version: 1, isCurrent: true, isStale: false },
+  ])
+  assert.deepEqual(
+    proposalReviewArtifacts.map(item => [item.artifactId, item.reviewCategory, item.reviewLabel]),
+    [['proposal', 'text', '创意方案']],
+    'the named proposal packet is reviewable without exposing unrelated generic planning payloads',
+  )
   const currentReviewArtifacts = reviewArtifacts.currentCreatorReviewArtifacts([
     { artifactId: 'script-v1', kind: 'VIDEO_SCRIPT', name: 'script-v1.json', version: 1, isCurrent: false, isStale: true },
     { artifactId: 'script-v2', kind: 'VIDEO_SCRIPT', name: 'script-v2.json', version: 2, isCurrent: false, isStale: true },
@@ -1633,6 +1642,7 @@ try {
   assert.doesNotMatch(proofingSource, /<video\b/, 'artifact proofing delegates video playback to the shared player')
   assert.match(proofingSource, /projectCreatorReviewContent\(displayedContent\)/)
   assert.match(inspectorSource, /projectHistoricalShotReview/, 'completed Shot review projects readable source content')
+  assert.match(inspectorSource, /resolveCreatorArtifactMediaUrl\(projectId, response, getLocalAgentBaseUrl\(\)\)/, 'completed Shot review resolves local media through the project-scoped local service')
   assert.match(inspectorSource, /<SimpleVideoPlayer\b/, 'completed Shot review previews its retained video')
   assert.match(inspectorSource, /<SimpleAudioPlayer\b/, 'completed Shot review previews its retained narration')
   assert.match(inspectorSource, /<img\b/, 'completed Shot review renders reference images, rather than links only')

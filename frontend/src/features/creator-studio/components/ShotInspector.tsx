@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { acceptShotCandidate, getCreatorArtifactContent } from '../../../services/creatorApi'
+import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import type { ShotListItem, ShotRegenerationResult, ShotUnit, ShotWorkspace } from '../types'
 import {
   projectHistoricalShotReview,
@@ -7,7 +8,7 @@ import {
   type HistoricalShotLoadedArtifact,
   type HistoricalShotReview,
 } from '../completedShotProjection'
-import { canSubmitShotDuration, isCreatorConflict, mapWithConcurrency, SHOT_QUEUE_CONFLICT_COPY } from '../logic'
+import { canSubmitShotDuration, isCreatorConflict, mapWithConcurrency, resolveCreatorArtifactMediaUrl, SHOT_QUEUE_CONFLICT_COPY } from '../logic'
 import ShotImprovePanel from './ShotImprovePanel'
 import SimpleAudioPlayer from './SimpleAudioPlayer'
 import SimpleVideoPlayer from './SimpleVideoPlayer'
@@ -88,7 +89,7 @@ export default function ShotInspector({ projectId, workspace, historicalShot, it
 
   useEffect(() => () => { controllerRef.current?.abort(); acceptControllerRef.current?.abort() }, [])
 
-  if (historicalShot) return <HistoricalShotInspector shot={historicalShot} />
+  if (historicalShot) return <HistoricalShotInspector projectId={projectId} shot={historicalShot} />
 
   if (!workspace || !shot) return <section className="shot-inspector artifact-review-panel"><p className="artifact-empty">从左侧队列选择一个 Shot 开始审核。</p></section>
 
@@ -148,7 +149,7 @@ export default function ShotInspector({ projectId, workspace, historicalShot, it
   )
 }
 
-function HistoricalShotInspector({ shot }: { shot: HistoricalShot }) {
+function HistoricalShotInspector({ projectId, shot }: { projectId: string; shot: HistoricalShot }) {
   const [loadedArtifacts, setLoadedArtifacts] = useState<HistoricalShotLoadedArtifact[]>([])
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'partial'>('loading')
   const [expandedImage, setExpandedImage] = useState<{ src: string; label: string } | null>(null)
@@ -162,12 +163,13 @@ function HistoricalShotInspector({ shot }: { shot: HistoricalShot }) {
     void mapWithConcurrency(shot.artifactIds, 3, async artifactId => {
       try {
         const response = await getCreatorArtifactContent(artifactId, controller.signal)
+        const resolvedMediaUrl = resolveCreatorArtifactMediaUrl(projectId, response, getLocalAgentBaseUrl())
         return {
           artifactId,
           content: response.content,
           reviewText: response.reviewText,
-          mediaUrl: response.mediaUrl,
-          mediaUrls: response.mediaUrls,
+          mediaUrl: resolvedMediaUrl,
+          mediaUrls: resolvedMediaUrl ? [resolvedMediaUrl] : response.mediaUrls,
         } satisfies HistoricalShotLoadedArtifact
       } catch (caught) {
         if (controller.signal.aborted) throw caught
@@ -182,7 +184,7 @@ function HistoricalShotInspector({ shot }: { shot: HistoricalShot }) {
       if (!controller.signal.aborted) setLoadState('partial')
     })
     return () => controller.abort()
-  }, [artifactKey, shot.artifactIds])
+  }, [artifactKey, projectId, shot.artifactIds])
 
   useEffect(() => {
     if (!expandedImage) return

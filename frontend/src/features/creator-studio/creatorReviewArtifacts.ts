@@ -63,18 +63,27 @@ function creatorShotLabel(value: string | undefined): string | undefined {
   return shotId
 }
 
+function isCreatorProposalPacket(artifact: CreatorArtifactDescriptor): boolean {
+  const kind = artifact.kind.trim().toLocaleUpperCase()
+  const name = normalized(artifact.name)
+  return artifact.stepId === 'direction' &&
+    kind === 'JSON' &&
+    /^(?:video[_-])?proposal(?:[_-]packet)?\.json$/u.test(name)
+}
+
 export function projectCreatorReviewArtifacts(
   artifacts: readonly CreatorArtifactDescriptor[],
 ): CreatorReviewArtifact[] {
   return artifacts
     .flatMap((artifact) => {
-      const reviewCategory = classifyCreatorReviewArtifact(artifact)
+      const proposalPacket = isCreatorProposalPacket(artifact)
+      const reviewCategory = classifyCreatorReviewArtifact(artifact) ?? (proposalPacket ? 'text' : undefined)
       if (!reviewCategory) return []
       const shotLabel = creatorShotLabel(artifact.relatedShotId)
       return [{
         ...artifact,
         reviewCategory,
-        reviewLabel: creatorReviewLabel(artifact.artifactType, artifact.generationKind, reviewCategory),
+        reviewLabel: proposalPacket ? '创意方案' : creatorReviewLabel(artifact.artifactType, artifact.generationKind, reviewCategory),
         ...(shotLabel ? { shotLabel } : {}),
       }]
     })
