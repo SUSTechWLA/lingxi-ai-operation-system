@@ -104,6 +104,60 @@ func TestMCPToolCallExecutorPreparesDefaultIPArollVoiceBeforeRender(t *testing.T
 	assertSanitizedIPArollRenderArgs(t, renderArgs)
 }
 
+func TestMCPToolCallExecutorPreparesVoiceInsideIPArollGenerationBatch(t *testing.T) {
+	dataDir := t.TempDir()
+	var calls []string
+	var renderArgs map[string]interface{}
+	videoPath := filepath.Join(dataDir, "rendered.mp4")
+	if err := os.WriteFile(videoPath, []byte("video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mcp := newMCPProtocolTestServer(t, func(toolName string, args map[string]interface{}) map[string]interface{} {
+		calls = append(calls, toolName)
+		if toolName == "synthesize_reference_voice" {
+			outputDir := args["outputDir"].(string)
+			if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			audioPath := filepath.Join(outputDir, "narration_master.wav")
+			provenancePath := filepath.Join(outputDir, "narration_master.provenance.json")
+			writePCM16WAVForVoiceTest(t, audioPath, 4800)
+			if err := os.WriteFile(provenancePath, []byte(`{"productionReady":true}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return map[string]interface{}{"structuredContent": map[string]interface{}{
+				"success": true, "audioPath": audioPath, "provenancePath": provenancePath,
+			}}
+		}
+		renderArgs = args
+		return map[string]interface{}{"structuredContent": map[string]interface{}{
+			"status": "ready", "success": true, "videoPath": videoPath, "localPath": videoPath,
+		}}
+	}, "synthesize_reference_voice", "render_talking_video")
+	defer mcp.Close()
+	executor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "ip_avatar_3d", Endpoint: mcp.URL, ToolPrefix: "ip_avatar_3d.", Enabled: true}}, nil
+	}, dataDir)
+	_, err := executor.Execute(context.Background(), Job{ID: "job_batch_001", Payload: map[string]interface{}{
+		"providerId": "ip_avatar_3d", "mcpTool": "ip_avatar_3d.render_talking_video", "projectId": "project_001",
+		"externalGenerationRequests": []interface{}{map[string]interface{}{
+			"requestId": "ip_aroll_main", "shotId": "AROLL_MAIN", "kind": "ip_aroll_video",
+			"mcpTool": "ip_avatar_3d.render_talking_video",
+			"arguments": map[string]interface{}{
+				"script":         "批处理口播测试",
+				"voiceSelection": map[string]interface{}{"mode": "default_ip", "provider": "gpt_sovits_local", "voiceId": "main_ip_warm_knowledge_host_v1"},
+			},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if strings.Join(calls, ",") != "synthesize_reference_voice,render_talking_video" {
+		t.Fatalf("batch calls = %#v", calls)
+	}
+	assertSanitizedIPArollRenderArgs(t, renderArgs)
+}
+
 func TestMCPToolCallExecutorResolvesReferenceVoiceOnlyForSynthesis(t *testing.T) {
 	dataDir := t.TempDir()
 	storageRef, contentHash := writeProjectVoiceFixture(t, dataDir, "project_001", "voice_001", "audio/wav", true)

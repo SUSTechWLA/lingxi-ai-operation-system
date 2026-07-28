@@ -82,39 +82,9 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 	}
 	args := copyMap(mapPayload(job.Payload, "arguments"))
 	if isIPArollRenderTool(provider.ID, toolName) {
-		if voiceSelection, ok := args["voiceSelection"].(map[string]interface{}); ok && len(voiceSelection) > 0 {
-			projectID := stringPayload(job.Payload, "projectId")
-			if projectID == "" {
-				projectID = stringPayload(job.Payload, "videoProjectId")
-			}
-			if err := validateLocalSegment(projectID); err != nil {
-				return nil, fmt.Errorf("projectId is required and must be safe for IP A-roll voice preparation: %w", err)
-			}
-			if strings.TrimSpace(e.dataDir) == "" {
-				return nil, errors.New("local data directory is required for IP A-roll voice preparation")
-			}
-			prepared, prepareErr := e.prepareIPArollVoice(
-				operationCtx,
-				client,
-				projectID,
-				voiceSelection,
-				stringPayload(args, "script"),
-				voiceRunID(projectID, job.ID, stringPayload(args, "script"), voiceSelection),
-				args,
-			)
-			if prepareErr != nil {
-				return nil, prepareErr
-			}
-			args["audioPath"] = prepared.AudioPath
-			args["outputDir"] = prepared.OutputDir
-			for _, privateKey := range []string{
-				"voiceSelection", "referenceArtifactId", "referenceStorageRef", "referenceContentHash",
-				"referenceMimeType", "recordedNarrationArtifactId", "recordedNarrationStorageRef",
-				"recordedNarrationContentHash", "recordedNarrationMimeType", "referenceAudioPath",
-				"referenceText", "referenceTextVerified", "usageRightsConfirmed",
-			} {
-				delete(args, privateKey)
-			}
+		args, err = e.prepareIPArollRenderArguments(operationCtx, client, job, args)
+		if err != nil {
+			return nil, err
 		}
 	}
 	callResult, err := client.CallTool(operationCtx, toolName, args)
@@ -207,6 +177,14 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 			break
 		}
 		requestCtx, cancelRequest := context.WithTimeout(ctx, requestTimeout)
+		if isIPArollRenderTool(providerID, requestToolName) {
+			preparedArgs, prepareErr := e.prepareIPArollRenderArguments(requestCtx, client, job, args)
+			if prepareErr != nil {
+				cancelRequest()
+				return nil, prepareErr
+			}
+			args = preparedArgs
+		}
 		callResult, err := client.CallTool(requestCtx, requestToolName, args)
 		if err != nil {
 			cancelRequest()

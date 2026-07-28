@@ -559,3 +559,49 @@ func (e *mcpToolCallExecutor) prepareIPArollVoice(
 		return empty, fmt.Errorf("unsupported IP A-roll voice mode %q", mode)
 	}
 }
+
+func (e *mcpToolCallExecutor) prepareIPArollRenderArguments(
+	ctx context.Context,
+	client *localmcp.Client,
+	job Job,
+	args map[string]interface{},
+) (map[string]interface{}, error) {
+	preparedArgs := copyMap(args)
+	voiceSelection, ok := preparedArgs["voiceSelection"].(map[string]interface{})
+	if !ok || len(voiceSelection) == 0 {
+		return preparedArgs, nil
+	}
+	projectID := stringPayload(job.Payload, "projectId")
+	if projectID == "" {
+		projectID = stringPayload(job.Payload, "videoProjectId")
+	}
+	if err := validateLocalSegment(projectID); err != nil {
+		return nil, fmt.Errorf("projectId is required and must be safe for IP A-roll voice preparation: %w", err)
+	}
+	if strings.TrimSpace(e.dataDir) == "" {
+		return nil, errors.New("local data directory is required for IP A-roll voice preparation")
+	}
+	prepared, err := e.prepareIPArollVoice(
+		ctx,
+		client,
+		projectID,
+		voiceSelection,
+		stringPayload(preparedArgs, "script"),
+		voiceRunID(projectID, job.ID, stringPayload(preparedArgs, "script"), voiceSelection),
+		preparedArgs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	preparedArgs["audioPath"] = prepared.AudioPath
+	preparedArgs["outputDir"] = prepared.OutputDir
+	for _, privateKey := range []string{
+		"voiceSelection", "referenceArtifactId", "referenceStorageRef", "referenceContentHash",
+		"referenceMimeType", "recordedNarrationArtifactId", "recordedNarrationStorageRef",
+		"recordedNarrationContentHash", "recordedNarrationMimeType", "referenceAudioPath",
+		"referenceText", "referenceTextVerified", "usageRightsConfirmed",
+	} {
+		delete(preparedArgs, privateKey)
+	}
+	return preparedArgs, nil
+}
