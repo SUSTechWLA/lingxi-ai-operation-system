@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -737,4 +739,87 @@ func (s *recordingReviewStateMachine) OnFailure(_ context.Context, nodeID string
 	s.failureNodeID = nodeID
 	s.failureError = errorMessage
 	return nil
+}
+
+type memoryArtifactReviewStore struct {
+	reviews []*ArtifactReview
+	err     error
+}
+
+func (s *memoryArtifactReviewStore) Save(context.Context, *ArtifactReview) error { return nil }
+func (s *memoryArtifactReviewStore) FindByID(context.Context, string) (*ArtifactReview, error) {
+	return nil, s.err
+}
+func (s *memoryArtifactReviewStore) FindByNodeID(context.Context, string) (*ArtifactReview, error) {
+	return nil, s.err
+}
+func (s *memoryArtifactReviewStore) FindByTaskID(context.Context, string) ([]*ArtifactReview, error) {
+	return s.reviews, s.err
+}
+func (s *memoryArtifactReviewStore) UpdateStatus(context.Context, string, ArtifactReviewStatus, string, string) error {
+	return nil
+}
+
+func TestListReviewsEnrichesPersistedReviewerAuditFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	createdAt := time.Date(2026, time.July, 24, 9, 30, 0, 0, time.UTC)
+	reviewedAt := createdAt.Add(15 * time.Minute)
+	runStore := newMemoryRunStore()
+	runStore.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusSuccess}
+	nodeStore := &memoryReviewNodeStore{nodes: []*model.Node{{
+		ID: "script-review", TaskID: "task-1", Type: model.NodeTypeReviewGate, Status: model.NodeSuccess,
+		Input: map[string]interface{}{"stage": "script", "humanReview": map[string]interface{}{"required": true}},
+	}}}
+	auditStore := &memoryArtifactReviewStore{reviews: []*ArtifactReview{{
+		ID: "audit-1", TaskID: "task-1", NodeID: "script-review", Status: ArtifactReviewApproved,
+		ReviewerID: "editor-1", ReviewComment: "Ready to publish", CreatedAt: createdAt, ReviewedAt: &reviewedAt,
+	}}}
+	handler := NewHandler(NewRunner(nil, runStore, nil, nil, nil), nodeStore, &recordingReviewStateMachine{}).
+		WithArtifactReviewStore(auditStore)
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/agent/runs/run-1/reviews", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data struct {
+			Reviews []struct {
+				ReviewerID    string     `json:"reviewerId"`
+				ReviewComment string     `json:"reviewComment"`
+				CreatedAt     *time.Time `json:"createdAt"`
+				ReviewedAt    *time.Time `json:"reviewedAt"`
+			} `json:"reviews"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Data.Reviews) != 1 {
+		t.Fatalf("reviews = %#v, want one enriched review", response.Data.Reviews)
+	}
+	got := response.Data.Reviews[0]
+	if got.ReviewerID != "editor-1" || got.ReviewComment != "Ready to publish" ||
+		got.CreatedAt == nil || !got.CreatedAt.Equal(createdAt) || got.ReviewedAt == nil || !got.ReviewedAt.Equal(reviewedAt) {
+		t.Fatalf("audit fields = %#v, want persisted reviewer/comment/times", got)
+	}
+}
+
+func TestListReviewsToleratesUnavailableArtifactReviewAuditStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	runStore := newMemoryRunStore()
+	runStore.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusSuccess}
+	nodeStore := &memoryReviewNodeStore{nodes: []*model.Node{{
+		ID: "script-review", TaskID: "task-1", Type: model.NodeTypeReviewGate, Status: model.NodeSuccess,
+	}}}
+	handler := NewHandler(NewRunner(nil, runStore, nil, nil, nil), nodeStore, &recordingReviewStateMachine{}).
+		WithArtifactReviewStore(&memoryArtifactReviewStore{err: errors.New("audit unavailable")})
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/agent/runs/run-1/reviews", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
 }

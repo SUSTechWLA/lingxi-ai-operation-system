@@ -217,12 +217,19 @@ func (r *Repository) Save(ctx context.Context, a *Artifact) error {
 	return tx.Commit(ctx)
 }
 
-// ListByProject returns all current artifacts for a project.
-func (r *Repository) ListByProject(ctx context.Context, projectID string) ([]*Artifact, error) {
-	rows, err := r.pool.Query(ctx,
+type artifactProjectQueryer interface {
+	Query(context.Context, string, ...interface{}) (pgx.Rows, error)
+}
+
+func listProjectArtifactsFromQueryer(ctx context.Context, queryer artifactProjectQueryer, projectID string, includeHistory bool) ([]*Artifact, error) {
+	currentPredicate := " AND is_current=true"
+	if includeHistory {
+		currentPredicate = ""
+	}
+	rows, err := queryer.Query(ctx,
 		`SELECT `+fullSelectColumns+`
 		 FROM artifacts
-		 WHERE project_id=$1 AND is_current=true
+		 WHERE project_id=$1`+currentPredicate+`
 		 ORDER BY stage_name, unit_id, version DESC`,
 		projectID,
 	)
@@ -230,6 +237,16 @@ func (r *Repository) ListByProject(ctx context.Context, projectID string) ([]*Ar
 		return nil, err
 	}
 	return scanArtifacts(rows)
+}
+
+// ListByProject returns all current artifacts for a project.
+func (r *Repository) ListByProject(ctx context.Context, projectID string) ([]*Artifact, error) {
+	return listProjectArtifactsFromQueryer(ctx, r.pool, projectID, false)
+}
+
+// ListAllVersionsByProject returns current and historical artifact metadata for a project.
+func (r *Repository) ListAllVersionsByProject(ctx context.Context, projectID string) ([]*Artifact, error) {
+	return listProjectArtifactsFromQueryer(ctx, r.pool, projectID, true)
 }
 
 // ListUsableByProject returns current artifacts that are valid (not stale/rejected/failed/deleted).

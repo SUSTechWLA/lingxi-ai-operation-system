@@ -10,6 +10,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/skillcapability"
 	workflow "github.com/tangying-ai/aios-core/internal/core/workflow"
 )
@@ -32,6 +33,36 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 		},
+	})
+	minAckItems, maxAckItems, maxRelayIDLength, maxFingerprints := 1, 500, 128, 128
+	ackClosed := false
+	b.Schema("ObservabilityAckRequest", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"eventIds": {Schema: &Schema{
+				Type: "array", MinItems: &minAckItems, MaxItems: &maxAckItems,
+				Items: &SchemaRef{Schema: &Schema{
+					Type: "string", Pattern: `^evt_[A-Za-z0-9_-]+$`, MaxLength: &maxRelayIDLength,
+				}},
+			}},
+		},
+		Required:             []string{"eventIds"},
+		AdditionalProperties: &AdditionalProperties{Allowed: &ackClosed},
+	})
+	summarySchema := Reflect(observability.RunSummary{})
+	summarySchema.Properties["errorFingerprints"].Schema.MaxItems = &maxFingerprints
+	summarySchema.Properties["errorFingerprints"].Schema.Items.Schema.Pattern = `^[a-f0-9]{64}$`
+	b.Schema("ObservabilityRunSummary", summarySchema)
+	b.Schema("ObservabilityEventPageResponse", Reflect(observabilityEventPageResponse{}))
+	b.Schema("ObservabilityAckResponse", Reflect(observabilityAckEnvelope{}))
+	b.Schema("ObservabilityRunSummaryResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data":    {Ref: "#/components/schemas/ObservabilityRunSummary"},
+		},
+		Required: []string{"code", "message", "data"},
 	})
 
 	// ── Health ──
@@ -700,11 +731,25 @@ func registerCloudSchemas(b *Builder) {
 		"id": {Schema: creatorStepID}, "label": {Schema: StringSchema()}, "state": {Schema: creatorStepState},
 		"currentArtifactId": {Schema: StringSchema()}, "currentVersion": {Schema: IntegerSchema()},
 		"reviewId": {Schema: StringSchema()}, "runId": {Schema: StringSchema()},
+		"hasHistory": {Schema: BoolSchema()}, "attemptCount": {Schema: IntegerSchema()}, "artifactCount": {Schema: IntegerSchema()},
+		"startedAt": {Schema: &Schema{Type: "string", Format: "date-time", Nullable: true}},
+		"updatedAt": {Schema: &Schema{Type: "string", Format: "date-time", Nullable: true}}, "isStale": {Schema: BoolSchema()},
 		"allowedActions": {Schema: ArraySchema(StringSchema())},
-	}, "id", "label", "state", "allowedActions"))
+	}, "id", "label", "state", "hasHistory", "attemptCount", "artifactCount", "isStale", "allowedActions"))
+	creatorArtifactDescriptor := Reflect(videomodel.CreatorArtifactDescriptor{})
+	creatorArtifactDescriptor.Properties["stepId"] = &SchemaRef{Schema: creatorStepID}
+	b.Schema("CreatorArtifactDescriptor", creatorArtifactDescriptor)
+	creatorProcessEvent := Reflect(videomodel.CreatorProcessEvent{})
+	creatorProcessEvent.Properties["stepId"] = &SchemaRef{Schema: creatorStepID}
+	creatorProcessEvent.Properties["state"] = &SchemaRef{Schema: enumSchema("started", "generated", "needs_review", "confirmed", "failed", "stale")}
+	creatorProcessEvent.Properties["sourceType"] = &SchemaRef{Schema: enumSchema("artifact", "review", "agent_node", "shot", "project")}
+	b.Schema("CreatorProcessEvent", creatorProcessEvent)
 	creatorTask := Reflect(videomodel.CreatorTask{})
 	creatorTask.Properties["scope"] = &SchemaRef{Schema: creatorStepID}
-	creatorTask.Properties["status"] = &SchemaRef{Schema: enumSchema("generating", "running", "processing", "queued", "dispatching")}
+	creatorTask.Properties["status"] = &SchemaRef{Schema: enumSchema(
+		string(videomodel.CreatorTaskGenerating), string(videomodel.CreatorTaskRunning), string(videomodel.CreatorTaskProcessing),
+		string(videomodel.CreatorTaskQueued), string(videomodel.CreatorTaskDispatching),
+	)}
 	b.Schema("CreatorTask", creatorTask)
 	b.Schema("ShotSummary", Reflect(videomodel.ShotSummary{}))
 	shotListItem := Reflect(videomodel.ShotListItem{})
@@ -765,9 +810,12 @@ func registerCloudSchemas(b *Builder) {
 
 	creationView := requiredObject(map[string]*SchemaRef{
 		"project": {Schema: RefSchema("VideoProject")}, "activeStep": {Schema: creatorStepID},
-		"steps": {Schema: ArraySchema(RefSchema("CreatorStep"))}, "shotSummary": {Schema: RefSchema("ShotSummary")},
+		"finalDeliveryArtifactId": {Schema: StringSchema()},
+		"steps":                   {Schema: ArraySchema(RefSchema("CreatorStep"))}, "shotSummary": {Schema: RefSchema("ShotSummary")},
 		"activeTasks": {Schema: ArraySchema(RefSchema("CreatorTask"))}, "assemblyDirty": {Schema: BoolSchema()},
-	}, "project", "activeStep", "steps", "shotSummary", "activeTasks", "assemblyDirty")
+		"processTimeline": {Schema: ArraySchema(RefSchema("CreatorProcessEvent"))},
+		"stepArtifacts":   {Schema: &Schema{Type: "object", AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Schema: ArraySchema(RefSchema("CreatorArtifactDescriptor"))}}}},
+	}, "project", "activeStep", "steps", "shotSummary", "activeTasks", "assemblyDirty", "processTimeline", "stepArtifacts")
 	b.Schema("CreationView", creationView)
 
 	selection := &Schema{OneOf: []*SchemaRef{
@@ -778,8 +826,19 @@ func registerCloudSchemas(b *Builder) {
 		{Schema: closedObject(map[string]*SchemaRef{
 			"kind": {Schema: enumSchema("time")}, "startMs": {Schema: &Schema{Type: "integer", Format: "int64"}}, "endMs": {Schema: &Schema{Type: "integer", Format: "int64"}},
 		}, "kind", "startMs", "endMs")},
+		{Schema: closedObject(map[string]*SchemaRef{
+			"kind": {Schema: enumSchema("text")}, "start": {Schema: IntegerSchema()}, "end": {Schema: IntegerSchema()}, "text": {Schema: StringSchema()},
+			"sourceHash": {Schema: &Schema{Type: "string", Pattern: `^sha256:[0-9a-f]{64}$`}},
+		}, "kind", "start", "end", "text", "sourceHash")},
 	}}
 	b.Schema("ArtifactSelection", selection)
+	replacementMaterialIdentity := requiredObject(map[string]*SchemaRef{
+		"contentHash": {Schema: &Schema{Type: "string", Pattern: `^sha256:.+$`}},
+		"storageRef":  {Schema: &Schema{Type: "string", Pattern: `^local://.+$`}},
+		"mimeType":    {Schema: &Schema{Type: "string", Pattern: `^image/.+$`}},
+		"sizeBytes":   {Schema: &Schema{Type: "integer", Format: "int64", Minimum: &zero}},
+	}, "contentHash", "storageRef", "mimeType", "sizeBytes")
+	b.Schema("ReplacementMaterialIdentity", replacementMaterialIdentity)
 	b.Schema("StepRevisionPreviewRequest", requiredObject(map[string]*SchemaRef{
 		"artifactId": {Schema: StringSchema()}, "baseVersion": {Schema: positiveVersion()},
 	}, "artifactId", "baseVersion"))
@@ -795,9 +854,21 @@ func registerCloudSchemas(b *Builder) {
 	instructionMutation := mutationProperties("instruction")
 	instructionMutation["instruction"] = &SchemaRef{Schema: StringSchema()}
 	instructionMutation["modelProviders"] = &SchemaRef{Schema: freeFormObject("Transient desktop model-provider credentials; never persisted")}
+	replaceMutation := mutationProperties("replace")
+	replaceMutation["replacementMaterial"] = &SchemaRef{Schema: RefSchema("ReplacementMaterialIdentity")}
+	replaceSelection := closedObject(
+		map[string]*SchemaRef{
+			"kind": {Schema: enumSchema("rect")}, "x": {Schema: &Schema{Type: "number"}}, "y": {Schema: &Schema{Type: "number"}},
+			"width": {Schema: &Schema{Type: "number"}}, "height": {Schema: &Schema{Type: "number"}},
+		},
+		"kind", "x", "y", "width", "height",
+	)
+	replaceSelection.Nullable = true
+	replaceMutation["selection"] = &SchemaRef{Schema: replaceSelection}
 	b.Schema("StepRevisionMutationRequest", &Schema{OneOf: []*SchemaRef{
 		{Schema: closedObject(directMutation, "artifactId", "baseVersion", "mode", "directContent", "confirmedAffectedShotIds")},
 		{Schema: closedObject(instructionMutation, "artifactId", "baseVersion", "mode", "instruction", "confirmedAffectedShotIds")},
+		{Schema: closedObject(replaceMutation, "artifactId", "baseVersion", "mode", "replacementMaterial", "confirmedAffectedShotIds")},
 	}})
 	b.Schema("StepConfirmRequest", requiredObject(map[string]*SchemaRef{
 		"artifactId": {Schema: StringSchema()}, "runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()}, "comment": {Schema: StringSchema()},
@@ -806,6 +877,11 @@ func registerCloudSchemas(b *Builder) {
 		"baseVersion": {Schema: positiveVersion()}, "runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()},
 		"reason": {Schema: StringSchema()}, "confirmedAffectedShotIds": {Schema: ArraySchema(StringSchema())},
 	}, "baseVersion", "confirmedAffectedShotIds"))
+	b.Schema("StepRegenerationRequest", requiredObject(map[string]*SchemaRef{
+		"baseArtifactId": {Schema: StringSchema()}, "baseVersion": {Schema: IntegerSchema()},
+		"instruction": {Schema: StringSchema()}, "runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()},
+		"confirmedAffectedStepIds": {Schema: ArraySchema(creatorStepID)},
+	}, "confirmedAffectedStepIds"))
 	b.Schema("RegisterProjectMaterialRequest", closedObject(materialProperties,
 		"name", "kind", "storageRef", "mimeType", "sizeBytes", "contentHash"))
 	b.Schema("ShotRegenerationRequest", requiredObject(map[string]*SchemaRef{
@@ -827,6 +903,10 @@ func registerCloudSchemas(b *Builder) {
 	b.Schema("StepMutationResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
 		"artifact": {Schema: Reflect(artifacts.Artifact{})}, "impact": {Schema: RefSchema("StepImpact")}, "view": {Schema: RefSchema("CreationView")},
 	}, "artifact", "impact", "view")))
+	b.Schema("StepRegenerationResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
+		"runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()}, "attempt": {Schema: positiveVersion()},
+		"impact": {Schema: RefSchema("StepImpact")}, "view": {Schema: RefSchema("CreationView")},
+	}, "runId", "reviewId", "attempt", "impact", "view")))
 	b.Schema("ProjectMaterialResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
 		"material": {Schema: RefSchema("ProjectMaterial")}, "artifact": {Schema: Reflect(artifacts.Artifact{})},
 	}, "material", "artifact")))
@@ -1076,10 +1156,12 @@ func registerCloudSchemas(b *Builder) {
 			"data": {Schema: &Schema{
 				Type: "object",
 				Properties: map[string]*SchemaRef{
-					"artifact":  {Schema: Reflect(artifacts.Artifact{})},
-					"content":   {Schema: ObjectSchema()},
-					"mediaUrl":  {Schema: StringSchema()},
-					"mediaUrls": {Schema: ArraySchema(StringSchema())},
+					"artifact":             {Schema: Reflect(artifacts.Artifact{})},
+					"content":              {Schema: ObjectSchema()},
+					"mediaUrl":             {Schema: StringSchema()},
+					"mediaUrls":            {Schema: ArraySchema(StringSchema())},
+					"reviewText":           {Schema: StringSchema()},
+					"reviewTextSourceHash": {Schema: &Schema{Type: "string", Pattern: `^sha256:[0-9a-f]{64}$`}},
 				},
 			}},
 		},
@@ -1107,6 +1189,18 @@ func registerCloudSchemas(b *Builder) {
 	_ = model.TaskCreated
 	_ = model.NodeCreated
 	_ = workflow.Template{}
+}
+
+type observabilityEventPageResponse struct {
+	Code    int                     `json:"code"`
+	Message string                  `json:"message"`
+	Data    observability.EventPage `json:"data"`
+}
+
+type observabilityAckEnvelope struct {
+	Code    int                               `json:"code"`
+	Message string                            `json:"message"`
+	Data    observability.AcknowledgeResponse `json:"data"`
 }
 
 func enumSchema(values ...string) *Schema {

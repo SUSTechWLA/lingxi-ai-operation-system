@@ -34,7 +34,7 @@ export interface AgentReviewDecisionResponse {
 // AgentReviewListResponse
 export interface AgentReviewListResponse {
   code?: number;
-  data?: { reviews?: { artifactId?: string; blocksDownstream?: boolean; humanReview?: Record<string, unknown>; id: string; nodeId: string; requiredInputs?: string[]; requiredOutputs?: string[]; reviewArtifactKinds?: string[]; reviewArtifacts?: Record<string, unknown>[]; reviewContent?: string; reviewOutput?: Record<string, unknown>; reviewPhase?: string; reviewReason?: string; roleAgent?: Record<string, unknown>; roleAgentId?: string; sourceNodeId?: string; stage?: string; status: string; stepId?: string; tool?: string }[]; runId?: string };
+  data?: { reviews?: ({ artifactId?: string; blocksDownstream?: boolean; createdAt?: string | null; humanReview?: Record<string, unknown>; id: string; nodeId: string; requiredInputs?: string[]; requiredOutputs?: string[]; reviewArtifactKinds?: string[]; reviewArtifacts?: Record<string, unknown>[]; reviewComment?: string; reviewContent?: string; reviewOutput?: Record<string, unknown>; reviewPhase?: string; reviewReason?: string; reviewedAt?: string | null; reviewerId?: string; roleAgent?: Record<string, unknown>; roleAgentId?: string; sourceNodeId?: string; stage?: string; status: string; stepId?: string; tool?: string })[]; runId?: string };
   message?: string;
 }
 
@@ -42,7 +42,7 @@ export interface AgentReviewListResponse {
 // AgentRunDetailResponse
 export interface AgentRunDetailResponse {
   code?: number;
-  data?: { run?: { budget?: { maxCostLevel?: string; maxLLMCalls?: number; maxReplans?: number; maxSteps?: number; maxToolCalls?: number }; createdAt: string; domain?: string; id: string; message: string; metadata?: Record<string, unknown>; plan?: { budget: { maxCostLevel?: string; maxLLMCalls?: number; maxReplans?: number; maxSteps?: number; maxToolCalls?: number }; domain: string; goal: string; knowledgePolicy?: { allowedTools?: string[]; blockOnEmptyFacts: boolean; contentType: string; forbiddenCapabilities?: string[]; forbiddenTools?: string[]; freshnessDays?: number; freshnessLevel: string; knowledgeType: string; maxSearchResults?: number; mustCiteFacts: boolean; mustUseFacts: boolean; reason?: string; requiredCapabilities?: string[]; retrievalPolicy: string; searchQueries?: string[] } | null; mode: string; steps: { arguments: Record<string, unknown>; dependsOn?: string[]; expectedOutput?: string[]; id: string; intent?: string; produceArtifact?: boolean; reason?: string; tool: string }[]; stopPolicy: { stopWhenEnough?: boolean }; toolTrace?: { candidateTools?: { costRiskPenalty?: number; hitWhenNotToUse?: string[]; knowledgePolicyReason?: string; matchedCapabilities?: string[]; matchedTags?: string[]; matchedWhenToUse?: string[]; name: string; reason: string; score: number }[]; executedTools?: string[]; guardDecision?: { passed: boolean; warnings?: string[] } | null; knowledgeContext?: { generatedBy?: string[]; itemCount: number; sourceCount: number } | null; plannedTools?: string[] } | null } | null; status: string; taskId?: string; updatedAt: string; userId?: string }; task?: Record<string, unknown> };
+  data?: { run?: { budget?: { maxCostLevel?: string; maxLLMCalls?: number; maxReplans?: number; maxSteps?: number; maxToolCalls?: number }; createdAt: string; domain?: string; id: string; message: string; metadata?: Record<string, unknown>; parentRunId?: string | null; plan?: { budget: { maxCostLevel?: string; maxLLMCalls?: number; maxReplans?: number; maxSteps?: number; maxToolCalls?: number }; domain: string; goal: string; knowledgePolicy?: { allowedTools?: string[]; blockOnEmptyFacts: boolean; contentType: string; forbiddenCapabilities?: string[]; forbiddenTools?: string[]; freshnessDays?: number; freshnessLevel: string; knowledgeType: string; maxSearchResults?: number; mustCiteFacts: boolean; mustUseFacts: boolean; reason?: string; requiredCapabilities?: string[]; retrievalPolicy: string; searchQueries?: string[] } | null; mode: string; steps: { arguments: Record<string, unknown>; dependsOn?: string[]; expectedOutput?: string[]; id: string; intent?: string; produceArtifact?: boolean; reason?: string; tool: string }[]; stopPolicy: { stopWhenEnough?: boolean }; toolTrace?: { candidateTools?: { costRiskPenalty?: number; hitWhenNotToUse?: string[]; knowledgePolicyReason?: string; matchedCapabilities?: string[]; matchedTags?: string[]; matchedWhenToUse?: string[]; name: string; reason: string; score: number }[]; executedTools?: string[]; guardDecision?: { passed: boolean; warnings?: string[] } | null; knowledgeContext?: { generatedBy?: string[]; itemCount: number; sourceCount: number } | null; plannedTools?: string[] } | null } | null; replayFromStageId?: string | null; runManifest?: { createdAt: string; mcpRunnerRevisions?: { catalogRevision: string; deviceId?: string; runnerId: string }[]; parentRunId?: string | null; replayFromStageId?: string | null; runId: string; runtime: string; schemaVersion: string; toolRegistrySha256: string; toolRegistrySnapshotId: string; traceId?: string } | null; status: string; taskId?: string; toolRegistrySnapshotId?: string; toolSnapshot: { canonicalJson: unknown; createdAt: string; id: string; sha256: string }; traceId?: string; updatedAt: string; userId?: string }; task?: Record<string, unknown> };
   message?: string;
 }
 
@@ -71,6 +71,8 @@ export interface AgentStartRunRequest {
   maxRiskLevel?: string;
   message: string;
   mode?: string;
+  parentRunId?: string | null;
+  replayFromStageId?: string | null;
   requestToolSnapshot: { manifests: Record<string, { approvalPolicy?: { blocksDownstream?: boolean; mode?: string; reason?: string; required: boolean; reviewArtifactKinds?: string[] }; artifactLocation?: string; artifactPolicy?: { artifactKinds?: string[]; defaultReviewRequired?: boolean; produceArtifact: boolean; storage?: string; syncFileToCloud?: boolean; syncMetadataToCloud?: boolean }; author?: string; boundary?: string; capabilities?: string[]; costLevel?: string; description: string; endpoint?: string; examples?: { input: Record<string, unknown>; output: Record<string, unknown> }[]; executionPlane?: string; failureModes?: string[]; humanReview?: { gate?: string; required: boolean; reviewFocus?: string[]; title?: string; userActions?: string[] } | null; idempotent?: boolean; inputSchema?: Record<string, unknown>; latencyLevel?: string; localCommand?: string; localRequirements?: { commands?: string[]; minDiskMb?: number; os?: string[]; requiresNetwork?: boolean }; name: string; nextRecommendedTools?: string[]; output: Record<string, { default?: unknown; description: string; enum?: string[]; required: boolean; type: string }>; outputSchema?: Record<string, unknown>; parameters: Record<string, { default?: unknown; description: string; enum?: string[]; required: boolean; type: string }>; promptRef?: string; provider?: string; providerBinding?: { catalogRevision?: string; deviceId?: string; logicalToolName?: string; providerId?: string; remoteToolName?: string; targetRunnerId?: string; toolNameMap?: Record<string, string>; toolPrefix?: string } | null; providerCapabilities?: Record<string, unknown>; qualityPolicy?: { autoRepair?: boolean; checkerTool?: string; maxRepairAttempts?: number; minScore?: number; repairTool?: string; required: boolean }; registeredAt?: string; requiresUserDevice?: boolean; resourceRefs?: string[]; riskLevel?: string; sandbox: boolean; sideEffect?: boolean; skillPackageId?: string; tags?: string[]; timeout?: number; transport?: { endpoint?: string; headers?: Record<string, string>; type?: string } | null; type: string; version?: string; whenNotToUse?: string[]; whenToUse?: string[] }>; ordered: ({ approvalPolicy?: { blocksDownstream?: boolean; mode?: string; reason?: string; required: boolean; reviewArtifactKinds?: string[] }; artifactLocation?: string; artifactPolicy?: { artifactKinds?: string[]; defaultReviewRequired?: boolean; produceArtifact: boolean; storage?: string; syncFileToCloud?: boolean; syncMetadataToCloud?: boolean }; author?: string; boundary?: string; capabilities?: string[]; costLevel?: string; description: string; endpoint?: string; examples?: { input: Record<string, unknown>; output: Record<string, unknown> }[]; executionPlane?: string; failureModes?: string[]; humanReview?: { gate?: string; required: boolean; reviewFocus?: string[]; title?: string; userActions?: string[] } | null; idempotent?: boolean; inputSchema?: Record<string, unknown>; latencyLevel?: string; localCommand?: string; localRequirements?: { commands?: string[]; minDiskMb?: number; os?: string[]; requiresNetwork?: boolean }; name: string; nextRecommendedTools?: string[]; output: Record<string, { default?: unknown; description: string; enum?: string[]; required: boolean; type: string }>; outputSchema?: Record<string, unknown>; parameters: Record<string, { default?: unknown; description: string; enum?: string[]; required: boolean; type: string }>; promptRef?: string; provider?: string; providerBinding?: { catalogRevision?: string; deviceId?: string; logicalToolName?: string; providerId?: string; remoteToolName?: string; targetRunnerId?: string; toolNameMap?: Record<string, string>; toolPrefix?: string } | null; providerCapabilities?: Record<string, unknown>; qualityPolicy?: { autoRepair?: boolean; checkerTool?: string; maxRepairAttempts?: number; minScore?: number; repairTool?: string; required: boolean }; registeredAt?: string; requiresUserDevice?: boolean; resourceRefs?: string[]; riskLevel?: string; sandbox: boolean; sideEffect?: boolean; skillPackageId?: string; tags?: string[]; timeout?: number; transport?: { endpoint?: string; headers?: Record<string, string>; type?: string } | null; type: string; version?: string; whenNotToUse?: string[]; whenToUse?: string[] })[]; runners: { catalogRevision: string; deviceId?: string; runnerId: string }[] } | null;
   userId?: string;
 }
@@ -114,7 +116,7 @@ export interface Artifact {
 // ArtifactContentResponse
 export interface ArtifactContentResponse {
   code?: number;
-  data?: { artifact?: { contentHash: string; createdAt: string; dependsOn?: string[]; humanApproved: boolean; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, unknown>; mimeType?: string; model?: string; name: string; parentId?: string; producedByNode?: string; producedByRole?: string; producedByTool?: string; projectId: string; promptHash?: string; provider?: string; roleAgentId?: string; sizeBytes: number; stageName: string; status: string; storageRef?: string; storageType: string; taskId?: string; unitId?: string; updatedAt: string; version: number; workflowRunId?: string }; content?: Record<string, unknown>; mediaUrl?: string; mediaUrls?: string[] };
+  data?: { artifact?: { contentHash: string; createdAt: string; dependsOn?: string[]; humanApproved: boolean; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, unknown>; mimeType?: string; model?: string; name: string; parentId?: string; producedByNode?: string; producedByRole?: string; producedByTool?: string; projectId: string; promptHash?: string; provider?: string; roleAgentId?: string; sizeBytes: number; stageName: string; status: string; storageRef?: string; storageType: string; taskId?: string; unitId?: string; updatedAt: string; version: number; workflowRunId?: string }; content?: Record<string, unknown>; mediaUrl?: string; mediaUrls?: string[]; reviewText?: string; reviewTextSourceHash?: string };
   message?: string;
 }
 
@@ -144,7 +146,7 @@ export interface ArtifactListResponse {
 
 /**  */
 // ArtifactSelection
-export type ArtifactSelection = { endMs?: never; height: number; kind: 'rect'; startMs?: never; width: number; x: number; y: number } | { endMs: number; height?: never; kind: 'time'; startMs: number; width?: never; x?: never; y?: never };
+export type ArtifactSelection = { end?: never; endMs?: never; height: number; kind: 'rect'; sourceHash?: never; start?: never; startMs?: never; text?: never; width: number; x: number; y: number } | { end?: never; endMs: number; height?: never; kind: 'time'; sourceHash?: never; start?: never; startMs: number; text?: never; width?: never; x?: never; y?: never } | { end: number; endMs?: never; height?: never; kind: 'text'; sourceHash: string; start: number; startMs?: never; text: string; width?: never; x?: never; y?: never };
 
 /**  */
 // AssemblyRebuildResponse
@@ -216,7 +218,7 @@ export interface CandidateRestoreRequest {
 /**  */
 // ClaimJobResponse
 export interface ClaimJobResponse {
-  job: { artifactPolicy?: { location: string; syncFileToCloud: boolean; syncMetadataToCloud: boolean }; attempt?: number; catalogRevision?: string; command: string; createdAt?: string; currentStep?: string; diagnostics?: Record<string, unknown>; error?: Record<string, unknown>; errorMessage?: string; followupCallbackState?: string; idempotencyKey?: string; jobId: string; leaseExpiresAt?: string | null; mcpLogicalToolName?: string; mcpProviderId?: string; mcpRemoteToolName?: string; message?: string; nodeId?: string; output?: Record<string, unknown>; payload: Record<string, unknown>; progress?: number; projectId: string; resultCallbackState?: string; retryable?: boolean; runnerId?: string; status?: string; targetRunnerId?: string; taskId?: string; timeoutSec?: number; toolName?: string; updatedAt?: string; userId?: string } | null;
+  job: { artifactPolicy?: { location: string; syncFileToCloud: boolean; syncMetadataToCloud: boolean }; attempt?: number; catalogRevision?: string; command: string; completedAt?: string | null; createdAt?: string; currentStep?: string; diagnostics?: Record<string, unknown>; error?: Record<string, unknown>; errorMessage?: string; followupCallbackState?: string; idempotencyKey?: string; jobId: string; leaseExpiresAt?: string | null; mcpLogicalToolName?: string; mcpProviderId?: string; mcpRemoteToolName?: string; message?: string; nodeId?: string; output?: Record<string, unknown>; payload: Record<string, unknown>; progress?: number; projectId: string; resultCallbackState?: string; retryable?: boolean; runnerId?: string; status?: string; targetRunnerId?: string; taskId?: string; timeoutSec?: number; toolName?: string; updatedAt?: string; userId?: string } | null;
 }
 
 /**  */
@@ -240,8 +242,11 @@ export interface CreationView {
   activeStep: 'requirements' | 'direction' | 'script' | 'shots' | 'preview' | 'delivery';
   activeTasks: CreatorTask[];
   assemblyDirty: boolean;
+  finalDeliveryArtifactId?: string;
+  processTimeline: CreatorProcessEvent[];
   project: VideoProject;
   shotSummary: ShotSummary;
+  stepArtifacts: Record<string, CreatorArtifactDescriptor[]>;
   steps: CreatorStep[];
 }
 
@@ -254,12 +259,47 @@ export interface CreationViewResponse {
 }
 
 /**  */
+// CreatorArtifactDescriptor
+export interface CreatorArtifactDescriptor {
+  artifactId: string;
+  artifactType?: string;
+  attempt: number;
+  createdAt: string;
+  generationKind?: string;
+  isCurrent: boolean;
+  isStale: boolean;
+  kind: string;
+  mimeType?: string;
+  name: string;
+  relatedShotId?: string;
+  sizeBytes?: number;
+  stepId: 'requirements' | 'direction' | 'script' | 'shots' | 'preview' | 'delivery';
+  version: number;
+}
+
+/**  */
 // CreatorArtifactVersion
 export interface CreatorArtifactVersion {
   artifactId: string;
   createdAt: string;
   isCurrent: boolean;
   version: number;
+}
+
+/**  */
+// CreatorProcessEvent
+export interface CreatorProcessEvent {
+  artifactIds: string[];
+  attempt: number;
+  completedAt?: string | null;
+  id: string;
+  sourceId: string;
+  sourceType: 'artifact' | 'review' | 'agent_node' | 'shot' | 'project';
+  startedAt?: string | null;
+  state: 'started' | 'generated' | 'needs_review' | 'confirmed' | 'failed' | 'stale';
+  stepId: 'requirements' | 'direction' | 'script' | 'shots' | 'preview' | 'delivery';
+  summary?: string;
+  title: string;
 }
 
 /**  */
@@ -274,13 +314,19 @@ export interface CreatorShotUnitResponse {
 // CreatorStep
 export interface CreatorStep {
   allowedActions: string[];
+  artifactCount: number;
+  attemptCount: number;
   currentArtifactId?: string;
   currentVersion?: number;
+  hasHistory: boolean;
   id: 'requirements' | 'direction' | 'script' | 'shots' | 'preview' | 'delivery';
+  isStale: boolean;
   label: string;
   reviewId?: string;
   runId?: string;
+  startedAt?: string | null;
   state: 'not_started' | 'generating' | 'needs_review' | 'confirmed' | 'needs_attention' | 'failed';
+  updatedAt?: string | null;
 }
 
 /**  */
@@ -435,6 +481,48 @@ export interface NodeSuccessResponse {
   code?: number;
   data?: { message?: string };
   message?: string;
+}
+
+/**  */
+// ObservabilityAckRequest
+export interface ObservabilityAckRequest {
+  eventIds: string[];
+}
+
+/**  */
+// ObservabilityAckResponse
+export interface ObservabilityAckResponse {
+  code: number;
+  data: { acknowledged: number };
+  message: string;
+}
+
+/**  */
+// ObservabilityEventPageResponse
+export interface ObservabilityEventPageResponse {
+  code: number;
+  data: { events: ({ correlation: { agentRunId?: string; artifactId?: string; parentSpanId?: string; projectId?: string; providerJobId?: string; sessionId?: string; shotId?: string; spanId: string; stageId?: string; taskId?: string; toolCallId?: string; traceId: string; workflowRunId?: string }; error: { causedByEventId?: string; class: string; code: string; developerDetail?: string; evidenceRefs?: string[]; fingerprint: string; protectedStackRef?: string; retryable: boolean; suggestedActionKey: string; userMessageKey: string } | null; eventId: string; eventType: string; evidence: { inputHash?: string; inputRefs?: string[]; outputHash?: string; outputRefs?: string[]; sizeBytes?: number | null }; execution: { attempt: number; durationMs?: number | null; status: string }; ingestedAt: string; messageKey: string; occurredAt: string; privacy: { classification: string; redactedFields: string[] }; producerSequence: number; runtime: { appVersion?: string; gitCommit?: string; model?: string; promptTemplateVersion?: string; provider?: string; toolRegistrySnapshotId?: string; workflowVersion?: string }; schemaVersion: string; severity: string; source: { component: string; environment: string; service: string } })[]; nextCursor?: string };
+  message: string;
+}
+
+/**  */
+// ObservabilityRunSummary
+export interface ObservabilityRunSummary {
+  correlation: { agentRunId?: string; artifactId?: string; parentSpanId?: string; projectId?: string; providerJobId?: string; sessionId?: string; shotId?: string; spanId: string; stageId?: string; taskId?: string; toolCallId?: string; traceId: string; workflowRunId?: string };
+  durationMs?: number | null;
+  errorFingerprints: string[];
+  runId: string;
+  status: string;
+  updatedAt: string;
+  versions: { appVersion?: string; gitCommit?: string; promptTemplateVersion?: string; toolRegistrySnapshotId?: string; workflowVersion?: string };
+}
+
+/**  */
+// ObservabilityRunSummaryResponse
+export interface ObservabilityRunSummaryResponse {
+  code: number;
+  data: ObservabilityRunSummary;
+  message: string;
 }
 
 /**  */
@@ -611,6 +699,15 @@ export interface RenderStrategyResponse {
   code?: number;
   data?: { renderStrategy?: { aigcInput?: { durationSec?: number; negativePrompt?: string; prompt?: string } | null; aigcRequired: boolean; compositePlan?: { backgroundArtifactId?: string; outputArtifactType?: string; overlayArtifactId?: string } | null; htmlInput?: { durationSec?: number; textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[] } | null; htmlRequired: boolean; mode: string; needsCompositing: boolean; primaryTool?: string; reason?: string; secondaryTools?: string[]; textOverlayNeeded: boolean } };
   message?: string;
+}
+
+/**  */
+// ReplacementMaterialIdentity
+export interface ReplacementMaterialIdentity {
+  contentHash: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageRef: string;
 }
 
 /**  */
@@ -949,6 +1046,25 @@ export interface StepMutationResponse {
 }
 
 /**  */
+// StepRegenerationRequest
+export interface StepRegenerationRequest {
+  baseArtifactId?: string;
+  baseVersion?: number;
+  confirmedAffectedStepIds: ('requirements' | 'direction' | 'script' | 'shots' | 'preview' | 'delivery')[];
+  instruction?: string;
+  reviewId?: string;
+  runId?: string;
+}
+
+/**  */
+// StepRegenerationResponse
+export interface StepRegenerationResponse {
+  code: number;
+  data: { attempt: number; impact: StepImpact; reviewId: string; runId: string; view: CreationView };
+  message: string;
+}
+
+/**  */
 // StepRestoreRequest
 export interface StepRestoreRequest {
   baseVersion: number;
@@ -960,7 +1076,7 @@ export interface StepRestoreRequest {
 
 /**  */
 // StepRevisionMutationRequest
-export type StepRevisionMutationRequest = { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent: string; instruction?: never; mode: 'direct'; modelProviders?: never; reviewId?: string; runId?: string; selection?: ArtifactSelection | null } | { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent?: never; instruction: string; mode: 'instruction'; modelProviders?: Record<string, unknown>; reviewId?: string; runId?: string; selection?: ArtifactSelection | null };
+export type StepRevisionMutationRequest = { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent: string; instruction?: never; mode: 'direct'; modelProviders?: never; replacementMaterial?: never; reviewId?: string; runId?: string; selection?: ArtifactSelection | null } | { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent?: never; instruction: string; mode: 'instruction'; modelProviders?: Record<string, unknown>; replacementMaterial?: never; reviewId?: string; runId?: string; selection?: ArtifactSelection | null } | { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent?: never; instruction?: never; mode: 'replace'; modelProviders?: never; replacementMaterial: ReplacementMaterialIdentity; reviewId?: string; runId?: string; selection?: { height: number; kind: 'rect'; width: number; x: number; y: number } | null };
 
 /**  */
 // StepRevisionPreviewRequest

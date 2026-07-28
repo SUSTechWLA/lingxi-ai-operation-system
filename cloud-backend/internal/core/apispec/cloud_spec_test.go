@@ -39,6 +39,8 @@ func TestCloudSpec_CreatorRoutesMatchHandlers(t *testing.T) {
 		{"POST", "/api/video-projects/:id/steps/:stepId/revisions", "StepRevisionMutationRequest", "StepMutationResponse", true},
 		{"POST", "/api/video-projects/:id/steps/:stepId/confirm", "StepConfirmRequest", "CreationViewResponse", false},
 		{"POST", "/api/video-projects/:id/steps/:stepId/versions/:version/restore", "StepRestoreRequest", "StepMutationResponse", true},
+		{"POST", "/api/video-projects/:id/steps/:stepId/regeneration-impact", "", "StepImpactResponse", false},
+		{"POST", "/api/video-projects/:id/steps/:stepId/regenerations", "StepRegenerationRequest", "StepRegenerationResponse", true},
 		{"POST", "/api/video-projects/:id/materials", "RegisterProjectMaterialRequest", "ProjectMaterialResponse", false},
 		{"GET", "/api/video-projects/:id/shots", "", "ShotPageResponse", false},
 		{"GET", "/api/video-projects/:id/shots/summary", "", "ShotSummaryResponse", false},
@@ -88,6 +90,7 @@ func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 		"StepRevisionPreviewRequest":     {"artifactId", "baseVersion"},
 		"StepConfirmRequest":             {"artifactId"},
 		"StepRestoreRequest":             {"baseVersion", "confirmedAffectedShotIds"},
+		"StepRegenerationRequest":        {"confirmedAffectedStepIds"},
 		"RegisterProjectMaterialRequest": {"name", "kind", "storageRef", "mimeType", "sizeBytes", "contentHash"},
 		"ShotRegenerationRequest":        {"baseVersion", "scope", "locks"},
 		"CandidateAcceptRequest":         {"baseVersion", "scope", "locks"},
@@ -106,12 +109,22 @@ func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 
 	assertSchemaEnum(t, spec, "CreatorStep", "id", []any{"requirements", "direction", "script", "shots", "preview", "delivery"})
 	assertSchemaEnum(t, spec, "CreatorStep", "state", []any{"not_started", "generating", "needs_review", "confirmed", "needs_attention", "failed"})
+	for _, property := range []string{"hasHistory", "attemptCount", "artifactCount", "isStale"} {
+		if _, ok := spec.Components.Schemas["CreatorStep"].Properties[property]; !ok {
+			t.Errorf("CreatorStep.%s missing", property)
+		}
+	}
+	for _, property := range []string{"processTimeline", "stepArtifacts"} {
+		if _, ok := spec.Components.Schemas["CreationView"].Properties[property]; !ok {
+			t.Errorf("CreationView.%s missing", property)
+		}
+	}
 	preview := spec.Components.Schemas["StepRevisionPreviewRequest"]
 	if got := sortedPropertyNames(preview); !reflect.DeepEqual(got, []string{"artifactId", "baseVersion"}) {
 		t.Fatalf("preview properties = %v", got)
 	}
 	mutation := spec.Components.Schemas["StepRevisionMutationRequest"]
-	if mutation == nil || len(mutation.OneOf) != 2 {
+	if mutation == nil || len(mutation.OneOf) != 3 {
 		t.Fatalf("mutation oneOf = %+v", mutation)
 	}
 	for _, branch := range mutation.OneOf {
@@ -122,8 +135,10 @@ func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 		if len(mode.Enum) != 1 {
 			t.Fatalf("mutation mode enum = %v", mode.Enum)
 		}
-		content := "directContent"
-		if mode.Enum[0] == "instruction" {
+		content := "replacementMaterial"
+		if mode.Enum[0] == "direct" {
+			content = "directContent"
+		} else if mode.Enum[0] == "instruction" {
 			content = "instruction"
 		}
 		want := []string{"artifactId", "baseVersion", "mode", content, "confirmedAffectedShotIds"}
@@ -134,6 +149,24 @@ func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 	assertSchemaEnum(t, spec, "ShotRegenerationRequest", "scope", []any{"prompt", "reference", "base_media", "overlay", "audio_alignment", "full_shot"})
 	assertSchemaEnum(t, spec, "CandidateAcceptRequest", "scope", []any{"candidate_accept"})
 	assertSchemaEnum(t, spec, "CandidateRestoreRequest", "scope", []any{"candidate_restore"})
+}
+
+func TestCloudSpecCreatorArtifactDescriptorAllowListsClassificationHints(t *testing.T) {
+	descriptor := BuildCloudSpec().Components.Schemas["CreatorArtifactDescriptor"]
+	for _, property := range []string{"artifactType", "generationKind", "relatedShotId"} {
+		field := descriptor.Properties[property]
+		if field == nil || field.Schema == nil || field.Schema.Type != "string" {
+			t.Errorf("CreatorArtifactDescriptor.%s = %#v, want optional string", property, field)
+		}
+		for _, required := range descriptor.Required {
+			if required == property {
+				t.Errorf("CreatorArtifactDescriptor.%s must remain optional", property)
+			}
+		}
+	}
+	if _, ok := descriptor.Properties["metadata"]; ok {
+		t.Fatal("CreatorArtifactDescriptor must not expose raw artifact metadata")
+	}
 }
 
 func TestCloudSpec_CreatorParametersAndMaterialConstraints(t *testing.T) {
@@ -203,7 +236,6 @@ func TestCloudSpec_CreatorResponsesAndFiniteStates(t *testing.T) {
 	}
 
 	assertSchemaEnum(t, spec, "CreatorTask", "scope", []any{"requirements", "direction", "script", "shots", "preview", "delivery"})
-	assertSchemaEnum(t, spec, "CreatorTask", "status", []any{"generating", "running", "processing", "queued", "dispatching"})
 	assertSchemaEnum(t, spec, "ShotListItem", "reviewStatus", []any{"pending", "approved", "rejected", "stale"})
 	assertSchemaEnum(t, spec, "ShotListItem", "generationStatus", []any{"PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale", "queued", "dispatching", "running", "failed", "cancelled"})
 	assertSchemaEnum(t, spec, "ShotListItem", "qaStatus", []any{"PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale"})
@@ -221,10 +253,16 @@ func TestCloudSpec_CreatorResponsesAndFiniteStates(t *testing.T) {
 	}
 }
 
+func TestCloudSpec_CreatorTaskStatusIsClosedAndCreatorFacing(t *testing.T) {
+	assertSchemaEnum(t, BuildCloudSpec(), "CreatorTask", "status", []any{
+		"generating", "running", "processing", "queued", "dispatching",
+	})
+}
+
 func TestCloudSpec_ExactRevisionUnionAndClosedMaterialRequest(t *testing.T) {
 	spec := BuildCloudSpec()
 	mutation := spec.Components.Schemas["StepRevisionMutationRequest"]
-	if mutation == nil || len(mutation.OneOf) != 2 {
+	if mutation == nil || len(mutation.OneOf) != 3 {
 		t.Fatalf("mutation schema = %+v", mutation)
 	}
 	for _, branch := range mutation.OneOf {
@@ -245,6 +283,17 @@ func TestCloudSpec_ExactRevisionUnionAndClosedMaterialRequest(t *testing.T) {
 		if mode == "instruction" && branch.Schema.Properties["modelProviders"] == nil {
 			t.Fatal("instruction branch must accept transient model provider credentials")
 		}
+		if mode == "replace" {
+			for _, forbidden := range []string{"instruction", "directContent", "modelProviders"} {
+				if branch.Schema.Properties[forbidden] != nil {
+					t.Fatalf("replace branch exposes forbidden field %q", forbidden)
+				}
+			}
+			replacement := inlineProperty(t, branch.Schema, "replacementMaterial")
+			if replacement.Ref != "#/components/schemas/ReplacementMaterialIdentity" {
+				t.Fatalf("replace branch replacementMaterial = %+v", replacement)
+			}
+		}
 	}
 
 	material := spec.Components.Schemas["RegisterProjectMaterialRequest"]
@@ -262,7 +311,7 @@ func TestCloudSpec_ExactRevisionUnionAndClosedMaterialRequest(t *testing.T) {
 
 func TestCloudSpec_ArtifactSelectionBranchesAreClosedAndDisjoint(t *testing.T) {
 	selection := BuildCloudSpec().Components.Schemas["ArtifactSelection"]
-	if selection == nil || len(selection.OneOf) != 2 {
+	if selection == nil || len(selection.OneOf) != 3 {
 		t.Fatalf("selection schema = %+v", selection)
 	}
 	for _, branch := range selection.OneOf {
@@ -287,6 +336,13 @@ func TestCloudSpec_ArtifactSelectionBranchesAreClosedAndDisjoint(t *testing.T) {
 			if got, want := wire.Required, []string{"kind", "startMs", "endMs"}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("time required = %v, want %v", got, want)
 			}
+		case "text":
+			if got, want := sortedRawPropertyNames(wire.Properties), []string{"end", "kind", "sourceHash", "start", "text"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("text properties = %v, want %v", got, want)
+			}
+			if got, want := wire.Required, []string{"kind", "start", "end", "text", "sourceHash"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("text required = %v, want %v", got, want)
+			}
 		default:
 			t.Fatalf("unexpected selection kind %v", kind)
 		}
@@ -298,6 +354,32 @@ func TestCloudSpec_ArtifactSelectionBranchesAreClosedAndDisjoint(t *testing.T) {
 		if !selectionProperty.Nullable {
 			t.Fatalf("optional selection must accept JSON null: %+v", selectionProperty)
 		}
+		mode := inlineProperty(t, branch.Schema, "mode").Enum[0]
+		if mode == "replace" {
+			if selectionProperty.Type != "object" || selectionProperty.AdditionalProperties == nil ||
+				selectionProperty.AdditionalProperties.Allowed == nil || *selectionProperty.AdditionalProperties.Allowed {
+				t.Fatalf("replace selection must be a closed rectangle: %+v", selectionProperty)
+			}
+			if kind := inlineProperty(t, selectionProperty, "kind"); !reflect.DeepEqual(kind.Enum, []any{"rect"}) {
+				t.Fatalf("replace selection kind = %v", kind.Enum)
+			}
+		}
+	}
+}
+
+func TestCloudSpec_ArtifactContentResponseExposesOptionalReviewText(t *testing.T) {
+	content := BuildCloudSpec().Components.Schemas["ArtifactContentResponse"]
+	if content == nil {
+		t.Fatal("ArtifactContentResponse schema is missing")
+	}
+	data := inlineProperty(t, content, "data")
+	reviewText := inlineProperty(t, data, "reviewText")
+	if reviewText.Type != "string" {
+		t.Fatalf("reviewText schema = %+v", reviewText)
+	}
+	reviewTextSourceHash := inlineProperty(t, data, "reviewTextSourceHash")
+	if reviewTextSourceHash.Type != "string" || reviewTextSourceHash.Pattern != `^sha256:[0-9a-f]{64}$` {
+		t.Fatalf("reviewTextSourceHash schema = %+v", reviewTextSourceHash)
 	}
 }
 
@@ -315,7 +397,7 @@ func TestCloudSpec_SerializesCreatorSchemaRefsAsOpenAPI(t *testing.T) {
 	schemas := jsonObject(t, components["schemas"], "components.schemas")
 	selection := jsonObject(t, schemas["ArtifactSelection"], "ArtifactSelection")
 	selectionBranches := jsonArray(t, selection["oneOf"], "ArtifactSelection.oneOf")
-	if len(selectionBranches) != 2 {
+	if len(selectionBranches) != 3 {
 		t.Fatalf("ArtifactSelection.oneOf length = %d", len(selectionBranches))
 	}
 	for index, value := range selectionBranches {
@@ -328,7 +410,7 @@ func TestCloudSpec_SerializesCreatorSchemaRefsAsOpenAPI(t *testing.T) {
 
 	mutation := jsonObject(t, schemas["StepRevisionMutationRequest"], "StepRevisionMutationRequest")
 	mutationBranches := jsonArray(t, mutation["oneOf"], "StepRevisionMutationRequest.oneOf")
-	if len(mutationBranches) != 2 {
+	if len(mutationBranches) != 3 {
 		t.Fatalf("StepRevisionMutationRequest.oneOf length = %d", len(mutationBranches))
 	}
 	for index, value := range mutationBranches {
@@ -336,6 +418,13 @@ func TestCloudSpec_SerializesCreatorSchemaRefsAsOpenAPI(t *testing.T) {
 		assertNoSchemaWrapper(t, branch, "StepRevisionMutationRequest.oneOf")
 		properties := jsonObject(t, branch["properties"], "StepRevisionMutationRequest.properties")
 		selectionRef := jsonObject(t, properties["selection"], "StepRevisionMutationRequest.selection")
+		mode := jsonArray(t, jsonObject(t, properties["mode"], "StepRevisionMutationRequest.mode")["enum"], "StepRevisionMutationRequest.mode.enum")[0]
+		if mode == "replace" {
+			if selectionRef["type"] != "object" || selectionRef["additionalProperties"] != false || selectionRef["nullable"] != true {
+				t.Fatalf("replace selection = %#v", selectionRef)
+			}
+			continue
+		}
 		if selectionRef["$ref"] != "#/components/schemas/ArtifactSelection" || selectionRef["nullable"] != true {
 			t.Fatalf("StepRevisionMutationRequest.oneOf[%d] selection = %#v", index, selectionRef)
 		}
@@ -710,4 +799,91 @@ func TestBuildCloudSpec_SnapshotPathCount(t *testing.T) {
 			expectedMin, len(spec.Paths))
 	}
 	t.Logf("Path count: %d", len(spec.Paths))
+}
+
+func TestBuildCloudSpecExposesAuthenticatedObservabilityRelay(t *testing.T) {
+	spec := BuildCloudSpec()
+	tests := []struct {
+		method, path, request, response string
+	}{
+		{"GET", "/api/observability/events", "", "ObservabilityEventPageResponse"},
+		{"POST", "/api/observability/events/ack", "ObservabilityAckRequest", "ObservabilityAckResponse"},
+		{"GET", "/api/observability/runs/:runId/summary", "", "ObservabilityRunSummaryResponse"},
+	}
+	for _, test := range tests {
+		op := operationForMethod(t, spec.Paths[test.path], test.method)
+		if op == nil {
+			t.Fatalf("%s %s missing", test.method, test.path)
+		}
+		if len(op.Tags) == 0 || op.Tags[0] != "Observability" {
+			t.Fatalf("%s %s tags = %v", test.method, test.path, op.Tags)
+		}
+		assertRequiredHeader(t, op, "Authorization", true)
+		if _, ok := op.Responses["401"]; !ok {
+			t.Fatalf("%s %s missing 401", test.method, test.path)
+		}
+		assertSchemaRef(t, op, test.request, test.response)
+	}
+
+	pull := operationForMethod(t, spec.Paths["/api/observability/events"], "GET")
+	limit := findParameter(pull, "query", "limit")
+	if limit == nil || inlineParameterSchema(limit).Default != 100 ||
+		*inlineParameterSchema(limit).Minimum != 1 || *inlineParameterSchema(limit).Maximum != 500 {
+		t.Fatalf("pull limit = %#v", limit)
+	}
+	ack := spec.Components.Schemas["ObservabilityAckRequest"]
+	if ack == nil || !reflect.DeepEqual(ack.Required, []string{"eventIds"}) {
+		t.Fatalf("ack schema = %#v", ack)
+	}
+	eventIDs := inlineProperty(t, ack, "eventIds")
+	if eventIDs.MinItems == nil || *eventIDs.MinItems != 1 || eventIDs.MaxItems == nil || *eventIDs.MaxItems != 500 {
+		t.Fatalf("ack eventIds bounds = %#v", eventIDs)
+	}
+	if eventIDs.Items == nil || eventIDs.Items.Schema == nil || eventIDs.Items.Schema.Pattern != `^evt_[A-Za-z0-9_-]+$` ||
+		eventIDs.Items.Schema.MaxLength == nil || *eventIDs.Items.Schema.MaxLength != 128 {
+		t.Fatalf("ack eventId schema = %#v", eventIDs.Items)
+	}
+	cursor := inlineParameterSchema(findParameter(pull, "query", "cursor"))
+	if cursor == nil || cursor.MinLength == nil || *cursor.MinLength != 1 ||
+		cursor.MaxLength == nil || *cursor.MaxLength != 2048 || cursor.Pattern != `^[A-Za-z0-9_-]+$` {
+		t.Fatalf("cursor schema = %#v", cursor)
+	}
+	encoded, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	paths := document["paths"].(map[string]any)
+	operation := paths["/api/observability/events"].(map[string]any)["get"].(map[string]any)
+	parameters := operation["parameters"].([]any)
+	var cursorJSON map[string]any
+	for _, raw := range parameters {
+		parameter := raw.(map[string]any)
+		if parameter["in"] == "query" && parameter["name"] == "cursor" {
+			cursorJSON = parameter["schema"].(map[string]any)
+			break
+		}
+	}
+	if cursorJSON == nil || cursorJSON["minLength"] != float64(1) ||
+		cursorJSON["maxLength"] != float64(2048) || cursorJSON["pattern"] != `^[A-Za-z0-9_-]+$` {
+		t.Fatalf("serialized cursor schema = %#v", cursorJSON)
+	}
+	runOp := operationForMethod(t, spec.Paths["/api/observability/runs/:runId/summary"], "GET")
+	runID := inlineParameterSchema(findParameter(runOp, "path", "runId"))
+	if runID == nil || runID.MaxLength == nil || *runID.MaxLength != 128 || runID.Pattern != `^(?:wfr|agr)_[A-Za-z0-9_-]+$` {
+		t.Fatalf("runId schema = %#v", runID)
+	}
+	fingerprints := inlineProperty(t, spec.Components.Schemas["ObservabilityRunSummary"], "errorFingerprints")
+	if fingerprints.MaxItems == nil || *fingerprints.MaxItems != 128 || fingerprints.Items == nil ||
+		fingerprints.Items.Schema == nil || fingerprints.Items.Schema.Pattern != `^[a-f0-9]{64}$` {
+		t.Fatalf("fingerprint schema = %#v", fingerprints)
+	}
+	for _, forbidden := range []string{"prompt", "media", "toolArgs", "attributes", "errorText"} {
+		if _, ok := spec.Components.Schemas["ObservabilityRunSummary"].Properties[forbidden]; ok {
+			t.Fatalf("run summary exposes %q", forbidden)
+		}
+	}
 }

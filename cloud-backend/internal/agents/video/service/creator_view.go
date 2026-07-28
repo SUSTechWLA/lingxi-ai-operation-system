@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf16"
 
+	"github.com/tangying-ai/aios-core/internal/agents/video/assets"
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
 )
@@ -17,50 +19,68 @@ import (
 // The mapping is deliberately closed: developer-only or future stages cannot
 // appear as an extra creator step.
 var creatorStageSteps = map[string]model.CreatorStepID{
-	"requirements":     model.CreatorStepRequirements,
-	"requirement":      model.CreatorStepRequirements,
-	"brief":            model.CreatorStepRequirements,
-	"source_materials": model.CreatorStepRequirements,
+	"requirements":         model.CreatorStepRequirements,
+	"requirement":          model.CreatorStepRequirements,
+	"requirement_analysis": model.CreatorStepRequirements,
+	"brief":                model.CreatorStepRequirements,
+	"source_materials":     model.CreatorStepRequirements,
 
-	"direction":          model.CreatorStepDirection,
-	"creative_direction": model.CreatorStepDirection,
-	"proposal":           model.CreatorStepDirection,
-	"research":           model.CreatorStepDirection,
-	"style":              model.CreatorStepDirection,
-	"character":          model.CreatorStepDirection,
-	"characters":         model.CreatorStepDirection,
-	"feasibility":        model.CreatorStepDirection,
+	"direction":                     model.CreatorStepDirection,
+	"creative_direction":            model.CreatorStepDirection,
+	"creative_direction_generation": model.CreatorStepDirection,
+	"proposal":                      model.CreatorStepDirection,
+	"proposal_generator":            model.CreatorStepDirection,
+	"research":                      model.CreatorStepDirection,
+	"knowledge_researcher":          model.CreatorStepDirection,
+	"style":                         model.CreatorStepDirection,
+	"character":                     model.CreatorStepDirection,
+	"characters":                    model.CreatorStepDirection,
+	"feasibility":                   model.CreatorStepDirection,
 
-	"script":       model.CreatorStepScript,
-	"voiceover":    model.CreatorStepScript,
-	"audio_master": model.CreatorStepScript,
-	"timing":       model.CreatorStepScript,
+	"script":                         model.CreatorStepScript,
+	"script_generation":              model.CreatorStepScript,
+	"script_generation_quality_gate": model.CreatorStepScript,
+	"voiceover":                      model.CreatorStepScript,
+	"audio_master":                   model.CreatorStepScript,
+	"timing":                         model.CreatorStepScript,
+	"time_window":                    model.CreatorStepScript,
 
-	"shots":           model.CreatorStepShots,
-	"shot":            model.CreatorStepShots,
-	"storyboard":      model.CreatorStepShots,
-	"composition":     model.CreatorStepShots,
-	"reference":       model.CreatorStepShots,
-	"continuity":      model.CreatorStepShots,
-	"visual_plan":     model.CreatorStepShots,
-	"render_strategy": model.CreatorStepShots,
-	"assets":          model.CreatorStepShots,
-	"materials":       model.CreatorStepShots,
+	"shots":                     model.CreatorStepShots,
+	"shot":                      model.CreatorStepShots,
+	"shot_design":               model.CreatorStepShots,
+	"shot_split":                model.CreatorStepShots,
+	"shot_split_quality_gate":   model.CreatorStepShots,
+	"storyboard":                model.CreatorStepShots,
+	"composition":               model.CreatorStepShots,
+	"reference":                 model.CreatorStepShots,
+	"continuity":                model.CreatorStepShots,
+	"visual_plan":               model.CreatorStepShots,
+	"visual_alignment":          model.CreatorStepShots,
+	"video_prompt":              model.CreatorStepShots,
+	"video_prompt_quality_gate": model.CreatorStepShots,
+	"ip_aroll_generation":       model.CreatorStepShots,
+	"render_strategy":           model.CreatorStepShots,
+	"assets":                    model.CreatorStepShots,
+	"materials":                 model.CreatorStepShots,
 
-	"preview":      model.CreatorStepPreview,
-	"assembly":     model.CreatorStepPreview,
-	"captions":     model.CreatorStepPreview,
-	"subtitle":     model.CreatorStepPreview,
-	"audio_mix":    model.CreatorStepPreview,
-	"quality":      model.CreatorStepPreview,
-	"final_review": model.CreatorStepPreview,
-	"final_qa":     model.CreatorStepPreview,
-	"render":       model.CreatorStepPreview,
+	"preview":        model.CreatorStepPreview,
+	"assembly":       model.CreatorStepPreview,
+	"video_assembly": model.CreatorStepPreview,
+	"final_render":   model.CreatorStepPreview,
+	"captions":       model.CreatorStepPreview,
+	"subtitle":       model.CreatorStepPreview,
+	"audio_mix":      model.CreatorStepPreview,
+	"quality":        model.CreatorStepPreview,
+	"final_review":   model.CreatorStepPreview,
+	"final_qa":       model.CreatorStepPreview,
+	"render":         model.CreatorStepPreview,
+	"visual_qa":      model.CreatorStepPreview,
 
-	"delivery": model.CreatorStepDelivery,
-	"package":  model.CreatorStepDelivery,
-	"publish":  model.CreatorStepDelivery,
-	"export":   model.CreatorStepDelivery,
+	"delivery":     model.CreatorStepDelivery,
+	"package":      model.CreatorStepDelivery,
+	"publish":      model.CreatorStepDelivery,
+	"publish_copy": model.CreatorStepDelivery,
+	"export":       model.CreatorStepDelivery,
 }
 
 var creatorStepDefinitions = []struct {
@@ -77,6 +97,10 @@ var creatorStepDefinitions = []struct {
 
 type creatorProjectReader interface {
 	GetProject(ctx context.Context, userID, projectID string) (*model.VideoProject, error)
+}
+
+type creatorProjectLifecycle interface {
+	MarkAgentRunStarted(ctx context.Context, userID, projectID, runID string) error
 }
 
 type creatorArtifactReader interface {
@@ -98,17 +122,30 @@ type creatorShotInvalidationService interface {
 	InvalidateShotsForUpstreamRevision(context.Context, string, string, string, []string, string) error
 }
 
+type creatorArtifactReconciler interface {
+	ReconcileProjectArtifacts(context.Context, string) error
+}
+
+type creatorArtifactTextResolver interface {
+	ResolveReviewableText(context.Context, *artifact.Artifact) (string, error)
+}
+
 // CreatorViewService combines only persisted project, artifact, and Shot data.
 // It has no client-derived state or workflow topology dependency.
 type CreatorViewService struct {
-	projects          creatorProjectReader
-	artifacts         creatorArtifactReader
-	shots             creatorShotReader
-	history           creatorArtifactHistoryReader
-	revisions         creatorRevisionService
-	reviews           creatorReviewMutations
-	assembly          creatorAssemblyService
-	shotInvalidations creatorShotInvalidationService
+	projects             creatorProjectReader
+	artifacts            creatorArtifactReader
+	shots                creatorShotReader
+	history              creatorArtifactHistoryReader
+	revisions            creatorRevisionService
+	reviews              creatorReviewMutations
+	assembly             creatorAssemblyService
+	shotInvalidations    creatorShotInvalidationService
+	auditRun             creatorRunAuditLookup
+	auditNodes           creatorNodeAuditReader
+	projectLifecycle     creatorProjectLifecycle
+	artifactReconciler   creatorArtifactReconciler
+	artifactTextResolver creatorArtifactTextResolver
 }
 
 type creatorArtifactHistoryReader interface {
@@ -119,6 +156,7 @@ type creatorArtifactHistoryReader interface {
 
 type creatorRevisionService interface {
 	Revise(context.Context, artifact.ReviseRequest) (*artifact.RevisionResult, error)
+	Replace(context.Context, artifact.ReplaceRequest) (*artifact.RevisionResult, error)
 	Restore(context.Context, artifact.RestoreRequest) (*artifact.RevisionResult, error)
 }
 
@@ -150,32 +188,40 @@ var (
 	ErrCreatorInvalidRequest           = errors.New("creator step request is invalid")
 	ErrCreatorIdempotencyConflict      = errors.New("creator idempotency key conflict")
 	ErrCreatorModelProviderUnavailable = errors.New("creator model provider is unavailable")
+	ErrCreatorSelectionConflict        = errors.New("creator artifact selection conflict")
 )
 
 const creatorMutationReceiptKey = "creatorStepMutationReceipt"
 
 type creatorMutationReceipt struct {
-	Operation            string                 `json:"operation"`
-	IdempotencyKey       string                 `json:"idempotencyKey"`
-	Fingerprint          string                 `json:"fingerprint"`
-	ProjectID            string                 `json:"projectId"`
-	StepID               string                 `json:"stepId"`
-	BaseArtifactID       string                 `json:"baseArtifactId"`
-	HistoricalArtifactID string                 `json:"historicalArtifactId,omitempty"`
-	BaseVersion          int                    `json:"baseVersion"`
-	HistoricalVersion    int                    `json:"historicalVersion,omitempty"`
-	RunID                string                 `json:"runId"`
-	ReviewID             string                 `json:"reviewId"`
-	NewArtifactID        string                 `json:"newArtifactId"`
-	ParentArtifactID     string                 `json:"parentArtifactId"`
-	AffectedStepIDs      []model.CreatorStepID  `json:"affectedStepIds"`
-	AffectedShotIDs      []string               `json:"affectedShotIds,omitempty"`
-	Selection            map[string]interface{} `json:"selection,omitempty"`
-	RequestDigest        string                 `json:"requestDigest"`
+	Operation            string                                `json:"operation"`
+	IdempotencyKey       string                                `json:"idempotencyKey"`
+	Fingerprint          string                                `json:"fingerprint"`
+	ProjectID            string                                `json:"projectId"`
+	StepID               string                                `json:"stepId"`
+	BaseArtifactID       string                                `json:"baseArtifactId"`
+	HistoricalArtifactID string                                `json:"historicalArtifactId,omitempty"`
+	BaseVersion          int                                   `json:"baseVersion"`
+	HistoricalVersion    int                                   `json:"historicalVersion,omitempty"`
+	RunID                string                                `json:"runId"`
+	ReviewID             string                                `json:"reviewId"`
+	NewArtifactID        string                                `json:"newArtifactId"`
+	ParentArtifactID     string                                `json:"parentArtifactId"`
+	AffectedStepIDs      []model.CreatorStepID                 `json:"affectedStepIds"`
+	AffectedShotIDs      []string                              `json:"affectedShotIds,omitempty"`
+	Selection            map[string]interface{}                `json:"selection,omitempty"`
+	ReplacementMaterial  *artifact.ReplacementMaterialIdentity `json:"replacementMaterial,omitempty"`
+	RequestDigest        string                                `json:"requestDigest"`
 }
 
 func NewCreatorViewService(projects creatorProjectReader, shots creatorShotReader, artifacts creatorArtifactReader) *CreatorViewService {
 	svc := &CreatorViewService{projects: projects, artifacts: artifacts, shots: shots}
+	if lifecycle, ok := projects.(creatorProjectLifecycle); ok {
+		svc.projectLifecycle = lifecycle
+	}
+	if history, ok := artifacts.(creatorArtifactHistoryReader); ok {
+		svc.history = history
+	}
 	if assembly, ok := shots.(creatorAssemblyService); ok {
 		svc.assembly = assembly
 	}
@@ -294,6 +340,14 @@ func (s *CreatorViewService) WithStepMutations(revisions creatorRevisionService,
 	return s
 }
 
+func (s *CreatorViewService) WithArtifactReconciler(reconciler creatorArtifactReconciler) *CreatorViewService {
+	s.artifactReconciler = reconciler
+	if resolver, ok := reconciler.(creatorArtifactTextResolver); ok {
+		s.artifactTextResolver = resolver
+	}
+	return s
+}
+
 func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projectID string) (*model.CreationView, error) {
 	if s == nil || s.projects == nil || s.artifacts == nil || s.shots == nil {
 		return nil, fmt.Errorf("creator view service is not configured")
@@ -305,10 +359,16 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 	if project == nil {
 		return nil, fmt.Errorf("project not found")
 	}
+	if s.artifactReconciler != nil {
+		if err := s.artifactReconciler.ReconcileProjectArtifacts(ctx, projectID); err != nil {
+			return nil, fmt.Errorf("reconcile creator artifacts: %w", err)
+		}
+	}
 	artifacts, err := s.artifacts.ListCurrentByProject(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
+	finalDelivery := authoritativeFinalDeliveryArtifact(artifacts)
 	shotState, err := s.shots.getCreatorShotReadState(ctx, userID, projectID)
 	if err != nil {
 		return nil, err
@@ -324,8 +384,15 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 		if current == nil {
 			continue
 		}
-		stepID, ok := creatorStepForStage(current.StageName)
+		stepID, ok := creatorStepForArtifact(current)
 		if !ok {
+			continue
+		}
+		// Delivery authority belongs exclusively to the selected final video.
+		// Publish copy, export bundles, and other delivery-stage records remain
+		// available in audit history but must never become the current playable
+		// artifact when the final video is absent.
+		if stepID == model.CreatorStepDelivery && (finalDelivery == nil || current.ID != finalDelivery.ID) {
 			continue
 		}
 		index := stepIndexes[stepID]
@@ -343,23 +410,28 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 				applyArtifact(&steps[index], current, candidate)
 			}
 		}
-		if isActiveArtifact(current) && current.TaskID != "" {
+		if taskStatus, active := creatorTaskStatus(current.Status); active && current.TaskID != "" {
 			activeTasks = append(activeTasks, model.CreatorTask{
-				ID: current.TaskID, Scope: string(stepID), Status: current.Status,
+				ID: current.TaskID, Scope: string(stepID), Status: taskStatus,
 				Label: creatorTaskLabel(stepID),
 			})
 		}
+	}
+	if finalDelivery != nil {
+		index := stepIndexes[model.CreatorStepDelivery]
+		applyArtifact(&steps[index], finalDelivery, stateForArtifact(finalDelivery))
 	}
 
 	shotsIndex := stepIndexes[model.CreatorStepShots]
 	steps[shotsIndex].State = mergeCreatorState(steps[shotsIndex].State, stateForShots(shotState.Summary))
 	for _, task := range latestCreatorShotTasks(shotState.Tasks) {
-		if !isActiveShotRegeneration(task.Status) || task.TaskID == "" {
+		taskStatus, publicStatus := creatorTaskStatus(task.Status)
+		if !isActiveShotRegeneration(task.Status) || !publicStatus || task.TaskID == "" {
 			continue
 		}
 		activeTasks = append(activeTasks, model.CreatorTask{
 			ID: task.TaskID, Scope: string(model.CreatorStepShots), ShotID: task.ShotID,
-			Status: task.Status, Label: "正在重新生成镜头",
+			Status: taskStatus, Label: "正在重新生成镜头",
 		})
 	}
 	if shotState.AssemblyDirty {
@@ -408,10 +480,55 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 		}
 	}
 	activeTasks = deduplicateCreatorTasks(activeTasks)
+	processTimeline, stepArtifacts, err := s.creatorAuditProjection(ctx, project, artifacts, steps)
+	if err != nil {
+		return nil, err
+	}
+	if finalDelivery == nil {
+		index := stepIndexes[model.CreatorStepDelivery]
+		steps[index].CurrentArtifactID = ""
+		steps[index].CurrentVersion = 0
+		steps[index].IsStale = false
+		if project.Status == model.StatusCompleted || project.Status == model.StatusArchived {
+			steps[index].State = model.CreatorStepNeedsAttention
+		}
+		if project.Status == model.StatusRunning && s.reviews != nil && steps[index].RunID != "" && steps[index].ReviewID != "" {
+			durableStatus, statusErr := s.reviews.RegenerationStatus(ctx, steps[index].RunID, steps[index].ReviewID)
+			status, active := creatorTaskStatusForDurableRegeneration(durableStatus)
+			if statusErr == nil && active {
+				steps[index].State = model.CreatorStepGenerating
+				activeTasks = append(activeTasks, model.CreatorTask{
+					ID: steps[index].ReviewID, Scope: string(model.CreatorStepDelivery), Status: status,
+					Label: "正在重新生成交付文件",
+				})
+			}
+		}
+	}
+	if finalDelivery != nil {
+		items := stepArtifacts[model.CreatorStepDelivery]
+		sort.SliceStable(items, func(i, j int) bool {
+			if items[i].ArtifactID == finalDelivery.ID {
+				return true
+			}
+			if items[j].ArtifactID == finalDelivery.ID {
+				return false
+			}
+			return false
+		})
+		stepArtifacts[model.CreatorStepDelivery] = items
+	}
+	for i := range steps {
+		steps[i].AllowedActions = actionsForCreatorState(steps[i].State)
+		if steps[i].HasHistory && steps[i].ReviewID != "" && steps[i].State != model.CreatorStepGenerating {
+			steps[i].AllowedActions = append(steps[i].AllowedActions, "regenerate")
+		}
+	}
+	activeTasks = deduplicateCreatorTasks(activeTasks)
 
 	return &model.CreationView{
-		Project: project, ActiveStep: activeCreatorStep(steps), Steps: steps,
+		Project: project, ActiveStep: activeCreatorStep(steps), FinalDeliveryArtifactID: artifactID(finalDelivery), Steps: steps,
 		ShotSummary: shotState.Summary, ActiveTasks: activeTasks, AssemblyDirty: viewAssemblyDirty,
+		ProcessTimeline: processTimeline, StepArtifacts: stepArtifacts,
 	}, nil
 }
 
@@ -467,29 +584,48 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	if err != nil || base == nil || base.ProjectID != projectID {
 		return nil, ErrCreatorArtifactNotFound
 	}
-	if mapped, ok := creatorStepForStage(base.StageName); !ok || mapped != stepID {
+	if mapped, ok := creatorStepForArtifact(base); !ok || mapped != stepID {
 		return nil, ErrCreatorArtifactNotFound
 	}
 	mode := req.Mode
 	var directContent []byte
+	var replacement *artifact.ReplacementMaterialIdentity
 	message := ""
 	switch mode {
 	case "direct":
-		if strings.TrimSpace(req.DirectContent) == "" || strings.TrimSpace(req.Instruction) != "" {
+		if strings.TrimSpace(req.DirectContent) == "" || strings.TrimSpace(req.Instruction) != "" ||
+			req.ReplacementMaterial != nil || len(req.ModelProviders) != 0 {
 			return nil, ErrCreatorInvalidRequest
 		}
 		directContent = []byte(req.DirectContent)
 	case "instruction":
-		if strings.TrimSpace(req.Instruction) == "" || strings.TrimSpace(req.DirectContent) != "" {
+		if strings.TrimSpace(req.Instruction) == "" || strings.TrimSpace(req.DirectContent) != "" ||
+			req.ReplacementMaterial != nil {
 			return nil, ErrCreatorInvalidRequest
 		}
 		message = strings.TrimSpace(req.Instruction)
+	case "replace":
+		if req.ReplacementMaterial == nil || strings.TrimSpace(req.Instruction) != "" ||
+			strings.TrimSpace(req.DirectContent) != "" || len(req.ModelProviders) != 0 ||
+			base.Kind != artifact.KindImage {
+			return nil, ErrCreatorInvalidRequest
+		}
+		replacement, err = s.resolveCreatorReplacementMaterial(ctx, projectID, *req.ReplacementMaterial)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, ErrCreatorInvalidRequest
 	}
 	selection, err := normalizeArtifactSelection(req.Selection)
 	if err != nil {
 		return nil, err
+	}
+	if mode == "replace" && selection != nil && selection["kind"] != "rect" {
+		return nil, ErrCreatorInvalidRequest
+	}
+	if mode == "direct" && selection != nil && selection["kind"] == "text" {
+		return nil, ErrCreatorInvalidRequest
 	}
 	impact, err := s.stepImpact(ctx, userID, projectID, stepID, base)
 	if err != nil {
@@ -502,18 +638,27 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	if err != nil {
 		return nil, err
 	}
-	requestDigest := creatorRequestDigest(map[string]interface{}{"mode": mode, "instruction": message, "directContent": string(directContent)})
+	requestIntent := map[string]interface{}{
+		"mode": mode, "instruction": message, "directContent": string(directContent), "selection": selection,
+	}
+	if replacement != nil {
+		requestIntent["replacementMaterial"] = replacement
+	}
+	requestDigest := creatorRequestDigest(requestIntent)
 	if authoritative.ID != base.ID || authoritative.Version != req.BaseVersion {
-		return s.retryCreatorMutation(ctx, userID, projectID, stepID, authoritative, req.IdempotencyKey, "revise", base.ID, req.BaseVersion, "", 0, requestDigest, selection, impact, req.RunID, req.ReviewID)
+		return s.retryCreatorMutation(ctx, userID, projectID, stepID, authoritative, req.IdempotencyKey, "revise", base.ID, req.BaseVersion, "", 0, requestDigest, selection, replacement, impact, req.RunID, req.ReviewID)
 	}
 	runID, reviewID, err := s.reviews.ResolveReviewGate(ctx, base, req.RunID, req.ReviewID)
 	if err != nil {
 		return nil, err
 	}
-	receipt := newCreatorMutationReceipt("revise", req.IdempotencyKey, projectID, stepID, base, nil, runID, reviewID, impact, selection, requestDigest)
+	receipt := newCreatorMutationReceipt("revise", req.IdempotencyKey, projectID, stepID, base, nil, runID, reviewID, impact, selection, replacement, requestDigest)
 	provenance := map[string]interface{}{"mode": mode, "baseVersion": req.BaseVersion, creatorMutationReceiptKey: receipt}
 	if selection != nil {
 		provenance["selection"] = selection
+	}
+	if replacement != nil {
+		provenance["replacementMaterial"] = *replacement
 	}
 	var providers map[string]interface{}
 	if mode == "instruction" {
@@ -522,15 +667,43 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 			return nil, err
 		}
 	}
-	revised, err := s.revisions.Revise(ctx, artifact.ReviseRequest{
-		ArtifactID: base.ID, NewArtifactID: receipt.NewArtifactID, Message: message, DirectContent: directContent,
-		ModelProviders: providers, Provenance: provenance,
-	})
+	var sourceContent []byte
+	var expectedSourceHash string
+	if selection != nil && selection["kind"] == "text" {
+		if s.artifactTextResolver == nil {
+			return nil, ErrCreatorSelectionConflict
+		}
+		reviewText, resolveErr := s.artifactTextResolver.ResolveReviewableText(ctx, base)
+		if resolveErr != nil {
+			return nil, ErrCreatorSelectionConflict
+		}
+		expectedSourceHash, _ = selection["sourceHash"].(string)
+		if err := validateTextArtifactSelection(selection, reviewText, expectedSourceHash); err != nil {
+			return nil, err
+		}
+		sourceContent = []byte(reviewText)
+	}
+	var revised *artifact.RevisionResult
+	if replacement != nil {
+		revised, err = s.revisions.Replace(ctx, artifact.ReplaceRequest{
+			ArtifactID: base.ID, BaseVersion: req.BaseVersion, NewArtifactID: receipt.NewArtifactID,
+			Material: *replacement, Provenance: provenance,
+		})
+	} else {
+		revised, err = s.revisions.Revise(ctx, artifact.ReviseRequest{
+			ArtifactID: base.ID, NewArtifactID: receipt.NewArtifactID, Message: message, DirectContent: directContent,
+			SourceContent: sourceContent, ExpectedSourceHash: expectedSourceHash, SourceContentValidated: sourceContent != nil,
+			ModelProviders: providers, Provenance: provenance,
+		})
+	}
 	if err != nil {
+		if errors.Is(err, artifact.ErrRevisionSourceConflict) {
+			return nil, ErrCreatorSelectionConflict
+		}
 		if errors.Is(err, artifact.ErrArtifactVersionConflict) {
 			current, reloadErr := s.currentArtifactForStep(ctx, projectID, stepID)
 			if reloadErr == nil {
-				return s.retryCreatorMutation(ctx, userID, projectID, stepID, current, req.IdempotencyKey, "revise", base.ID, req.BaseVersion, "", 0, requestDigest, selection, impact, req.RunID, req.ReviewID)
+				return s.retryCreatorMutation(ctx, userID, projectID, stepID, current, req.IdempotencyKey, "revise", base.ID, req.BaseVersion, "", 0, requestDigest, selection, replacement, impact, req.RunID, req.ReviewID)
 			}
 		}
 		return nil, err
@@ -565,7 +738,7 @@ func (s *CreatorViewService) PreviewStepRevision(ctx context.Context, userID, pr
 	if err != nil || base == nil || base.ProjectID != projectID {
 		return model.StepImpact{}, ErrCreatorArtifactNotFound
 	}
-	if mapped, ok := creatorStepForStage(base.StageName); !ok || mapped != stepID {
+	if mapped, ok := creatorStepForArtifact(base); !ok || mapped != stepID {
 		return model.StepImpact{}, ErrCreatorArtifactNotFound
 	}
 	current, err := s.history.GetCurrent(ctx, projectID, base.StageName, base.UnitID)
@@ -601,7 +774,7 @@ func (s *CreatorViewService) RestoreStepVersion(ctx context.Context, userID, pro
 		if !sameExactIDs(req.ConfirmedAffectedShotIDs, impact.AffectedShotIDs) {
 			return nil, ErrCreatorImpactMismatch
 		}
-		return s.retryCreatorMutation(ctx, userID, projectID, stepID, current, req.IdempotencyKey, "restore", "", req.BaseVersion, "", version, creatorRequestDigest(map[string]interface{}{"reason": strings.TrimSpace(req.Reason)}), nil, impact, req.RunID, req.ReviewID)
+		return s.retryCreatorMutation(ctx, userID, projectID, stepID, current, req.IdempotencyKey, "restore", "", req.BaseVersion, "", version, creatorRequestDigest(map[string]interface{}{"reason": strings.TrimSpace(req.Reason)}), nil, nil, impact, req.RunID, req.ReviewID)
 	}
 	history, err := s.history.GetHistory(ctx, projectID, current.StageName, current.UnitID)
 	if err != nil {
@@ -629,7 +802,7 @@ func (s *CreatorViewService) RestoreStepVersion(ctx context.Context, userID, pro
 		return nil, err
 	}
 	requestDigest := creatorRequestDigest(map[string]interface{}{"reason": strings.TrimSpace(req.Reason)})
-	receipt := newCreatorMutationReceipt("restore", req.IdempotencyKey, projectID, stepID, current, historical, runID, reviewID, impact, nil, requestDigest)
+	receipt := newCreatorMutationReceipt("restore", req.IdempotencyKey, projectID, stepID, current, historical, runID, reviewID, impact, nil, nil, requestDigest)
 	restored, err := s.revisions.Restore(ctx, artifact.RestoreRequest{
 		ArtifactID: historical.ID, NewArtifactID: receipt.NewArtifactID, ReviewerID: userID,
 		Reason: strings.TrimSpace(req.Reason), Provenance: map[string]interface{}{creatorMutationReceiptKey: receipt},
@@ -638,7 +811,7 @@ func (s *CreatorViewService) RestoreStepVersion(ctx context.Context, userID, pro
 		if errors.Is(err, artifact.ErrArtifactVersionConflict) {
 			latest, reloadErr := s.currentArtifactForStep(ctx, projectID, stepID)
 			if reloadErr == nil {
-				return s.retryCreatorMutation(ctx, userID, projectID, stepID, latest, req.IdempotencyKey, "restore", current.ID, req.BaseVersion, historical.ID, version, requestDigest, nil, impact, req.RunID, req.ReviewID)
+				return s.retryCreatorMutation(ctx, userID, projectID, stepID, latest, req.IdempotencyKey, "restore", current.ID, req.BaseVersion, historical.ID, version, requestDigest, nil, nil, impact, req.RunID, req.ReviewID)
 			}
 		}
 		return nil, err
@@ -725,13 +898,19 @@ func (s *CreatorViewService) currentArtifactForStep(ctx context.Context, project
 	if err != nil {
 		return nil, err
 	}
+	if stepID == model.CreatorStepDelivery {
+		if finalDelivery := authoritativeFinalDeliveryArtifact(items); finalDelivery != nil {
+			return finalDelivery, nil
+		}
+		return nil, ErrCreatorArtifactNotFound
+	}
 	selection := model.CreatorStep{ID: stepID, State: model.CreatorStepNotStarted}
 	byID := make(map[string]*artifact.Artifact, len(items))
 	for _, candidate := range items {
 		if candidate == nil {
 			continue
 		}
-		mapped, ok := creatorStepForStage(candidate.StageName)
+		mapped, ok := creatorStepForArtifact(candidate)
 		if !ok || mapped != stepID || candidate.ProjectID != projectID {
 			continue
 		}
@@ -768,8 +947,46 @@ func validCreatorRevisionChild(candidate, parent *artifact.Artifact, projectID s
 	if candidate == nil || parent == nil || candidate.ProjectID != projectID || candidate.ParentID != parent.ID || candidate.Version != parent.Version+1 {
 		return false
 	}
-	mapped, ok := creatorStepForStage(candidate.StageName)
+	mapped, ok := creatorStepForArtifact(candidate)
 	return ok && mapped == stepID && candidate.StageName == parent.StageName && candidate.UnitID == parent.UnitID
+}
+
+func (s *CreatorViewService) resolveCreatorReplacementMaterial(
+	ctx context.Context,
+	projectID string,
+	supplied model.ReplacementMaterial,
+) (*artifact.ReplacementMaterialIdentity, error) {
+	manifest, err := s.history.GetCurrent(ctx, projectID, "requirements", "source-materials")
+	if err != nil || manifest == nil || manifest.ProjectID != projectID ||
+		manifest.StageName != "requirements" || manifest.UnitID != "source-materials" {
+		return nil, ErrCreatorInvalidRequest
+	}
+	materials, err := assets.ProjectMaterialsFromArtifact(manifest)
+	if err != nil {
+		return nil, ErrCreatorInvalidRequest
+	}
+	for _, candidate := range materials {
+		canonical, normalizeErr := assets.NormalizeProjectMaterial(projectID, candidate)
+		if normalizeErr != nil {
+			return nil, ErrCreatorInvalidRequest
+		}
+		if canonical.ContentHash != supplied.ContentHash {
+			continue
+		}
+		if canonical.Kind != assets.AssetTypeImage ||
+			canonical.StorageRef != supplied.StorageRef ||
+			canonical.MimeType != supplied.MimeType ||
+			canonical.SizeBytes != supplied.SizeBytes {
+			return nil, ErrCreatorInvalidRequest
+		}
+		return &artifact.ReplacementMaterialIdentity{
+			ContentHash: canonical.ContentHash,
+			StorageRef:  canonical.StorageRef,
+			MimeType:    canonical.MimeType,
+			SizeBytes:   canonical.SizeBytes,
+		}, nil
+	}
+	return nil, ErrCreatorInvalidRequest
 }
 
 func normalizeArtifactSelection(selection *model.ArtifactSelection) (map[string]interface{}, error) {
@@ -779,7 +996,8 @@ func normalizeArtifactSelection(selection *model.ArtifactSelection) (map[string]
 	kind := strings.ToLower(strings.TrimSpace(selection.Kind))
 	switch kind {
 	case "rect":
-		if selection.X == nil || selection.Y == nil || selection.Width == nil || selection.Height == nil || selection.StartMs != nil || selection.EndMs != nil {
+		if selection.X == nil || selection.Y == nil || selection.Width == nil || selection.Height == nil ||
+			selection.StartMs != nil || selection.EndMs != nil || selection.Start != nil || selection.End != nil || selection.Text != "" || selection.SourceHash != "" {
 			return nil, ErrCreatorInvalidRequest
 		}
 		x, y, width, height := *selection.X, *selection.Y, *selection.Width, *selection.Height
@@ -788,16 +1006,66 @@ func normalizeArtifactSelection(selection *model.ArtifactSelection) (map[string]
 		}
 		return map[string]interface{}{"kind": kind, "x": x, "y": y, "width": width, "height": height}, nil
 	case "time":
-		if selection.StartMs == nil || selection.EndMs == nil || selection.X != nil || selection.Y != nil || selection.Width != nil || selection.Height != nil {
+		if selection.StartMs == nil || selection.EndMs == nil || selection.X != nil || selection.Y != nil ||
+			selection.Width != nil || selection.Height != nil || selection.Start != nil || selection.End != nil || selection.Text != "" || selection.SourceHash != "" {
 			return nil, ErrCreatorInvalidRequest
 		}
 		if *selection.StartMs < 0 || *selection.EndMs <= *selection.StartMs {
 			return nil, ErrCreatorInvalidRequest
 		}
 		return map[string]interface{}{"kind": kind, "startMs": *selection.StartMs, "endMs": *selection.EndMs}, nil
+	case "text":
+		if selection.Start == nil || selection.End == nil || selection.Text == "" ||
+			selection.X != nil || selection.Y != nil || selection.Width != nil || selection.Height != nil ||
+			selection.StartMs != nil || selection.EndMs != nil {
+			return nil, ErrCreatorInvalidRequest
+		}
+		start, end, text, sourceHash := *selection.Start, *selection.End, selection.Text, strings.TrimSpace(selection.SourceHash)
+		if start < 0 || end <= start || end-start > 4000 || len(utf16.Encode([]rune(text))) > 4000 {
+			return nil, ErrCreatorInvalidRequest
+		}
+		if len(sourceHash) != len("sha256:")+64 || !strings.HasPrefix(sourceHash, "sha256:") {
+			return nil, ErrCreatorInvalidRequest
+		}
+		if _, decodeErr := hex.DecodeString(strings.TrimPrefix(sourceHash, "sha256:")); decodeErr != nil || sourceHash != strings.ToLower(sourceHash) {
+			return nil, ErrCreatorInvalidRequest
+		}
+		return map[string]interface{}{"kind": kind, "start": start, "end": end, "text": text, "sourceHash": sourceHash}, nil
 	default:
 		return nil, ErrCreatorInvalidRequest
 	}
+}
+
+func validateTextArtifactSelection(selection map[string]interface{}, source, expectedSourceHash string) error {
+	start, startOK := selection["start"].(int)
+	end, endOK := selection["end"].(int)
+	text, textOK := selection["text"].(string)
+	if !startOK || !endOK || !textOK {
+		return ErrCreatorInvalidRequest
+	}
+	actualHash := sha256.Sum256([]byte(source))
+	if expectedSourceHash != fmt.Sprintf("sha256:%x", actualHash) {
+		return ErrCreatorSelectionConflict
+	}
+	sourceUnits := utf16.Encode([]rune(source))
+	if end > len(sourceUnits) || splitsUTF16SurrogatePair(sourceUnits, start) || splitsUTF16SurrogatePair(sourceUnits, end) {
+		return ErrCreatorSelectionConflict
+	}
+	selectedUnits := utf16.Encode([]rune(text))
+	if len(selectedUnits) != end-start {
+		return ErrCreatorSelectionConflict
+	}
+	for index, unit := range selectedUnits {
+		if sourceUnits[start+index] != unit {
+			return ErrCreatorSelectionConflict
+		}
+	}
+	return nil
+}
+
+func splitsUTF16SurrogatePair(units []uint16, offset int) bool {
+	return offset > 0 && offset < len(units) &&
+		utf16.IsSurrogate(rune(units[offset-1])) && utf16.IsSurrogate(rune(units[offset]))
 }
 
 func (s *CreatorViewService) stepImpact(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, current *artifact.Artifact) (model.StepImpact, error) {
@@ -854,12 +1122,16 @@ func creatorRequestDigest(value interface{}) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func newCreatorMutationReceipt(operation, key, projectID string, stepID model.CreatorStepID, base, historical *artifact.Artifact, runID, reviewID string, impact model.StepImpact, selection map[string]interface{}, requestDigest string) creatorMutationReceipt {
+func newCreatorMutationReceipt(operation, key, projectID string, stepID model.CreatorStepID, base, historical *artifact.Artifact, runID, reviewID string, impact model.StepImpact, selection map[string]interface{}, replacement *artifact.ReplacementMaterialIdentity, requestDigest string) creatorMutationReceipt {
 	receipt := creatorMutationReceipt{
 		Operation: operation, IdempotencyKey: key, ProjectID: projectID, StepID: string(stepID),
 		BaseArtifactID: base.ID, BaseVersion: base.Version, RunID: runID, ReviewID: reviewID,
 		ParentArtifactID: base.ID, AffectedStepIDs: append([]model.CreatorStepID(nil), impact.AffectedStepIDs...),
 		AffectedShotIDs: append([]string(nil), impact.AffectedShotIDs...), Selection: selection, RequestDigest: requestDigest,
+	}
+	if replacement != nil {
+		canonical := *replacement
+		receipt.ReplacementMaterial = &canonical
 	}
 	if historical != nil {
 		receipt.HistoricalArtifactID, receipt.HistoricalVersion = historical.ID, historical.Version
@@ -896,7 +1168,7 @@ func creatorReceiptFromArtifact(current *artifact.Artifact) (creatorMutationRece
 	return receipt, creatorReceiptFingerprint(receipt) == receipt.Fingerprint
 }
 
-func (s *CreatorViewService) retryCreatorMutation(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, current *artifact.Artifact, key, operation, baseArtifactID string, baseVersion int, historicalArtifactID string, historicalVersion int, requestDigest string, selection map[string]interface{}, impact model.StepImpact, assertedRunID, assertedReviewID string) (*model.StepMutationResult, error) {
+func (s *CreatorViewService) retryCreatorMutation(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, current *artifact.Artifact, key, operation, baseArtifactID string, baseVersion int, historicalArtifactID string, historicalVersion int, requestDigest string, selection map[string]interface{}, replacement *artifact.ReplacementMaterialIdentity, impact model.StepImpact, assertedRunID, assertedReviewID string) (*model.StepMutationResult, error) {
 	receipt, ok := creatorReceiptFromArtifact(current)
 	if !ok || receipt.ProjectID != projectID || receipt.StepID != string(stepID) || receipt.Operation != operation {
 		return nil, ErrCreatorVersionConflict
@@ -907,6 +1179,7 @@ func (s *CreatorViewService) retryCreatorMutation(ctx context.Context, userID, p
 	if receipt.BaseVersion != baseVersion || (baseArtifactID != "" && receipt.BaseArtifactID != baseArtifactID) ||
 		receipt.HistoricalVersion != historicalVersion || (historicalArtifactID != "" && receipt.HistoricalArtifactID != historicalArtifactID) ||
 		receipt.RequestDigest != requestDigest || !reflectCreatorJSON(receipt.Selection, selection) ||
+		!reflectCreatorJSON(receipt.ReplacementMaterial, replacement) ||
 		!reflectCreatorJSON(receipt.AffectedStepIDs, impact.AffectedStepIDs) || !reflectCreatorJSON(receipt.AffectedShotIDs, impact.AffectedShotIDs) {
 		return nil, ErrCreatorIdempotencyConflict
 	}
@@ -1003,6 +1276,98 @@ func creatorStepForStage(stage string) (model.CreatorStepID, bool) {
 	return step, ok
 }
 
+func creatorStepForArtifact(item *artifact.Artifact) (model.CreatorStepID, bool) {
+	if item == nil {
+		return "", false
+	}
+	if _, ok := finalDeliveryVideoScore(item); ok {
+		return model.CreatorStepDelivery, true
+	}
+	if step, ok := creatorStepForStage(item.StageName); ok {
+		return step, true
+	}
+	return creatorStepForStage(item.UnitID)
+}
+
+func artifactID(item *artifact.Artifact) string {
+	if item == nil {
+		return ""
+	}
+	return item.ID
+}
+
+func authoritativeFinalDeliveryArtifact(items []*artifact.Artifact) *artifact.Artifact {
+	var selected *artifact.Artifact
+	selectedScore := -1
+	for _, candidate := range items {
+		score, ok := finalDeliveryVideoScore(candidate)
+		if !ok {
+			continue
+		}
+		if selected == nil || score > selectedScore ||
+			(score == selectedScore && candidate.Version > selected.Version) ||
+			(score == selectedScore && candidate.Version == selected.Version && candidate.CreatedAt.After(selected.CreatedAt)) ||
+			(score == selectedScore && candidate.Version == selected.Version && candidate.CreatedAt.Equal(selected.CreatedAt) && candidate.ID > selected.ID) {
+			selected, selectedScore = candidate, score
+		}
+	}
+	return selected
+}
+
+func finalDeliveryVideoScore(item *artifact.Artifact) (int, bool) {
+	if item == nil || item.Kind != artifact.KindVideo || !item.IsCurrent || artifactIsStale(item) {
+		return 0, false
+	}
+	stage := normalizeCreatorStage(item.StageName)
+	unit := normalizeCreatorStage(item.UnitID)
+	name := normalizeCreatorStage(item.Name)
+	artifactType, generationKind, relatedShotID := creatorArtifactClassificationHints(item)
+	artifactType = normalizeCreatorStage(artifactType)
+	if relatedShotID != "" || artifactType == "publish_copy" || stage == "publish" || stage == "publish_copy" || stage == "export" || stage == "package" {
+		return 0, false
+	}
+	score := 0
+	if unit == "final_video" {
+		score += 80
+	}
+	if name == "final.mp4" || name == "final_video.mp4" {
+		score += 40
+	}
+	if stage == "delivery" {
+		score += 60
+	}
+	if stage == "render" || stage == "final_render" {
+		score += 30
+	}
+	if normalizeCreatorStage(generationKind) == "video" && artifactType == "external_generation_result" {
+		score += 20
+	}
+	if item.Metadata != nil {
+		for _, key := range []string{"generationRequestId", "externalGenerationRequestId"} {
+			if value, _ := item.Metadata[key].(string); normalizeCreatorStage(value) == "final_video" {
+				score += 100
+			}
+		}
+		if tags, ok := item.Metadata["tags"].([]interface{}); ok {
+			for _, raw := range tags {
+				if value, _ := raw.(string); normalizeCreatorStage(value) == "final_video" {
+					score += 120
+					break
+				}
+			}
+		}
+		if tags, ok := item.Metadata["tags"].([]string); ok {
+			for _, value := range tags {
+				if normalizeCreatorStage(value) == "final_video" {
+					score += 120
+					break
+				}
+			}
+		}
+	}
+	return score, score > 0
+}
+
 func normalizeCreatorStage(stage string) string {
 	stage = strings.ToLower(strings.TrimSpace(stage))
 	stage = strings.ReplaceAll(stage, "-", "_")
@@ -1087,12 +1452,35 @@ func applyArtifact(step *model.CreatorStep, current *artifact.Artifact, state mo
 	step.ReviewID = ""
 }
 
-func isActiveArtifact(current *artifact.Artifact) bool {
-	switch normalizeCreatorStage(current.Status) {
-	case "generating", "running", "processing":
-		return true
+func creatorTaskStatus(status string) (model.CreatorTaskStatus, bool) {
+	switch normalizeCreatorStage(status) {
+	case "generating":
+		return model.CreatorTaskGenerating, true
+	case "running":
+		return model.CreatorTaskRunning, true
+	case "processing":
+		return model.CreatorTaskProcessing, true
+	case "queued":
+		return model.CreatorTaskQueued, true
+	case "dispatching":
+		return model.CreatorTaskDispatching, true
 	default:
-		return false
+		return "", false
+	}
+}
+
+func creatorTaskStatusForDurableRegeneration(status string) (model.CreatorTaskStatus, bool) {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "CREATED", "READY", "WAITING_LOCAL":
+		return model.CreatorTaskQueued, true
+	case "LOCAL_CLAIMED":
+		return model.CreatorTaskDispatching, true
+	case "RUNNING", "LOCAL_RUNNING":
+		return model.CreatorTaskRunning, true
+	case "LOCAL_COMPLETED", "RETRYING":
+		return model.CreatorTaskProcessing, true
+	default:
+		return "", false
 	}
 }
 

@@ -2,14 +2,799 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
+
+type agentOwnerSink struct {
+	mu     sync.Mutex
+	owners []string
+}
+
+func (s *agentOwnerSink) Write(ctx context.Context, _ observability.Event) error {
+	owner, _ := trustedcontext.UserID(ctx)
+	s.mu.Lock()
+	s.owners = append(s.owners, owner)
+	s.mu.Unlock()
+	return nil
+}
+func (*agentOwnerSink) Close(context.Context) error { return nil }
+
+type agentTerminalObservation struct {
+	event observability.Event
+	owner string
+}
+
+type agentTerminalSink struct {
+	mu           sync.Mutex
+	observations []agentTerminalObservation
+}
+
+func (s *agentTerminalSink) Write(ctx context.Context, event observability.Event) error {
+	owner, _ := trustedcontext.UserID(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observations = append(s.observations, agentTerminalObservation{event: event, owner: owner})
+	return nil
+}
+
+func (*agentTerminalSink) Close(context.Context) error { return nil }
+
+func (s *agentTerminalSink) snapshot() []agentTerminalObservation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]agentTerminalObservation(nil), s.observations...)
+}
+
+func TestRunnerStartAsyncPreservesAuthenticatedOwnerForBackgroundEvents(t *testing.T) {
+	store := newMemoryRunStore()
+	sink := &agentOwnerSink{}
+	emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"}, observability.Runtime{}, sink, 32)
+	runner := NewRunner(&fakeOrchestrator{}, store, staticPlanner{err: errors.New("planning failed")}, NewPlanGuard(staticToolCatalog{}, nil), NewPlanCompiler(staticToolCatalog{})).WithObservability(persistent)
+	ctx := trustedcontext.WithUserID(context.Background(), "user-1")
+	run, err := runner.StartAsync(ctx, StartRunRequest{UserID: "user-1", Message: "make"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		current, _ := store.FindRun(context.Background(), run.ID)
+		if current != nil && current.Status == RunStatusFailed {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.owners) == 0 {
+		t.Fatal("no async events")
+	}
+	for _, owner := range sink.owners {
+		if owner != "user-1" {
+			t.Fatalf("owners=%v", sink.owners)
+		}
+	}
+}
+
+func TestAgentToolTraceZapOmitsReasonsAndKnowledgeFreeFormContent(t *testing.T) {
+	const sentinel = "PRIVATE_REASON_PROMPT_BODY_SENTINEL"
+	core, logs := observer.New(zap.InfoLevel)
+	restore := zap.ReplaceGlobals(zap.New(core))
+	defer restore()
+	plan := &AgentPlan{Domain: "video_creation", Steps: []AgentStep{{Tool: "safe_planned_tool"}}}
+	trace := map[string]interface{}{
+		"plannedTools":     []string{"safe_planned_tool"},
+		"candidateTools":   []ToolCandidateTrace{{Name: "safe_candidate_tool", Score: 0.9, Reason: sentinel, KnowledgePolicyReason: sentinel}},
+		"knowledgeContext": map[string]interface{}{"itemCount": 1, "sourceCount": 1, "generatedBy": []string{sentinel}},
+	}
+	logAgentToolTrace(plan, trace)
+	wire, err := json.Marshal(logs.All())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), sentinel) {
+		t.Fatalf("private trace content leaked to Zap: %s", wire)
+	}
+	if !strings.Contains(string(wire), "safe_planned_tool") || !strings.Contains(string(wire), "safe_candidate_tool") {
+		t.Fatalf("safe tool names missing from Zap: %s", wire)
+	}
+}
+
+func TestRunnerBackgroundFailureZapOmitsPlannerPromptAndBody(t *testing.T) {
+	const sentinel = "PRIVATE_REQUEST_PROMPT_PROVIDER_BODY_SENTINEL"
+	core, logs := observer.New(zap.WarnLevel)
+	restore := zap.ReplaceGlobals(zap.New(core))
+	defer restore()
+	catalog := staticToolCatalog{}
+	store := newMemoryRunStore()
+	runner := NewRunner(&fakeOrchestrator{}, store, staticPlanner{err: errors.New(sentinel)}, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	run, err := runner.StartAsync(context.Background(), StartRunRequest{UserID: "user-1", Message: sentinel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		current, _ := store.FindRun(context.Background(), run.ID)
+		if current != nil && current.Status == RunStatusFailed && logs.FilterMessage("async agent run start failed").Len() == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	wire, err := json.Marshal(logs.All())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), sentinel) {
+		t.Fatalf("private async failure leaked to Zap: %s", wire)
+	}
+}
+
+func TestRunnerBackgroundPersistsConsistentCancellationAndTimeoutTerminals(t *testing.T) {
+	tests := []struct {
+		name            string
+		plannerErr      error
+		wantRunStatus   RunStatus
+		wantStartPhase  string
+		wantEventType   observability.EventType
+		wantExecStatus  observability.ExecutionStatus
+		wantSeverity    observability.Severity
+		wantErrorCode   string
+		wantCallbackErr bool
+	}{
+		{
+			name: "run cancellation", plannerErr: errRunCancelled,
+			wantRunStatus: RunStatusCancelled, wantStartPhase: "cancelled",
+			wantEventType: "agent.run.cancelled", wantExecStatus: observability.ExecutionStatusCancelled,
+			wantSeverity: observability.SeverityWarn,
+		},
+		{
+			name: "context cancellation", plannerErr: context.Canceled,
+			wantRunStatus: RunStatusCancelled, wantStartPhase: "cancelled",
+			wantEventType: "agent.run.cancelled", wantExecStatus: observability.ExecutionStatusCancelled,
+			wantSeverity: observability.SeverityWarn,
+		},
+		{
+			name: "deadline", plannerErr: context.DeadlineExceeded,
+			wantRunStatus: RunStatusFailed, wantStartPhase: "failed",
+			wantEventType: "agent.run.failed", wantExecStatus: observability.ExecutionStatusFailed,
+			wantSeverity: observability.SeverityError, wantErrorCode: "AGENT.RUN.TIMEOUT", wantCallbackErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newMemoryRunStore()
+			sink := &agentEventSink{}
+			emitter, persistent := newPersistentAgentEmitterForTest(t,
+				observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
+				observability.Runtime{}, sink, 32,
+			)
+			callbacks := make([]RunTerminalEvent, 0, 1)
+			runner := NewRunner(
+				&fakeOrchestrator{}, store, staticPlanner{err: tt.plannerErr},
+				NewPlanGuard(nil, nil), NewPlanCompiler(nil),
+			).WithObservability(persistent).WithTerminalCallback(func(_ context.Context, event RunTerminalEvent) error {
+				callbacks = append(callbacks, event)
+				return nil
+			})
+			req := StartRunRequest{UserID: "user-1", Message: "make"}
+			run := newRunShell(req)
+			if err := store.SaveRun(context.Background(), run); err != nil {
+				t.Fatal(err)
+			}
+
+			runner.completeStartInBackground(req, run, "")
+			if err := emitter.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			stored, err := store.FindRun(context.Background(), run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored == nil || stored.Status != tt.wantRunStatus || stored.Metadata["startPhase"] != tt.wantStartPhase {
+				t.Fatalf("stored run=%+v, want status=%s startPhase=%s", stored, tt.wantRunStatus, tt.wantStartPhase)
+			}
+			if len(callbacks) != 1 || callbacks[0].Status != tt.wantRunStatus {
+				t.Fatalf("callbacks=%+v, want one %s terminal", callbacks, tt.wantRunStatus)
+			}
+			if (callbacks[0].Error != "") != tt.wantCallbackErr {
+				t.Fatalf("callback error=%q, want present=%v", callbacks[0].Error, tt.wantCallbackErr)
+			}
+
+			var terminal *observability.Event
+			for _, event := range sink.snapshot() {
+				if event.EventType == tt.wantEventType {
+					captured := event
+					terminal = &captured
+				}
+			}
+			if terminal == nil || terminal.Execution.Status != tt.wantExecStatus || terminal.Severity != tt.wantSeverity {
+				t.Fatalf("terminal=%+v events=%+v", terminal, sink.snapshot())
+			}
+			if tt.wantErrorCode == "" {
+				if terminal.Error != nil {
+					t.Fatalf("cancellation terminal error=%+v", terminal.Error)
+				}
+			} else if terminal.Error == nil || terminal.Error.Code != tt.wantErrorCode {
+				t.Fatalf("timeout terminal error=%+v, want %s", terminal.Error, tt.wantErrorCode)
+			}
+		})
+	}
+}
+
+type agentEventSink struct {
+	mu     sync.Mutex
+	events []observability.Event
+}
+
+func (s *agentEventSink) Write(_ context.Context, event observability.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (*agentEventSink) Close(context.Context) error { return nil }
+
+func (s *agentEventSink) snapshot() []observability.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]observability.Event(nil), s.events...)
+}
+
+func TestRunnerStartEmitsBootstrapFailureWithoutPrivateRequestText(t *testing.T) {
+	const privateRequest = "PRIVATE_AGENT_REQUEST_SENTINEL"
+	sink := &agentEventSink{}
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
+		observability.Source{Service: "cloud-backend", Component: "agent-runtime", Environment: "test"},
+		observability.Runtime{},
+		sink,
+		32,
+	)
+	catalog := staticToolCatalog{}
+	runner := NewRunner(
+		&fakeOrchestrator{},
+		newMemoryRunStore(),
+		staticPlanner{err: errors.New("planner rejected request")},
+		NewPlanGuard(catalog, nil),
+		NewPlanCompiler(catalog),
+	).WithObservability(persistent)
+	ctx := observability.WithCorrelation(context.Background(), observability.Correlation{
+		TraceID: "4bf92f3577b34da6a3ce929d0e0e4736",
+		SpanID:  "00f067aa0ba902b7",
+	})
+
+	if _, err := runner.Start(ctx, StartRunRequest{UserID: "user-1", Message: privateRequest}); err == nil {
+		t.Fatal("Start returned nil error")
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	events := sink.snapshot()
+	var bootstrapStarted, bootstrapFailed int
+	for _, event := range events {
+		switch event.MessageKey {
+		case "agent.bootstrap.started":
+			bootstrapStarted++
+		case "agent.bootstrap.failed":
+			bootstrapFailed++
+		}
+		if event.EventType == observability.EventTypeAgentRunStarted ||
+			event.EventType == observability.EventTypeAgentRunCompleted ||
+			event.EventType == observability.EventTypeAgentRunFailed ||
+			event.EventType == observability.EventTypeAgentRunCancelled {
+			t.Fatalf("non-durable bootstrap failure emitted agent lifecycle event: %+v", event)
+		}
+		if err := event.Validate(); err != nil {
+			t.Fatalf("invalid captured event: %v", err)
+		}
+		if event.Severity == observability.SeverityError && event.Error == nil {
+			t.Fatalf("ERROR event lacks stable normalized error: %+v", event)
+		}
+	}
+	if bootstrapStarted != 1 || bootstrapFailed != 1 {
+		t.Fatalf("bootstrap event pairing started=%d failed=%d events=%+v", bootstrapStarted, bootstrapFailed, events)
+	}
+	wire, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), privateRequest) {
+		t.Fatalf("private request leaked into events: %s", wire)
+	}
+}
+
+func TestRunnerDAGSubmissionCompletesBootstrapWithoutAgentTerminal(t *testing.T) {
+	sink := &agentEventSink{}
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
+		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
+		observability.Runtime{}, sink, 32,
+	)
+	catalog := staticToolCatalog{"known": {Name: "known"}}
+	runner := NewRunner(
+		&fakeOrchestrator{taskID: "task-1"},
+		newMemoryRunStore(),
+		staticPlanner{plan: &AgentPlan{
+			Goal: "make", Domain: "general", Mode: "dynamic_agent",
+			Steps: []AgentStep{{ID: "step", Tool: "known", Arguments: map[string]interface{}{}}},
+		}},
+		NewPlanGuard(catalog, nil),
+		NewPlanCompiler(catalog),
+	).WithObservability(persistent)
+
+	run, err := runner.Start(context.Background(), StartRunRequest{UserID: "user-1", Message: "make"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != RunStatusRunning {
+		t.Fatalf("run status=%s, want RUNNING", run.Status)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var bootstrapStarted, bootstrapCompleted, agentStarted int
+	for _, event := range sink.snapshot() {
+		switch event.MessageKey {
+		case "agent.bootstrap.started":
+			bootstrapStarted++
+		case "agent.bootstrap.completed":
+			bootstrapCompleted++
+		}
+		switch event.EventType {
+		case observability.EventTypeAgentRunStarted:
+			agentStarted++
+		case observability.EventTypeAgentRunCompleted, observability.EventTypeAgentRunFailed, observability.EventTypeAgentRunCancelled:
+			t.Fatalf("DAG submission emitted false agent terminal: %+v", event)
+		}
+	}
+	if bootstrapStarted != 1 || bootstrapCompleted != 1 || agentStarted != 1 {
+		t.Fatalf("bootstrap started=%d completed=%d agent started=%d events=%+v",
+			bootstrapStarted, bootstrapCompleted, agentStarted, sink.snapshot())
+	}
+}
+
+func TestRunnerDurableTerminalOutboxEmitsExactlyOneTrueAgentTerminal(t *testing.T) {
+	tests := []struct {
+		name       string
+		taskStatus model.TaskStatus
+		wantRun    RunStatus
+		wantType   observability.EventType
+		wantExec   observability.ExecutionStatus
+		terminal   func(*Runner, context.Context, string) error
+	}{
+		{
+			name: "completed", taskStatus: model.TaskSuccess, wantRun: RunStatusSuccess,
+			wantType: observability.EventTypeAgentRunCompleted, wantExec: observability.ExecutionStatusCompleted,
+			terminal: func(r *Runner, ctx context.Context, id string) error {
+				_, _, err := r.Get(ctx, id)
+				return err
+			},
+		},
+		{
+			name: "failed", taskStatus: model.TaskFailed, wantRun: RunStatusFailed,
+			wantType: observability.EventTypeAgentRunFailed, wantExec: observability.ExecutionStatusFailed,
+			terminal: func(r *Runner, ctx context.Context, id string) error {
+				_, _, err := r.Get(ctx, id)
+				return err
+			},
+		},
+		{
+			name: "cancelled", wantRun: RunStatusCancelled,
+			wantType: observability.EventTypeAgentRunCancelled, wantExec: observability.ExecutionStatusCancelled,
+			terminal: func(r *Runner, ctx context.Context, id string) error {
+				_, err := r.Cancel(ctx, id)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newMemoryRunStore()
+			run := &Run{
+				ID: "agr_terminal1", TaskID: "tsk_terminal1", UserID: "user-1",
+				Status: RunStatusRunning, TraceID: "4bf92f3577b34da6a3ce929d0e0e4736",
+				ToolRegistrySnapshotID: "tool-snapshot-1",
+				Metadata:               map[string]interface{}{"requestContext": map[string]interface{}{"projectId": "prj_terminal1"}},
+			}
+			if err := store.SaveRun(context.Background(), run); err != nil {
+				t.Fatal(err)
+			}
+			sink := &agentTerminalSink{}
+			emitter, persistent := newPersistentAgentEmitterForTest(t,
+				observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
+				observability.Runtime{AppVersion: "app-1"}, sink, 16,
+			)
+			callbacks := 0
+			runner := (&Runner{
+				orchestrator: &fakeOrchestrator{taskStatus: tt.taskStatus},
+				store:        store,
+			}).WithObservability(persistent).WithTerminalCallback(func(_ context.Context, event RunTerminalEvent) error {
+				callbacks++
+				if event.RunID != run.ID || event.UserID != run.UserID || event.Status != tt.wantRun {
+					t.Fatalf("callback event=%+v", event)
+				}
+				return nil
+			})
+
+			if err := tt.terminal(runner, context.Background(), run.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := tt.terminal(runner, context.Background(), run.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := runner.DeliverPendingTerminalEventsOnce(context.Background(), 10); err != nil {
+				t.Fatal(err)
+			}
+			if err := emitter.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			if callbacks != 1 {
+				t.Fatalf("terminal callbacks=%d, want exactly 1", callbacks)
+			}
+			var terminals []agentTerminalObservation
+			for _, observed := range sink.snapshot() {
+				if observed.event.EventType == tt.wantType {
+					terminals = append(terminals, observed)
+				}
+			}
+			if len(terminals) != 1 {
+				t.Fatalf("terminal observations=%d, want exactly 1: %+v", len(terminals), sink.snapshot())
+			}
+			got := terminals[0]
+			if !strings.HasPrefix(got.event.EventID, "evt_") ||
+				got.event.Execution.Status != tt.wantExec ||
+				got.owner != run.UserID ||
+				got.event.Correlation.TraceID != "trc_"+run.TraceID ||
+				got.event.Correlation.TaskID != run.TaskID ||
+				got.event.Correlation.AgentRunID != run.ID ||
+				got.event.Runtime.ToolRegistrySnapshotID != run.ToolRegistrySnapshotID ||
+				got.event.Runtime.AppVersion != "app-1" {
+				t.Fatalf("durable terminal observation=%+v", got)
+			}
+			if tt.wantRun == RunStatusFailed && (got.event.Error == nil || got.event.Error.Code == "") {
+				t.Fatalf("failed terminal lacks stable error: %+v", got.event)
+			}
+		})
+	}
+}
+
+func TestRunnerTerminalCallbackRetryEmitsOneIdempotentObservabilityEvent(t *testing.T) {
+	store := newMemoryRunStore()
+	run := &Run{
+		ID: "agr_retry", TaskID: "tsk_retry", UserID: "owner-retry",
+		Status: RunStatusRunning, TraceID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	if err := store.SaveRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	sink := &agentTerminalSink{}
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
+		observability.Source{Service: "cloud", Component: "agent-runtime", Environment: "test"},
+		observability.Runtime{}, sink, 8,
+	)
+	attempts := 0
+	runner := (&Runner{
+		orchestrator: &fakeOrchestrator{taskStatus: model.TaskSuccess},
+		store:        store,
+	}).WithObservability(persistent).WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("callback unavailable")
+		}
+		return nil
+	})
+
+	if _, _, err := runner.Get(context.Background(), run.ID); err == nil {
+		t.Fatal("first terminal delivery succeeded despite callback failure")
+	}
+	if !store.hasPendingTerminal(run.ID) {
+		t.Fatal("callback failure did not keep durable terminal pending")
+	}
+	if err := runner.DeliverPendingTerminalEventsOnce(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.DeliverPendingTerminalEventsOnce(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if attempts != 2 {
+		t.Fatalf("callback attempts=%d, want retry then success", attempts)
+	}
+	var terminalEvents []observability.Event
+	for _, observed := range sink.snapshot() {
+		if observed.event.EventType == observability.EventTypeAgentRunCompleted {
+			terminalEvents = append(terminalEvents, observed.event)
+		}
+	}
+	if len(terminalEvents) != 1 {
+		t.Fatalf("completed observability terminals=%d, want 1: %+v", len(terminalEvents), sink.snapshot())
+	}
+}
+
+func TestRunnerStageBoundariesPairCancellationFailureAndPanic(t *testing.T) {
+	validPlan := &AgentPlan{
+		Goal: "make", Domain: "video_creation", Mode: "dynamic_agent",
+		Steps: []AgentStep{{ID: "script", Tool: "script_tool", Arguments: map[string]interface{}{"stage": "script"}}},
+	}
+	catalog := staticToolCatalog{"script_tool": {Name: "script_tool", Endpoint: "builtin://script"}}
+	tests := []struct {
+		name         string
+		planner      Planner
+		guard        *PlanGuard
+		compiler     *PlanCompiler
+		orchestrator Orchestrator
+		startKey     string
+		terminalKey  string
+		code         string
+		wantPanic    bool
+	}{
+		{
+			name: "planning cancellation", planner: boundaryPlanner{err: context.Canceled},
+			guard: NewPlanGuard(catalog, nil), compiler: NewPlanCompiler(catalog), orchestrator: &fakeOrchestrator{taskID: "task-1"},
+			startKey: "agent.plan.started", terminalKey: "agent.plan.cancelled",
+		},
+		{
+			name: "planning panic", planner: boundaryPlanner{panicValue: "planner panic"},
+			guard: NewPlanGuard(catalog, nil), compiler: NewPlanCompiler(catalog), orchestrator: &fakeOrchestrator{taskID: "task-1"},
+			startKey: "agent.plan.started", terminalKey: "agent.plan.failed", code: "AGENT.RUNTIME.INTERNAL_FAILURE", wantPanic: true,
+		},
+		{
+			name: "guard panic", planner: boundaryPlanner{plan: validPlan},
+			guard: NewPlanGuard(catalog, nil).WithDirectors(panicDirectorRegistry{}), compiler: NewPlanCompiler(catalog), orchestrator: &fakeOrchestrator{taskID: "task-1"},
+			startKey: "agent.plan.validation.started", terminalKey: "agent.plan.validation.failed", code: "AGENT.RUNTIME.INTERNAL_FAILURE", wantPanic: true,
+		},
+		{
+			name: "repair failure", planner: repairFailurePlanner{plan: &AgentPlan{Goal: "make", Steps: []AgentStep{{ID: "bad", Tool: "missing"}}}},
+			guard: NewPlanGuard(catalog, nil), compiler: NewPlanCompiler(catalog), orchestrator: &fakeOrchestrator{taskID: "task-1"},
+			startKey: "correct.operation.started", terminalKey: "correct.operation.failed", code: "AGENT.PLAN.VALIDATION_FAILED",
+		},
+		{
+			name: "compiler panic", planner: boundaryPlanner{plan: validPlan},
+			guard: NewPlanGuard(catalog, nil), compiler: NewPlanCompiler(catalog).WithDirectors(panicDirectorRegistry{}), orchestrator: &fakeOrchestrator{taskID: "task-1"},
+			startKey: "agent.plan.compilation.started", terminalKey: "agent.plan.compilation.failed", code: "AGENT.RUNTIME.INTERNAL_FAILURE", wantPanic: true,
+		},
+		{
+			name: "orchestrator panic", planner: boundaryPlanner{plan: validPlan},
+			guard: NewPlanGuard(catalog, nil), compiler: NewPlanCompiler(catalog), orchestrator: panicOrchestrator{},
+			startKey: "agent.dag.submission.started", terminalKey: "agent.dag.submission.failed", code: "AGENT.RUNTIME.INTERNAL_FAILURE", wantPanic: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sink := &agentEventSink{}
+			emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 64)
+			runner := NewRunner(tt.orchestrator, newMemoryRunStore(), tt.planner, tt.guard, tt.compiler).WithObservability(persistent)
+			panicked := false
+			func() {
+				defer func() { panicked = recover() != nil }()
+				_, _ = runner.Start(context.Background(), StartRunRequest{UserID: "user-1", Message: "make"})
+			}()
+			if panicked != tt.wantPanic {
+				t.Fatalf("panicked=%v, want %v", panicked, tt.wantPanic)
+			}
+			if err := emitter.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			var starts, terminals int
+			for _, event := range sink.snapshot() {
+				if err := event.Validate(); err != nil {
+					t.Fatalf("invalid event %s: %v", event.MessageKey, err)
+				}
+				if event.MessageKey == tt.startKey {
+					starts++
+				}
+				if event.MessageKey == tt.terminalKey {
+					terminals++
+					if tt.code != "" && (event.Error == nil || event.Error.Code != tt.code) {
+						t.Fatalf("terminal error=%+v, want code %s", event.Error, tt.code)
+					}
+				}
+			}
+			if starts != 1 || terminals != 1 {
+				t.Fatalf("boundary pair starts=%d terminals=%d events=%+v", starts, terminals, sink.snapshot())
+			}
+		})
+	}
+}
+
+func TestRunnerDeadlineFailsInnerAndOuterWithTimeoutCodes(t *testing.T) {
+	sink := &agentEventSink{}
+	emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 32)
+	catalog := staticToolCatalog{}
+	runner := NewRunner(&fakeOrchestrator{}, newMemoryRunStore(), boundaryPlanner{err: context.DeadlineExceeded}, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).WithObservability(persistent)
+	if _, err := runner.Start(context.Background(), StartRunRequest{UserID: "user-1", Message: "make"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Start error=%v", err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"agent.plan.failed": "WORKFLOW.STAGE.TIMEOUT", "agent.bootstrap.failed": "WORKFLOW.STAGE.TIMEOUT"}
+	for _, event := range sink.snapshot() {
+		if code, ok := want[event.MessageKey]; ok {
+			if event.Execution.Status != observability.ExecutionStatusFailed || event.Severity != observability.SeverityError || event.Error == nil || event.Error.Code != code {
+				t.Fatalf("timeout event=%+v want code %s", event, code)
+			}
+			delete(want, event.MessageKey)
+		}
+		if event.Execution.Status == observability.ExecutionStatusCancelled {
+			t.Fatalf("deadline emitted cancellation: %+v", event)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing timeout terminals=%+v events=%+v", want, sink.snapshot())
+	}
+}
+
+func TestRunnerRepairCancellationUsesCancelledEventsWithoutError(t *testing.T) {
+	sink := &agentEventSink{}
+	emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 32)
+	catalog := staticToolCatalog{"known": {Name: "known"}}
+	planner := repairCancellationPlanner{plan: &AgentPlan{Goal: "bad", Steps: []AgentStep{{ID: "bad", Tool: "missing"}}}}
+	runner := NewRunner(&fakeOrchestrator{}, newMemoryRunStore(), planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).WithObservability(persistent)
+	if _, err := runner.Start(context.Background(), StartRunRequest{UserID: "user-1", Message: "make"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start error=%v", err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"correct.operation.cancelled": false, "agent.plan.validation.cancelled": false, "agent.bootstrap.cancelled": false}
+	for _, event := range sink.snapshot() {
+		if _, ok := want[event.MessageKey]; ok {
+			want[event.MessageKey] = true
+			if event.Execution.Status != observability.ExecutionStatusCancelled || event.Severity != observability.SeverityWarn || event.Error != nil || strings.HasSuffix(string(event.EventType), ".failed") {
+				t.Fatalf("cancellation event=%+v", event)
+			}
+		}
+	}
+	for key, found := range want {
+		if !found {
+			t.Fatalf("missing cancellation %s events=%+v", key, sink.snapshot())
+		}
+	}
+}
+
+func TestRunnerPlanJudgeCancellationUsesCancelledEventContract(t *testing.T) {
+	sink := &agentEventSink{}
+	emitter, persistent := newPersistentAgentEmitterForTest(t,
+		observability.Source{Service: "cloud", Component: "agent", Environment: "test"},
+		observability.Runtime{}, sink, 32,
+	)
+	catalog := staticToolCatalog{"known": {Name: "known"}}
+	plan := &AgentPlan{
+		Goal: "make", Domain: "general", Mode: "dynamic_agent",
+		Steps: []AgentStep{{ID: "step", Tool: "known", Arguments: map[string]interface{}{}}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	judge := cancellingPlanJudge{cancel: cancel}
+	runner := NewRunner(
+		&fakeOrchestrator{taskID: "task-1"}, newMemoryRunStore(), staticPlanner{plan: plan},
+		NewPlanGuard(catalog, nil), NewPlanCompiler(catalog),
+	).WithPlanJudge(judge).WithObservability(persistent)
+
+	if _, err := runner.Start(ctx, StartRunRequest{UserID: "user-1", Message: "make"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start error=%v, want context.Canceled", err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var cancelled int
+	for _, event := range sink.snapshot() {
+		if event.EventType != observability.EventType("verify.check.cancelled") {
+			continue
+		}
+		cancelled++
+		if event.MessageKey != "verify.check.cancelled" || event.Execution.Status != observability.ExecutionStatusCancelled ||
+			event.Severity != observability.SeverityWarn || event.Error != nil {
+			t.Fatalf("plan judge cancellation event=%+v", event)
+		}
+	}
+	if cancelled != 1 {
+		t.Fatalf("verify cancellation count=%d events=%+v", cancelled, sink.snapshot())
+	}
+}
+
+func TestObserveAgentBoundaryTreatsWrappedRunCancellationAsCancelled(t *testing.T) {
+	sink := &agentEventSink{}
+	emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 8)
+	runner := (&Runner{}).WithObservability(persistent)
+	ctx := observability.WithCorrelation(context.Background(), observability.Correlation{TraceID: "trc_run", SpanID: "spn_run"})
+	err := runner.observeAgentBoundary(ctx, observability.Correlation{TraceID: "trc_run", SpanID: "spn_run", AgentRunID: "agr_run", StageID: "submission"}, agentBoundarySpec{
+		started: observability.EventTypeWorkflowStageStarted, completed: observability.EventTypeWorkflowStageCompleted,
+		failed: observability.EventTypeWorkflowStageFailed, cancelled: observability.EventTypeWorkflowStageCancelled,
+		startKey: "agent.dag.submission.started", completeKey: "agent.dag.submission.completed", failKey: "agent.dag.submission.failed", cancelKey: "agent.dag.submission.cancelled", errorCode: "AGENT.DAG.SUBMISSION_FAILED", component: "agent-dag-submission",
+	}, func() error { return errors.Join(errors.New("wrapped"), errRunCancelled) })
+	if !errors.Is(err, errRunCancelled) {
+		t.Fatalf("boundary error=%v", err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events := sink.snapshot()
+	if len(events) != 2 || events[1].EventType != observability.EventTypeWorkflowStageCancelled || events[1].Execution.Status != observability.ExecutionStatusCancelled || events[1].Error != nil {
+		t.Fatalf("events=%+v", events)
+	}
+}
+
+type repairCancellationPlanner struct{ plan *AgentPlan }
+
+func (p repairCancellationPlanner) GeneratePlan(context.Context, StartRunRequest) (*AgentPlan, error) {
+	return p.plan, nil
+}
+func (repairCancellationPlanner) RepairPlanForRequest(context.Context, StartRunRequest, *AgentPlan, string) (*AgentPlan, error) {
+	return nil, context.Canceled
+}
+
+func TestRunnerDoesNotMutatePlannerOwnedPlan(t *testing.T) {
+	shared := &AgentPlan{Goal: "template", Steps: []AgentStep{{ID: "step", Tool: "tool", Arguments: map[string]interface{}{"value": "original"}}}}
+	catalog := staticToolCatalog{"tool": {Name: "tool", Endpoint: "builtin://tool"}}
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1"}, newMemoryRunStore(), staticPlanner{plan: shared}, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	if _, err := runner.Start(context.Background(), StartRunRequest{UserID: "user-1", Message: "make", Domain: "requested"}); err != nil {
+		t.Fatal(err)
+	}
+	if shared.Domain != "" || shared.Mode != "" || shared.Steps[0].Arguments["value"] != "original" {
+		t.Fatalf("planner-owned plan was mutated: %+v", shared)
+	}
+}
+
+type boundaryPlanner struct {
+	plan       *AgentPlan
+	err        error
+	panicValue any
+}
+
+func (p boundaryPlanner) GeneratePlan(context.Context, StartRunRequest) (*AgentPlan, error) {
+	if p.panicValue != nil {
+		panic(p.panicValue)
+	}
+	return p.plan, p.err
+}
+
+type repairFailurePlanner struct{ plan *AgentPlan }
+
+func (p repairFailurePlanner) GeneratePlan(context.Context, StartRunRequest) (*AgentPlan, error) {
+	return p.plan, nil
+}
+func (repairFailurePlanner) RepairPlanForRequest(context.Context, StartRunRequest, *AgentPlan, string) (*AgentPlan, error) {
+	return nil, errors.New("repair failed")
+}
+
+type panicDirectorRegistry struct{}
+
+func (panicDirectorRegistry) Get(string) StageDirector { panic("director panic") }
+
+type panicOrchestrator struct{}
+
+func (panicOrchestrator) CreateTask(context.Context, string, map[string]interface{}) (*model.Task, error) {
+	panic("orchestrator panic")
+}
+func (panicOrchestrator) SubmitDAG(context.Context, string, *model.DAGRequest) error { return nil }
+func (panicOrchestrator) GetTaskWithDetails(context.Context, string) (map[string]interface{}, error) {
+	return nil, nil
+}
 
 func TestRunnerStart_CreatesTaskScopesDAGAndStoresRun(t *testing.T) {
 	store := newMemoryRunStore()
@@ -29,7 +814,8 @@ func TestRunnerStart_CreatesTaskScopesDAGAndStoresRun(t *testing.T) {
 		},
 	}
 
-	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 	run, err := runner.Start(context.Background(), StartRunRequest{
 		UserID:  "user-1",
 		Message: "make a video about AI workflows",
@@ -116,7 +902,8 @@ func TestRunnerCompleteStart_DoesNotReviveCancelledRun(t *testing.T) {
 		Domain:  "video_creation",
 	}
 	shell := newRunShell(req)
-	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 	if err := store.SaveRun(context.Background(), shell); err != nil {
 		t.Fatalf("SaveRun returned error: %v", err)
 	}
@@ -146,9 +933,11 @@ func TestRunnerGetSyncsFailedTaskStatusToRun(t *testing.T) {
 	_ = store.SaveRun(context.Background(), &Run{
 		ID:     "run-1",
 		TaskID: "task-1",
+		UserID: "user-1",
 		Status: RunStatusRunning,
 	})
-	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskFailed}, store, nil, nil, nil)
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskFailed}, store, nil, nil, nil).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 
 	run, task, err := runner.Get(context.Background(), "run-1")
 	if err != nil {
@@ -171,9 +960,11 @@ func TestRunnerGetSyncsSuccessfulTaskStatusToRun(t *testing.T) {
 	_ = store.SaveRun(context.Background(), &Run{
 		ID:     "run-1",
 		TaskID: "task-1",
+		UserID: "user-1",
 		Status: RunStatusRunning,
 	})
-	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}, store, nil, nil, nil)
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}, store, nil, nil, nil).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 
 	run, task, err := runner.Get(context.Background(), "run-1")
 	if err != nil {
@@ -196,9 +987,11 @@ func TestRunnerGetRestoresFailedRunWhenTaskRecoveredToSuccess(t *testing.T) {
 	_ = store.SaveRun(context.Background(), &Run{
 		ID:     "run-1",
 		TaskID: "task-1",
+		UserID: "user-1",
 		Status: RunStatusFailed,
 	})
-	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}, store, nil, nil, nil)
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}, store, nil, nil, nil).
+		WithObservability(newTerminalReplayEmitter(t, 0))
 
 	run, task, err := runner.Get(context.Background(), "run-1")
 	if err != nil {
@@ -311,25 +1104,32 @@ func TestApplyRequestPlanDefaultsCopiesSafeVideoContext(t *testing.T) {
 		Message: "user supplied cinematic story request",
 		Domain:  "video_creation",
 		Context: map[string]interface{}{
-			"renderTimeoutSec":      float64(12),
-			"profileId":             "cinematic_story",
-			"videoType":             "cinematic_story",
-			"projectMode":           "cinematic_story",
-			"aigcProvider":          "jimeng_mcp",
-			"aigcEnabled":           false,
-			"aigcPolicy":            "disabled",
-			"ipRenderMode":          "preview",
-			"productionRoute":       "talking_head",
-			"canonicalProfileId":    "talking_head",
-			"requiredLayers":        []interface{}{"ip_aroll", "hyperframes_text"},
-			"visualLayerContract":   "shot_visual_layers_v1",
-			"designedLayers":        []interface{}{"ip_aroll", "hyperframes_text", "aigc_enrichment"},
-			"layerExecutionPolicy":  map[string]interface{}{"ip_aroll": "required", "hyperframes_text": "required", "aigc_enrichment": "disabled"},
-			"projectId":             "vp-123",
-			"presentationMode":      "standing",
-			"cameraPreset":          "front_talking",
-			"actionSequence":        []interface{}{"Aroll_Greeting_Wave"},
-			"characterProfilePath":  "ip-assets/main-ip/character-profile.json",
+			"renderTimeoutSec":     float64(12),
+			"profileId":            "cinematic_story",
+			"videoType":            "cinematic_story",
+			"projectMode":          "cinematic_story",
+			"aigcProvider":         "jimeng_mcp",
+			"aigcEnabled":          false,
+			"aigcPolicy":           "disabled",
+			"ipRenderMode":         "preview",
+			"productionRoute":      "talking_head",
+			"canonicalProfileId":   "talking_head",
+			"requiredLayers":       []interface{}{"ip_aroll", "hyperframes_text"},
+			"visualLayerContract":  "shot_visual_layers_v1",
+			"designedLayers":       []interface{}{"ip_aroll", "hyperframes_text", "aigc_enrichment"},
+			"layerExecutionPolicy": map[string]interface{}{"ip_aroll": "required", "hyperframes_text": "required", "aigc_enrichment": "disabled"},
+			"projectId":            "vp-123",
+			"presentationMode":     "standing",
+			"cameraPreset":         "front_talking",
+			"actionSequence":       []interface{}{"Aroll_Greeting_Wave"},
+			"characterProfilePath": "ip-assets/main-ip/character-profile.json",
+			"voiceSelection": map[string]interface{}{
+				"mode": "reference_clone", "provider": "gpt_sovits_local", "voiceId": "project_reference_voice_vp-123",
+				"referenceArtifactId": "voice-1", "referenceStorageRef": "local://projects/vp-123/artifacts/voice-1/hash/reference.wav",
+				"referenceContentHash": "sha256:abc", "referenceMimeType": "audio/wav", "referenceText": "录音逐字原文",
+				"referenceTextVerified": true, "usageRightsConfirmed": true,
+				"referenceAudioPath": "/Users/private/reference.wav", "audioBytes": "secret-bytes",
+			},
 			"modelProviders":        map[string]interface{}{"text_to_text": map[string]interface{}{"apiKey": "secret"}},
 			"unrelatedContextValue": "ignored",
 		},
@@ -360,10 +1160,21 @@ func TestApplyRequestPlanDefaultsCopiesSafeVideoContext(t *testing.T) {
 		"cameraPreset",
 		"actionSequence",
 		"characterProfilePath",
+		"voiceSelection",
 	} {
 		if got := plan.Steps[0].Arguments[key]; got == nil {
 			t.Fatalf("%s was not copied to plan defaults: %#v", key, plan.Steps[0].Arguments)
 		}
+	}
+	voiceSelection, _ := plan.Steps[0].Arguments["voiceSelection"].(map[string]interface{})
+	if voiceSelection["referenceText"] != "录音逐字原文" || voiceSelection["usageRightsConfirmed"] != true {
+		t.Fatalf("safe voice selection was not preserved: %#v", voiceSelection)
+	}
+	if _, exists := voiceSelection["referenceAudioPath"]; exists {
+		t.Fatalf("absolute voice path leaked into plan: %#v", voiceSelection)
+	}
+	if _, exists := voiceSelection["audioBytes"]; exists {
+		t.Fatalf("audio bytes leaked into plan: %#v", voiceSelection)
 	}
 	if _, exists := plan.Steps[0].Arguments["modelProviders"]; exists {
 		t.Fatalf("sensitive model provider context should not be copied: %#v", plan.Steps[0].Arguments)
@@ -588,6 +1399,8 @@ func TestRunnerStart_RecordsPlanJudgeWarningsAfterGuardPasses(t *testing.T) {
 
 func TestRunnerStart_BlocksWhenPlanJudgeFails(t *testing.T) {
 	store := newMemoryRunStore()
+	sink := &agentEventSink{}
+	emitter, persistent := newPersistentAgentEmitterForTest(t, observability.Source{Service: "cloud", Component: "agent", Environment: "test"}, observability.Runtime{}, sink, 32)
 	orch := &fakeOrchestrator{taskID: "task-1"}
 	planner := staticPlanner{plan: &AgentPlan{
 		Goal:   "make video",
@@ -613,7 +1426,8 @@ func TestRunnerStart_BlocksWhenPlanJudgeFails(t *testing.T) {
 	}
 
 	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).
-		WithPlanJudge(&judge)
+		WithPlanJudge(&judge).
+		WithObservability(persistent)
 	_, err := runner.Start(context.Background(), StartRunRequest{
 		UserID:  "user-1",
 		Message: "make a video about AI workflows",
@@ -627,6 +1441,26 @@ func TestRunnerStart_BlocksWhenPlanJudgeFails(t *testing.T) {
 	}
 	if got := store.Len(); got != 0 {
 		t.Fatalf("failed plan should not be persisted as a run, got %d stored runs", got)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var verifyStarted, verifyFailed, correctionStarted int
+	for _, event := range sink.snapshot() {
+		if err := event.Validate(); err != nil {
+			t.Fatalf("invalid event %s: %v", event.MessageKey, err)
+		}
+		switch event.EventType {
+		case observability.EventTypeVerifyCheckStarted:
+			verifyStarted++
+		case observability.EventTypeVerifyCheckFailed:
+			verifyFailed++
+		case observability.EventTypeCorrectOperationStarted:
+			correctionStarted++
+		}
+	}
+	if verifyStarted != 1 || verifyFailed != 1 || correctionStarted != 0 {
+		t.Fatalf("plan judge lifecycle verifyStarted=%d verifyFailed=%d correctionStarted=%d", verifyStarted, verifyFailed, correctionStarted)
 	}
 }
 
@@ -921,18 +1755,24 @@ func (o *fakeOrchestrator) GetTaskWithDetails(context.Context, string) (map[stri
 }
 
 type memoryRunStore struct {
-	mu              sync.RWMutex
-	runs            map[string]*Run
-	terminal        map[string]RunTerminalEvent
-	delivered       map[string]bool
-	terminalClaim   map[string]string
-	saveTerminalErr error
+	mu                     sync.RWMutex
+	runs                   map[string]*Run
+	terminal               map[string]RunTerminalEvent
+	terminalEventID        map[string]string
+	delivered              map[string]bool
+	terminalClaim          map[string]string
+	terminalLeaseUntil     map[string]time.Time
+	callbackDelivered      map[string]bool
+	observabilityDelivered map[string]bool
+	saveTerminalErr        error
 }
 
 func newMemoryRunStore() *memoryRunStore {
 	return &memoryRunStore{
 		runs: make(map[string]*Run), terminal: make(map[string]RunTerminalEvent),
-		delivered: make(map[string]bool), terminalClaim: make(map[string]string),
+		terminalEventID: make(map[string]string),
+		delivered:       make(map[string]bool), terminalClaim: make(map[string]string), terminalLeaseUntil: make(map[string]time.Time),
+		callbackDelivered: make(map[string]bool), observabilityDelivered: make(map[string]bool),
 	}
 }
 
@@ -942,14 +1782,21 @@ func (s *memoryRunStore) SaveRunTerminal(_ context.Context, run *Run, event RunT
 	if s.saveTerminalErr != nil {
 		return s.saveTerminalErr
 	}
+	if _, exists := s.terminal[run.ID]; exists {
+		return nil
+	}
 	s.runs[run.ID] = run
 	s.terminal[run.ID] = event
+	s.terminalEventID[run.ID] = event.EventID
 	s.delivered[run.ID] = false
 	s.terminalClaim[run.ID] = ""
+	s.terminalLeaseUntil[run.ID] = time.Time{}
+	s.callbackDelivered[run.ID] = false
+	s.observabilityDelivered[run.ID] = false
 	return nil
 }
 
-func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, _ time.Time, claimToken string) ([]TerminalEventDelivery, error) {
+func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, leaseUntil time.Time, claimToken string) ([]TerminalEventDelivery, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	deliveries := make([]TerminalEventDelivery, 0, limit)
@@ -957,35 +1804,79 @@ func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, _ tim
 		if len(deliveries) >= limit {
 			break
 		}
-		if s.delivered[runID] || s.terminalClaim[runID] != "" {
+		if s.delivered[runID] || s.terminalClaim[runID] != "" && s.terminalLeaseUntil[runID].After(time.Now()) {
 			continue
 		}
 		s.terminalClaim[runID] = claimToken
-		deliveries = append(deliveries, TerminalEventDelivery{RunID: runID, EventID: event.EventID, ClaimToken: claimToken, Event: event})
+		s.terminalLeaseUntil[runID] = leaseUntil
+		deliveries = append(deliveries, TerminalEventDelivery{
+			RunID: runID, EventID: s.terminalEventID[runID], ClaimToken: claimToken,
+			PayloadFrozen:     event.EventID != "" && event.CallbackIdempotencyKey != "",
+			CallbackDelivered: s.callbackDelivered[runID], ObservabilityDelivered: s.observabilityDelivered[runID],
+			Event: event,
+		})
 	}
 	return deliveries, nil
+}
+
+func (s *memoryRunStore) FreezeTerminalEvent(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.terminal[delivery.RunID]; !ok || s.terminalEventID[delivery.RunID] != delivery.EventID ||
+		s.terminalClaim[delivery.RunID] != delivery.ClaimToken || s.delivered[delivery.RunID] {
+		return false, nil
+	}
+	s.terminal[delivery.RunID] = delivery.Event
+	return true, nil
+}
+
+func (s *memoryRunStore) MarkTerminalCallbackDelivered(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.terminal[delivery.RunID]
+	if !ok || s.terminalEventID[delivery.RunID] != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken ||
+		s.delivered[delivery.RunID] || s.callbackDelivered[delivery.RunID] {
+		return false, nil
+	}
+	s.callbackDelivered[delivery.RunID] = true
+	return true, nil
+}
+
+func (s *memoryRunStore) MarkTerminalObservabilityDelivered(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.terminal[delivery.RunID]
+	if !ok || s.terminalEventID[delivery.RunID] != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken ||
+		s.delivered[delivery.RunID] || !s.callbackDelivered[delivery.RunID] || s.observabilityDelivered[delivery.RunID] {
+		return false, nil
+	}
+	s.observabilityDelivered[delivery.RunID] = true
+	return true, nil
 }
 
 func (s *memoryRunStore) AckTerminalEvent(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	current, ok := s.terminal[delivery.RunID]
-	if !ok || current.EventID != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken {
+	_, ok := s.terminal[delivery.RunID]
+	if !ok || s.terminalEventID[delivery.RunID] != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken ||
+		!s.callbackDelivered[delivery.RunID] || !s.observabilityDelivered[delivery.RunID] {
 		return false, nil
 	}
 	s.delivered[delivery.RunID] = true
 	s.terminalClaim[delivery.RunID] = ""
+	s.terminalLeaseUntil[delivery.RunID] = time.Time{}
 	return true, nil
 }
 
 func (s *memoryRunStore) ReleaseTerminalEvent(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	current, ok := s.terminal[delivery.RunID]
-	if !ok || current.EventID != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken {
+	_, ok := s.terminal[delivery.RunID]
+	if !ok || s.terminalEventID[delivery.RunID] != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken {
 		return false, nil
 	}
 	s.terminalClaim[delivery.RunID] = ""
+	s.terminalLeaseUntil[delivery.RunID] = time.Time{}
 	return true, nil
 }
 
@@ -1035,6 +1926,15 @@ type recordingPlanJudge struct {
 	called   bool
 	passed   bool
 	warnings []PlanJudgeWarning
+}
+
+type cancellingPlanJudge struct {
+	cancel context.CancelFunc
+}
+
+func (j cancellingPlanJudge) Evaluate(*AgentPlan) PlanJudgeReport {
+	j.cancel()
+	return PlanJudgeReport{Passed: true}
 }
 
 func (j *recordingPlanJudge) Evaluate(*AgentPlan) PlanJudgeReport {

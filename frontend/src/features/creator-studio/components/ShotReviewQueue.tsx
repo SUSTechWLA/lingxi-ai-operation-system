@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
 import { getCreatorArtifactContent } from '../../../services/creatorApi'
 import type { ShotListFilters, ShotListItem, ShotQueueStatus } from '../types'
+import type { HistoricalShot } from '../completedShotProjection'
 import { SHOT_QUEUE_ROW_HEIGHT, shotQueueWindow } from '../logic'
 
 interface ShotReviewQueueProps {
@@ -10,8 +11,11 @@ interface ShotReviewQueueProps {
   filters: ShotListFilters
   loading?: boolean
   hasMore: boolean
+  historicalShots?: readonly HistoricalShot[]
+  selectedHistoricalShotId?: string
   onFiltersChange: (filters: ShotListFilters) => void
   onSelect: (shotId: string) => void
+  onSelectHistorical: (shotId: string) => void
   onLoadMore: () => void
 }
 
@@ -23,7 +27,7 @@ const FILTERS: readonly { value: ShotQueueStatus; label: string }[] = [
   { value: 'failed', label: '失败' },
 ]
 
-export default function ShotReviewQueue({ items, total, selectedShotId, filters, loading = false, hasMore, onFiltersChange, onSelect, onLoadMore }: ShotReviewQueueProps) {
+export default function ShotReviewQueue({ items, total, selectedShotId, filters, loading = false, hasMore, historicalShots, selectedHistoricalShotId, onFiltersChange, onSelect, onSelectHistorical, onLoadMore }: ShotReviewQueueProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(480)
@@ -67,6 +71,35 @@ export default function ShotReviewQueue({ items, total, selectedShotId, filters,
     if (scrollRef.current) scrollRef.current.scrollTop = 0
     setScrollTop(0)
     onFiltersChange(next)
+  }
+
+  if (historicalShots?.length) {
+    return (
+      <aside className="shot-review-queue historical-shot-selector" aria-label="历史 Shot 回看">
+        <div className="shot-review-queue-heading">
+          <div>
+            <p className="creator-eyebrow">历史任务回看</p>
+            <h2>选择一个 Shot 审核</h2>
+          </div>
+          <span>{historicalShots.length} 个镜头</span>
+        </div>
+        <nav className="shot-review-history-list historical-shot-filmstrip" aria-label="选择要回看的 Shot">
+          {historicalShots.map(shot => (
+            <button
+              key={shot.id}
+              type="button"
+              className={`historical-shot-chip${selectedHistoricalShotId === shot.id ? ' is-selected' : ''}`}
+              aria-current={selectedHistoricalShotId === shot.id ? 'true' : undefined}
+              onClick={() => onSelectHistorical(shot.id)}
+            >
+              <span className="historical-shot-chip-index">Shot {String(shot.sequenceIndex).padStart(2, '0')}</span>
+              <strong>旁白 · 画面 · 媒体</strong>
+              <small>{selectedHistoricalShotId === shot.id ? '正在查看' : '打开审核'}</small>
+            </button>
+          ))}
+        </nav>
+      </aside>
+    )
   }
 
   return (

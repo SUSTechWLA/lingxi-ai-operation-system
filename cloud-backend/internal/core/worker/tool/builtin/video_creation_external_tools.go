@@ -752,6 +752,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		manifest.Capabilities = []string{"video_creation", "render_strategy", "asset_routing", "shot_planning"}
 		manifest.Parameters = map[string]tool.ParamDef{
 			"shotList":             {Type: "array", Description: "Approved shot list", Required: true},
+			"timeWindows":          {Type: "array", Description: "Canonical millisecond Shot windows", Required: false},
 			"visualPlans":          {Type: "array", Description: "Optional per-shot visual plans", Required: false},
 			"renderPreference":     {Type: "object", Description: "Optional render preference snapshot", Required: false},
 			"aigcAvailable":        {Type: "boolean", Description: "Whether AIGC video/image generation is available", Required: false},
@@ -783,6 +784,8 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		manifest.Capabilities = []string{"video_creation", "video_prompt_generation", "text_to_video"}
 		manifest.Parameters = map[string]tool.ParamDef{
 			"shotList":             {Type: "array", Description: "Approved shot list", Required: true},
+			"timeWindows":          {Type: "array", Description: "Canonical millisecond Shot windows", Required: false},
+			"shotGenerationPlans":  {Type: "array", Description: "Derived render plans merged by shotId without replacing canonical narration or timing", Required: false},
 			"brief":                {Type: "string", Description: "Original video brief", Required: false},
 			"keyframePrompts":      {Type: "array", Description: "Optional keyframe prompts", Required: false},
 			"style":                {Type: "string", Description: "Visual style", Required: false},
@@ -2563,6 +2566,10 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 		if endMs <= startMs {
 			endMs = startMs + durationMs
 		}
+		shot["startMs"] = startMs
+		shot["endMs"] = endMs
+		shot["durationMs"] = endMs - startMs
+		shot["timelineRevision"] = firstNonEmptyString(window, "timelineRevision")
 		nextStartMs = endMs
 		if isBrollRoute || route == "screen_recording" {
 			sourceType := "generated"
@@ -3181,6 +3188,10 @@ func shotUnitsFromToolValue(value interface{}) []videomodel.ShotUnit {
 			SequenceIndex:     i,
 			Title:             firstStringInMap(item, "title", "name"),
 			DurationSec:       intFromInterface(firstExistingValue(item, "durationSec", "duration", "seconds"), 0),
+			StartMs:           int64FromAny(firstExistingValue(item, "startMs"), 0),
+			EndMs:             int64FromAny(firstExistingValue(item, "endMs"), 0),
+			DurationMs:        int64FromAny(firstExistingValue(item, "durationMs"), 0),
+			TimelineRevision:  firstStringInMap(item, "timelineRevision"),
 			SceneSummary:      firstStringInMap(item, "sceneSummary", "visual", "description"),
 			SingleScene:       true,
 			VisualChangeLevel: videomodel.VisualChangeLow,
@@ -3600,7 +3611,7 @@ func enrichShotGenerationPlanInputs(values map[string]interface{}, plan *videomo
 	if parentShotID := firstNonEmptyString(values, "parentShotId"); parentShotID != "" {
 		plan.RenderInputs["parentShotId"] = parentShotID
 	}
-	for _, key := range []string{"referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
+	for _, key := range []string{"narrationText", "scriptText", "startMs", "endMs", "durationMs", "timelineRevision", "referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
 		if value, ok := values[key]; ok && value != nil {
 			plan.RenderInputs[key] = value
 		}
@@ -3617,6 +3628,10 @@ func shotUnitFromToolMap(values map[string]interface{}, fallbackIndex int) video
 		SequenceIndex:     fallbackIndex,
 		Title:             firstNonEmptyString(values, "title", "name"),
 		DurationSec:       normalizedDurationSec(firstValueInMap(values, "durationSec", "duration", "seconds")),
+		StartMs:           int64FromAny(firstExistingValue(values, "startMs"), 0),
+		EndMs:             int64FromAny(firstExistingValue(values, "endMs"), 0),
+		DurationMs:        int64FromAny(firstExistingValue(values, "durationMs"), 0),
+		TimelineRevision:  firstNonEmptyString(values, "timelineRevision"),
 		SceneSummary:      firstNonEmptyString(values, "sceneSummary", "visual", "description"),
 		SingleScene:       true,
 		VisualChangeLevel: videomodel.VisualChangeLow,
@@ -3723,21 +3738,26 @@ func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan vid
 	if timeWindowID != "" {
 		planMap["timeWindowId"] = timeWindowID
 	}
-	for _, key := range []string{"referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
+	for _, key := range []string{"narrationText", "scriptText", "startMs", "endMs", "durationMs", "timelineRevision", "referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
 		if value, ok := shotMap[key]; ok && value != nil {
 			planMap[key] = value
 		}
 	}
 	pkg := map[string]interface{}{
-		"shotId":         plan.ShotID,
-		"durationSec":    normalizedDurationSec(firstValueInMap(shotMap, "durationSec", "duration", "seconds")),
-		"visual":         firstNonEmptyString(shotMap, "visual", "visualIntent", "description", "sceneSummary"),
-		"generationPlan": planMap,
-		"visualLayers":   planMap["visualLayers"],
-		"requiredAssets": planMap["requiredAssets"],
-		"fusionPlan":     planMap["fusionPlan"],
-		"status":         videomodel.ReviewStatusPending,
-		"reviewStatus":   videomodel.ReviewStatusPending,
+		"shotId":           plan.ShotID,
+		"durationSec":      normalizedDurationSec(firstValueInMap(shotMap, "durationSec", "duration", "seconds")),
+		"startMs":          plan.StartMs,
+		"endMs":            plan.EndMs,
+		"durationMs":       plan.DurationMs,
+		"timelineRevision": plan.TimelineRevision,
+		"narrationText":    plan.NarrationText,
+		"visual":           firstNonEmptyString(shotMap, "visual", "visualIntent", "description", "sceneSummary"),
+		"generationPlan":   planMap,
+		"visualLayers":     planMap["visualLayers"],
+		"requiredAssets":   planMap["requiredAssets"],
+		"fusionPlan":       planMap["fusionPlan"],
+		"status":           videomodel.ReviewStatusPending,
+		"reviewStatus":     videomodel.ReviewStatusPending,
 	}
 	if len(refs) > 0 {
 		pkg["referenceImages"] = refs
@@ -3746,7 +3766,7 @@ func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan vid
 	if timeWindowID != "" {
 		pkg["timeWindowId"] = timeWindowID
 	}
-	for _, key := range []string{"referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
+	for _, key := range []string{"narrationText", "scriptText", "startMs", "endMs", "durationMs", "timelineRevision", "referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
 		if value, ok := shotMap[key]; ok && value != nil {
 			pkg[key] = value
 		}
@@ -4844,10 +4864,15 @@ func ensureVideoPromptShotAssetPackages(pkg map[string]interface{}) {
 		}
 		narration := firstStringInMap(prompt, "narrationText", "voiceoverText", "scriptText")
 		subtitle := firstStringInMap(prompt, "subtitleText", "narrationText")
+		startMs, endMs, durationMs, timelineRevision := canonicalShotTiming(prompt, duration)
 		packageItem := map[string]interface{}{
-			"shotId":          shotID,
-			"durationSec":     duration,
-			"referenceImages": references,
+			"shotId":           shotID,
+			"durationSec":      duration,
+			"startMs":          startMs,
+			"endMs":            endMs,
+			"durationMs":       durationMs,
+			"timelineRevision": timelineRevision,
+			"referenceImages":  references,
 			"prompts": map[string]interface{}{
 				"videoPrompt":    firstStringInMap(prompt, "prompt", "videoPrompt"),
 				"negativePrompt": firstStringInMap(prompt, "negativePrompt"),
@@ -4892,8 +4917,86 @@ func ensureVideoPromptShotAssetPackages(pkg map[string]interface{}) {
 	}
 }
 
+func canonicalShotTiming(values map[string]interface{}, durationSec int) (startMs, endMs, durationMs int64, timelineRevision string) {
+	startMs = int64FromAny(firstExistingValue(values, "startMs"), 0)
+	endMs = int64FromAny(firstExistingValue(values, "endMs"), 0)
+	durationMs = int64FromAny(firstExistingValue(values, "durationMs"), 0)
+	if durationMs <= 0 && endMs > startMs {
+		durationMs = endMs - startMs
+	}
+	if durationMs <= 0 && durationSec > 0 {
+		durationMs = int64(durationSec) * 1000
+	}
+	if endMs <= startMs && durationMs > 0 {
+		endMs = startMs + durationMs
+	}
+	timelineRevision = firstStringInMap(values, "timelineRevision")
+	return startMs, endMs, durationMs, timelineRevision
+}
+
+func canonicalVideoPromptShotItems(params map[string]interface{}) []map[string]interface{} {
+	canonical := normalizeShotItemsForAssetDecision(params["timeWindows"])
+	shotList := normalizeShotItemsForAssetDecision(params["shotList"])
+	if len(canonical) == 0 {
+		canonical = shotList
+	} else {
+		canonical = mergeShotCollections(canonical, shotList)
+	}
+	plans := normalizeShotItemsForAssetDecision(params["shotGenerationPlans"])
+	if len(canonical) == 0 {
+		canonical = plans
+	} else {
+		canonical = mergeShotCollections(canonical, plans)
+	}
+	return canonical
+}
+
+func mergeShotCollections(canonical, enrichments []map[string]interface{}) []map[string]interface{} {
+	result := make([]map[string]interface{}, 0, len(canonical))
+	byID := make(map[string]map[string]interface{}, len(enrichments))
+	for _, enrichment := range enrichments {
+		if shotID := firstStringInMap(enrichment, "shotId", "id", "cardId"); shotID != "" {
+			byID[shotID] = enrichment
+		}
+	}
+	for index, item := range canonical {
+		merged := copyStringMap(item)
+		shotID := firstStringInMap(item, "shotId", "id", "cardId")
+		enrichment := byID[shotID]
+		if enrichment == nil && index < len(enrichments) {
+			enrichment = enrichments[index]
+		}
+		mergeMissingShotFields(merged, enrichment)
+		result = append(result, merged)
+	}
+	return result
+}
+
+func mergeMissingShotFields(canonical, enrichment map[string]interface{}) {
+	if len(enrichment) == 0 {
+		return
+	}
+	hasNarration := firstStringInMap(canonical, "narrationText", "scriptText", "voiceoverText", "text") != ""
+	for key, value := range enrichment {
+		if value == nil {
+			continue
+		}
+		switch key {
+		case "shotId", "id", "cardId":
+			continue
+		case "narrationText", "scriptText", "voiceoverText", "text":
+			if hasNarration {
+				continue
+			}
+		}
+		if _, exists := canonical[key]; !exists {
+			canonical[key] = value
+		}
+	}
+}
+
 func buildDeterministicVideoPromptData(toolName, skillName, topic string, params map[string]interface{}) (map[string]interface{}, bool) {
-	shots := normalizeShotItemsForAssetDecision(params["shotList"])
+	shots := canonicalVideoPromptShotItems(params)
 	if len(shots) == 0 {
 		return nil, false
 	}
@@ -4914,6 +5017,7 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		}
 		unitShotID := sanitizeUnitPart(shotID)
 		duration := normalizedDurationSec(firstExistingValue(shot, "durationSec", "duration", "seconds"))
+		startMs, endMs, durationMs, timelineRevision := canonicalShotTiming(shot, duration)
 		narration := firstStringInMap(shot, "narrationText", "scriptText", "voiceover", "text", "claim", "mainAction", "sceneSummary")
 		if narration == "" {
 			narration = fmt.Sprintf("%s 的第 %d 个独立镜头口播。", compactTopicForPrompt(topic), i+1)
@@ -4957,6 +5061,11 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			ReferenceAssetIDs: referenceAssetIDs,
 			MaterialHints:     materialHints,
 		})
+		visualAnchor, anchorBeats := buildShotVisualAnchor(shotID, startMs, endMs, visual, composition, camera, lighting, references, actionBeats)
+		screenTexts := append(stringListFromInterface(shot["screenText"]), stringListFromInterface(shot["screenTexts"])...)
+		ipTimeline := buildCoordinatedIPArollTimeline(anchorBeats, visual, camera, lighting, composition)
+		hyperKeyframes := buildHyperKeyframesTimeline(anchorBeats, narration, screenTexts, buildTextSafeLayoutGuide(composition, shotSize))
+		aigcTimeline := buildAIGCTimeline(anchorBeats, visual, lighting)
 		layerPlan := buildShotLayerPlan(shotID, duration, visual, narration, camera, lighting, composition, shotSize, assetIntent, humorBeat, timeRelationship, tone, actionBeats, videoPrompt)
 		ipRequired := containsAny(productionRoute, "talking", "voice_visual", "口播")
 		ipExecutionPolicy := "auto"
@@ -4964,20 +5073,26 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			ipExecutionPolicy = "required"
 		}
 		ipArollPlan := map[string]interface{}{
-			"layerKey":        "ip_aroll",
-			"designed":        true,
-			"enabled":         true,
-			"required":        ipRequired,
-			"executionPolicy": ipExecutionPolicy,
-			"role":            "character_aroll_subject",
-			"description":     "使用正式 3D IP 角色拍摄为 2D A-roll，承载口播、口型、眼神、表情和角色连续性。",
-			"prompt":          fmt.Sprintf("树懒 IP 在正式演播室中完成 %s 的口播与表演：%s", shotID, narration),
-			"renderer":        "ip_avatar_3d",
-			"artifactKinds":   []string{"IP_AROLL_VIDEO", "AROLL_ASSET_PACKAGE"},
-			"safeArea":        "IP 主体不得遮挡字幕、标题和关键数据；为 AIGC 插入层与文字层保留构图安全区。",
-			"zIndex":          10,
-			"startSec":        0,
-			"durationSec":     duration,
+			"layerKey":         "ip_aroll",
+			"designed":         true,
+			"enabled":          true,
+			"required":         ipRequired,
+			"executionPolicy":  ipExecutionPolicy,
+			"role":             "character_aroll_subject",
+			"description":      "使用正式 3D IP 角色拍摄为 2D A-roll，承载口播、口型、眼神、表情和角色连续性。",
+			"prompt":           fmt.Sprintf("树懒 IP 在正式演播室中完成 %s 的口播与表演：%s", shotID, narration),
+			"renderer":         "ip_avatar_3d",
+			"artifactKinds":    []string{"IP_AROLL_VIDEO", "AROLL_ASSET_PACKAGE"},
+			"safeArea":         "IP 主体不得遮挡字幕、标题和关键数据；为 AIGC 插入层与文字层保留构图安全区。",
+			"zIndex":           10,
+			"startSec":         0,
+			"durationSec":      duration,
+			"startMs":          startMs,
+			"endMs":            endMs,
+			"durationMs":       durationMs,
+			"timelineRevision": timelineRevision,
+			"visualAnchorRef":  visualAnchor["anchorId"],
+			"timeline":         ipTimeline,
 		}
 		submitExternalRequest := aigcExecutionEnabled && shouldSubmitExternalVideoRequest(shot, visual, materialHints)
 		aigcExecutionPolicy := "optional"
@@ -4987,19 +5102,26 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			aigcExecutionPolicy = "generate"
 		}
 		aigcPlan := map[string]interface{}{
-			"layerKey":            "aigc_enrichment",
-			"designed":            true,
-			"enabled":             submitExternalRequest,
-			"required":            false,
-			"executionPolicy":     aigcExecutionPolicy,
-			"role":                "background_or_partial_video",
-			"description":         "生成无文字背景、B-roll 或局部动态素材，丰富信息密度和视觉节奏，不替代 IP 口播与精确文字层。",
-			"prompt":              layerPlan.AIGCPrompt,
-			"textSafeLayout":      layerPlan.TextSafeLayout,
-			"avoidGeneratedText":  true,
-			"requiresBlankArea":   true,
-			"canBeFullBackground": true,
-			"canBePartialInsert":  true,
+			"layerKey":              "aigc_enrichment",
+			"designed":              true,
+			"enabled":               submitExternalRequest,
+			"required":              false,
+			"executionPolicy":       aigcExecutionPolicy,
+			"role":                  "background_or_partial_video",
+			"description":           "生成无文字背景、B-roll 或局部动态素材，丰富信息密度和视觉节奏，不替代 IP 口播与精确文字层。",
+			"prompt":                layerPlan.AIGCPrompt,
+			"textSafeLayout":        layerPlan.TextSafeLayout,
+			"avoidGeneratedText":    true,
+			"requiresBlankArea":     true,
+			"canBeFullBackground":   true,
+			"canBePartialInsert":    true,
+			"startMs":               startMs,
+			"endMs":                 endMs,
+			"durationMs":            durationMs,
+			"timelineRevision":      timelineRevision,
+			"visualAnchorRef":       visualAnchor["anchorId"],
+			"primaryReferenceImage": visualAnchor["primaryReferenceImage"],
+			"timeline":              aigcTimeline,
 		}
 		hyperframesPlan := map[string]interface{}{
 			"layerKey":         "hyperframes_text",
@@ -5013,6 +5135,13 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"textRenderer":     "local_hyperframes",
 			"keyframeStrategy": "local_precise_layout",
 			"locks":            []string{"中文文字", "字幕", "标题", "流程标签", "UI 卡片"},
+			"startMs":          startMs,
+			"endMs":            endMs,
+			"durationMs":       durationMs,
+			"timelineRevision": timelineRevision,
+			"visualAnchorRef":  visualAnchor["anchorId"],
+			"timeline":         hyperKeyframes,
+			"hyperKeyframes":   hyperKeyframes,
 		}
 		ffmpegFusionPlan := map[string]interface{}{
 			"mode":               "three_layer_shot_composition",
@@ -5027,6 +5156,7 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"schemaVersion": "shot_visual_layers_v1",
 			"shotId":        shotID,
 			"description":   "同一 Shot 始终设计 IP A-roll、HyperFrames 文字/特效和 AIGC 丰富素材三层；执行策略决定当前是否生成可选层。",
+			"visualAnchor":  visualAnchor,
 			"ipAroll":       ipArollPlan,
 			"hyperframes":   hyperframesPlan,
 			"aigc":          aigcPlan,
@@ -5043,6 +5173,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		shotGuide := map[string]interface{}{
 			"shotId":               shotID,
 			"durationSec":          duration,
+			"startMs":              startMs,
+			"endMs":                endMs,
+			"durationMs":           durationMs,
+			"timelineRevision":     timelineRevision,
 			"narration":            narration,
 			"visualChange":         fallbackText(visual, "根据口播内容设计本 shot 的画面变化。"),
 			"productionRoute":      routeLabel,
@@ -5064,12 +5198,17 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"sourceScriptSegment":  narration,
 			"sourceScriptLabel":    "来自口播：" + narration,
 			"visualLayers":         visualLayers,
+			"visualAnchor":         visualAnchor,
 		}
 		shotGuides = append(shotGuides, shotGuide)
 
 		videoPrompts = append(videoPrompts, map[string]interface{}{
 			"shotId":               shotID,
 			"durationSec":          duration,
+			"startMs":              startMs,
+			"endMs":                endMs,
+			"durationMs":           durationMs,
+			"timelineRevision":     timelineRevision,
 			"narrationText":        narration,
 			"visualText":           fallbackText(visual, "根据口播内容设计本 shot 的画面变化。"),
 			"prompt":               videoPrompt,
@@ -5082,6 +5221,7 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"hyperframesPlan":      hyperframesPlan,
 			"ffmpegFusionPlan":     ffmpegFusionPlan,
 			"visualLayers":         visualLayers,
+			"visualAnchor":         visualAnchor,
 			"negativePrompt":       negativePrompt,
 			"continuity":           "仅共享主要角色、主要道具、主场景和全片风格；不得依赖其他 shot 的画面。",
 			"materialLibraryHints": materialHints,
@@ -5110,6 +5250,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 				"kind":                "video",
 				"shotId":              shotID,
 				"narrationText":       narration,
+				"startMs":             startMs,
+				"endMs":               endMs,
+				"durationMs":          durationMs,
+				"timelineRevision":    timelineRevision,
 				"visualText":          fallbackText(visual, "根据口播内容设计本 shot 的画面变化。"),
 				"prompt":              layerPlan.AIGCPrompt,
 				"promptText":          layerPlan.AIGCPrompt,
@@ -5121,6 +5265,7 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 				"hyperframesPlan":     hyperframesPlan,
 				"ffmpegFusionPlan":    ffmpegFusionPlan,
 				"visualLayers":        visualLayers,
+				"visualAnchor":        visualAnchor,
 				"textSafeLayout":      layerPlan.TextSafeLayout,
 				"negativePrompt":      negativePrompt,
 				"references":          references,
@@ -5139,6 +5284,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		packages = append(packages, map[string]interface{}{
 			"shotId":            shotID,
 			"durationSec":       duration,
+			"startMs":           startMs,
+			"endMs":             endMs,
+			"durationMs":        durationMs,
+			"timelineRevision":  timelineRevision,
 			"referenceImages":   references,
 			"assetRoute":        assetRoute,
 			"productionRoute":   routeLabel,
@@ -5161,6 +5310,7 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"hyperframesPlan":   hyperframesPlan,
 			"ffmpegFusionPlan":  ffmpegFusionPlan,
 			"visualLayers":      visualLayers,
+			"visualAnchor":      visualAnchor,
 			"textSafeLayout":    layerPlan.TextSafeLayout,
 			"prompts": map[string]interface{}{
 				"videoPrompt":       videoPrompt,
@@ -5299,6 +5449,186 @@ type shotLayerPlan struct {
 	TextSafeLayout    string
 }
 
+func buildShotVisualAnchor(shotID string, startMs, endMs int64, visual, composition, camera, lighting string, references []interface{}, actionBeats []string) (map[string]interface{}, []interface{}) {
+	durationMs := endMs - startMs
+	if durationMs <= 0 {
+		durationMs = 6_000
+		endMs = startMs + durationMs
+	}
+	openingEnd := durationMs / 4
+	if openingEnd < 600 {
+		openingEnd = 600
+	}
+	settleStart := durationMs - 500
+	if settleStart <= openingEnd {
+		settleStart = openingEnd + (durationMs-openingEnd)/2
+	}
+	if settleStart >= durationMs {
+		settleStart = durationMs - 1
+	}
+	changes := compactStrings(actionBeats)
+	for len(changes) < 3 {
+		fallbacks := []string{
+			"建立主体、环境与观众的关系",
+			fallbackText(visual, "主体动作与环境反馈共同推进信息"),
+			"动作和视线稳定收束，为下一镜保留自然停顿",
+		}
+		changes = append(changes, fallbacks[len(changes)])
+	}
+	beatDefs := []struct {
+		id, phase string
+		from, to  int64
+		change    string
+		lead      string
+	}{
+		{"opening", "开场", 0, openingEnd, changes[0], "ip_aroll"},
+		{"development", "发展", openingEnd, settleStart, changes[1], "ip_aroll+hyperframes_text+aigc_enrichment"},
+		{"settle", "收束", settleStart, durationMs, changes[2], "ip_aroll+hyperframes_text"},
+	}
+	beats := make([]interface{}, 0, len(beatDefs))
+	for _, beat := range beatDefs {
+		beats = append(beats, map[string]interface{}{
+			"beatId":          shotID + "_" + beat.id,
+			"phase":           beat.phase,
+			"relativeStartMs": beat.from,
+			"relativeEndMs":   beat.to,
+			"startMs":         startMs + beat.from,
+			"endMs":           startMs + beat.to,
+			"visualChange":    beat.change,
+			"visualLead":      beat.lead,
+		})
+	}
+	thesis := trimSentencePunctuation(cleanDreaminaVibeText(visual))
+	if thesis == "" {
+		thesis = "让主体、信息和环境变化共同表达这一镜的核心语义"
+	}
+	anchor := map[string]interface{}{
+		"anchorId":              shotID + "_visual_anchor",
+		"shotId":                shotID,
+		"thesis":                thesis,
+		"baseComposition":       fallbackText(trimSentencePunctuation(composition), "主体正对镜头，保留清楚的信息安全区"),
+		"cameraIntent":          fallbackText(trimSentencePunctuation(camera), "稳定中景建立关系，变化克制"),
+		"lightingIntent":        fallbackText(trimSentencePunctuation(lighting), "柔和主光塑形，轮廓光分离主体与背景"),
+		"primaryReferenceImage": primaryShotReference(shotID, references),
+		"timelineBeats":         beats,
+	}
+	return anchor, beats
+}
+
+func primaryShotReference(shotID string, references []interface{}) map[string]interface{} {
+	for _, reference := range references {
+		if values, ok := mapValue(reference); ok {
+			result := copyStringMap(values)
+			if firstStringInMap(result, "id") == "" {
+				result["id"] = "keyframe_" + shotID
+			}
+			if firstStringInMap(result, "label") == "" {
+				result["label"] = "Shot 主参考图"
+			}
+			if firstStringInMap(result, "role") == "" {
+				result["role"] = "keyframe"
+			}
+			return result
+		}
+		if storageRef := strings.TrimSpace(ensureStringValue(reference)); storageRef != "" {
+			return map[string]interface{}{"id": "keyframe_" + shotID, "label": "Shot 主参考图", "role": "keyframe", "storageRef": storageRef}
+		}
+	}
+	return map[string]interface{}{
+		"id":         "keyframe_" + shotID,
+		"label":      "Shot 主参考图",
+		"role":       "keyframe",
+		"storageRef": "planned://" + shotID + "/primary-reference",
+		"status":     "planned",
+	}
+}
+
+func buildCoordinatedIPArollTimeline(anchorBeats []interface{}, visual, camera, lighting, composition string) []interface{} {
+	result := make([]interface{}, 0, len(anchorBeats))
+	for index, item := range anchorBeats {
+		beat, _ := mapValue(item)
+		expression := []string{"自然专注，抬眼建立交流", "有神地跟随语义变化，表情和手势同步", "轻微微笑，眼神稳定停在镜头"}[minInt(index, 2)]
+		result = append(result, map[string]interface{}{
+			"beatId":           beat["beatId"],
+			"phase":            beat["phase"],
+			"startMs":          beat["startMs"],
+			"endMs":            beat["endMs"],
+			"subjectPlacement": fallbackText(trimSentencePunctuation(composition), "树懒位于画面中央略偏三分线，始终正对镜头"),
+			"framing":          fallbackText(trimSentencePunctuation(camera), "65mm 中景到中近景"),
+			"eyeLine":          "眼睛正对镜头并保持真实交流感",
+			"expression":       expression,
+			"action":           fallbackText(firstStringInMap(beat, "visualChange"), fallbackText(visual, "围绕口播做克制表演")),
+			"camera":           fallbackText(trimSentencePunctuation(camera), "镜头稳定并做不超过 8% 的缓慢推进"),
+			"lighting":         fallbackText(trimSentencePunctuation(lighting), "柔和主光塑形，暖色轮廓光保持角色与背景分离"),
+		})
+	}
+	return result
+}
+
+func buildHyperKeyframesTimeline(anchorBeats []interface{}, narration string, screenTexts []string, safeLayout string) []interface{} {
+	title := ""
+	for _, text := range compactStrings(screenTexts) {
+		title = text
+		break
+	}
+	if title == "" {
+		title = visualTitleFromNarration(narration, 0)
+	}
+	result := make([]interface{}, 0, len(anchorBeats))
+	for index, item := range anchorBeats {
+		beat, _ := mapValue(item)
+		exactText := title
+		role := "标题"
+		position := "右侧标题安全区"
+		style := "高对比、简洁、商业知识分享风格；使用品牌字体与暖金强调色"
+		animation := "淡入并轻微上移，随后稳定保持"
+		if index == 1 {
+			exactText = trimSentencePunctuation(narration)
+			role = "逐句字幕"
+			position = "底部字幕安全区"
+			style = "高可读字幕，关键词使用暖金强调，背景只加轻量半透明衬底"
+			animation = "按语义短句依次出现，关键词在对应口播点轻微放大"
+		} else if index == 2 {
+			role = "结论标签"
+			position = "主体旁侧信息区"
+			animation = "保持标题并收束装饰元素，不遮挡角色眼睛、嘴部和手势"
+		}
+		result = append(result, map[string]interface{}{
+			"beatId":              beat["beatId"],
+			"phase":               beat["phase"],
+			"startMs":             beat["startMs"],
+			"endMs":               beat["endMs"],
+			"role":                role,
+			"exactText":           exactText,
+			"style":               style,
+			"position":            position + "；" + safeLayout,
+			"animation":           animation,
+			"followsVisualChange": beat["visualChange"],
+		})
+	}
+	return result
+}
+
+func buildAIGCTimeline(anchorBeats []interface{}, visual, lighting string) []interface{} {
+	result := make([]interface{}, 0, len(anchorBeats))
+	for index, item := range anchorBeats {
+		beat, _ := mapValue(item)
+		moods := []string{"带着好奇和期待进入画面", "让环境反馈逐渐增强，形成流动和发现感", "空间安静下来，留下温暖、可信的余韵"}
+		result = append(result, map[string]interface{}{
+			"beatId":          beat["beatId"],
+			"phase":           beat["phase"],
+			"startMs":         beat["startMs"],
+			"endMs":           beat["endMs"],
+			"visualChange":    beat["visualChange"],
+			"environment":     fallbackText(trimSentencePunctuation(visual), "环境随主体语义产生清楚而自然的反馈"),
+			"feeling":         moods[minInt(index, 2)],
+			"lighting":        fallbackText(trimSentencePunctuation(lighting), "冷暖光线形成柔和层次并随情绪轻微变化"),
+			"creativeFreedom": "允许模型自由组织非关键道具、材质细节和自然运动，只锁定主体身份、主参考图、时间节奏与文字留白",
+		})
+	}
+	return result
+}
+
 func buildShotLayerPlan(shotID string, duration int, visual, narration, camera, lighting, composition, shotSize, assetIntent, humorBeat, timeRelationship, tone string, actionBeats []string, overallPrompt string) shotLayerPlan {
 	if duration <= 0 {
 		duration = 6
@@ -5328,14 +5658,30 @@ func buildShotLayerPlan(shotID string, duration int, visual, narration, camera, 
 	timeCue := trimSentencePunctuation(cleanDreaminaVibeText(timeRelationship))
 	toneCue := trimSentencePunctuation(cleanDreaminaVibeText(tone))
 
+	beatActions := compactStrings(actionBeats)
+	for len(beatActions) < 3 {
+		fallbacks := []string{
+			"先让主体和环境建立清楚关系",
+			fallbackText(visualIntent, "主体动作带动环境产生自然反馈"),
+			"动作、光线和空间共同平静收束",
+		}
+		beatActions = append(beatActions, fallbacks[len(beatActions)])
+	}
+	openingEnd := math.Max(0.6, float64(duration)*0.25)
+	settleStart := math.Max(openingEnd+0.2, float64(duration)-0.5)
+	if settleStart > float64(duration) {
+		settleStart = float64(duration)
+	}
 	aigcLines := []string{
-		fmt.Sprintf("AIGC 视频层：为 %s 生成 %d 秒 16:9 背景或局部动态视频素材。", shotID, duration),
-		"动态内容：" + buildAIGCVisualDirective(visualIntent, actionText) + "。",
-		"动作节奏：" + actionText + "。",
-		"镜头和氛围：" + cameraHint + "。",
-		"构图留白：" + textSafeLayout + "。",
-		"生成边界：AIGC 只负责背景、人物/道具运动、氛围和镜头变化；不要生成文字、字幕、Logo、水印、UI 文案或可读汉字，避免乱码和错字。",
-		"交付形态：可以是完整背景视频，也可以是局部视频素材；文字区保持纯色、弱纹理或干净空间，方便后续叠加 HyperFrames 文字层。",
+		fmt.Sprintf("AIGC 视频层创意方向：%s，共 %d 秒。", shotID, duration),
+		"核心感受：让观众感到画面正在自然理解口播，而不是堆叠素材；整体保留呼吸感、亲和力和商业动画的精致秩序。",
+		"环境与光：" + fallbackText(visualIntent, "环境围绕主体语义产生细腻反馈") + "；" + cameraHint + "，让材质、空气和冷暖光线共同传递情绪。",
+		fmt.Sprintf("开场 0-%.1f 秒：%s。先用一个清楚而有吸引力的状态建立主体、空间和观看关系。", openingEnd, beatActions[0]),
+		fmt.Sprintf("发展 %.1f-%.1f 秒：%s。让环境、道具和光影顺着主体动作产生连续反馈，允许模型自由补充自然细节与审美节奏。", openingEnd, settleStart, beatActions[1]),
+		fmt.Sprintf("收束 %.1f-%d 秒：%s。把视觉注意力重新交还主体，留下稳定、温暖、可信的余韵。", settleStart, duration, beatActions[2]),
+		"文字留白：" + textSafeLayout + "；所有精确标题、字幕和图形由 HyperFrames 完成。",
+		"创作自由：可以自由组织非关键道具、材质纹理、微小环境运动和镜头气息，只需尊重主参考图、主体身份、三段时间节奏与核心感受。",
+		"边界：不要生成文字、字幕、Logo、水印、UI 文案或可读汉字，避免乱码和错字；补充画面不得抢走 IP A-roll 的表演重心。",
 	}
 	if directorGoal != "" {
 		aigcLines = append(aigcLines, "导演目标："+directorGoal+"。")
@@ -5349,8 +5695,8 @@ func buildShotLayerPlan(shotID string, duration int, visual, narration, camera, 
 	if toneCue != "" {
 		aigcLines = append(aigcLines, "情绪边界："+toneCue+"。")
 	}
-	if overall := trimSentencePunctuation(cleanDreaminaVibeText(overallPrompt)); overall != "" {
-		aigcLines = append(aigcLines, "整体风格参考："+limitPromptRunes(overall, 900)+"。")
+	if sceneInspiration := trimSentencePunctuation(cleanDreaminaVibeText(overallPrompt)); sceneInspiration != "" {
+		aigcLines = append(aigcLines, "文学化场景灵感："+limitPromptRunes(sceneInspiration, 900)+"。")
 	}
 
 	hyperframesLines := []string{
@@ -10849,17 +11195,18 @@ style=%s
 硬性要求：
 1. 不论 AIGC 还是 HyperFrames，视频创作都必须先分 shot；每个 shot 都是最小生产、审核和返工单元。
 2. 每个 shot 时长 3-15 秒，只表达一个主要画面变化，必须覆盖完整口播稿，不要遗漏。
-3. 每个 shot 必须包含：shotId、durationSec、scriptText、narrationText、visual、camera、composition、lighting、transitionIn、transitionOut。
-4. 每个 shot 必须包含 materialLibraryHints，说明可检索或复用的素材库方向、镜头语法、构图或运动参考。
-5. 每个 shot 必须包含 referenceRequirements，列出当前 shot 需要引用的全局一致性资产包条目；主要人物、场景、核心道具必须来自已确认的 front/side/back 多视角参考图，不得临时发散。
-6. 每个 shot 必须包含 expectedArtifacts，明确该 shot 后续会生成或上传的 voiceover/audio、keyframe、image、videoClip、subtitle、hyperframesSegment、reviewPacket。
-7. 每个 shot 必须包含 reviewPacket，用于前端按 shot 审核，字段至少包括 artifactKind="SHOT_REVIEW_PACKET"、reviewFocus、rerunScope、dependencies。
-8. AIGC shot 的 reviewFocus 必须覆盖参考图一致性、提示词、音频口播、关键帧、视频片段、字幕；HyperFrames shot 的 reviewFocus 必须覆盖画面和口播一致性、文字层可读性、时间轴节奏。
-9. 每个 shot 的素材包必须完全独立，不得要求读取上一个或下一个 shot；唯一允许共用的是为了一致性锁定的主要角色、主要道具、主场景和全片风格。
-10. transitionOut 必须描述覆盖在本 shot 结尾 0.3-0.8 秒内的收束或转场，方便 ffmpeg 直接按 shot 顺序拼接。
-11. 输出 shotQueue，表达线性执行状态和当前建议先审核的 shot；不要在用户审核内容里一次性暴露所有 shot 的素材包、prompt 和拼接细节。
-12. 视觉风格默认 16:9，非写实动画，去 AI 感。
-13. 输出严格 JSON。
+3. 必须先确定每个 shot 的 startMs、endMs、durationMs 和 timelineRevision，再从该时间窗切出唯一的 scriptText/narrationText；所有 shot 的 narrationText 按顺序拼接后必须等于完整口播稿，禁止把整篇口播复制给每个 shot。
+4. 每个 shot 必须包含：shotId、durationSec、startMs、endMs、durationMs、timelineRevision、scriptText、narrationText、visual、camera、composition、lighting、transitionIn、transitionOut。
+5. 每个 shot 必须包含 materialLibraryHints，说明可检索或复用的素材库方向、镜头语法、构图或运动参考。
+6. 每个 shot 必须包含 referenceRequirements，列出当前 shot 需要引用的全局一致性资产包条目；主要人物、场景、核心道具必须来自已确认的 front/side/back 多视角参考图，不得临时发散。
+7. 每个 shot 必须包含 expectedArtifacts，明确该 shot 后续会生成或上传的 voiceover/audio、keyframe、image、videoClip、subtitle、hyperframesSegment、reviewPacket。
+8. 每个 shot 必须包含 reviewPacket，用于前端按 shot 审核，字段至少包括 artifactKind="SHOT_REVIEW_PACKET"、reviewFocus、rerunScope、dependencies。
+9. AIGC shot 的 reviewFocus 必须覆盖参考图一致性、提示词、音频口播、关键帧、视频片段、字幕；HyperFrames shot 的 reviewFocus 必须覆盖画面和口播一致性、文字层可读性、时间轴节奏。
+10. 每个 shot 的素材包必须完全独立，不得要求读取上一个或下一个 shot；唯一允许共用的是为了一致性锁定的主要角色、主要道具、主场景和全片风格。
+11. transitionOut 必须描述覆盖在本 shot 结尾 0.3-0.8 秒内的收束或转场，方便 ffmpeg 直接按 shot 顺序拼接。
+12. 输出 shotQueue，表达线性执行状态和当前建议先审核的 shot；不要在用户审核内容里一次性暴露所有 shot 的素材包、prompt 和拼接细节。
+13. 视觉风格默认 16:9，非写实动画，去 AI 感。
+14. 输出严格 JSON。
 
 输入：
 script=<script>
@@ -10878,6 +11225,10 @@ aspectRatio=<aspectRatio>
     {
       "shotId": "SHOT_01",
       "durationSec": 6,
+      "startMs": 0,
+      "endMs": 6000,
+      "durationMs": 6000,
+      "timelineRevision": "audio-master-revision",
       "scriptText": "...",
       "narrationText": "...",
       "visual": "...",
@@ -11051,7 +11402,10 @@ style=<style>
 13. 输出 shotAssetPackages。每个 package 必须完全独立包含 referenceImages、prompts、voiceover、aigcVideo、subtitle、concatPlan；只允许通过 allowedSharedConsistency 共用主要角色、主要道具、主场景和全片风格。
 14. 禁止真人写实，默认非写实动画，去 AI 感。
 15. artifacts[] 必须为每个 externalGenerationRequest 建一个 JSON artifact，metadata.artifactType 固定为 external_generation_request，并为每个 shot 建 SHOT_ASSET_PACKAGE、SHOT_VIDEO_CLIP、SHOT_AUDIO、SHOT_SUBTITLE 的占位 artifact metadata。
-16. 输出严格 JSON。
+16. 每个 shot 必须建立一个 visualAnchor，包含 visual thesis、baseComposition、primaryReferenceImage 和按时间变化的 timelineBeats。IP A-roll、HyperFrames 和 AIGC 三层必须引用同一个 visualAnchor。
+17. IP A-roll 必须逐时间段说明主体位置、景别、眼神、表情、动作、镜头与灯光变化；HyperFrames 必须输出 exactText、样式、位置、开始结束时间和 hyperKeyframes；AIGC 必须绑定 primaryReferenceImage 并描述随时间变化的画面。
+18. AIGC prompt 使用文学化 Vibe 描述，重点写感受、环境、光线、动作和空间变化，允许模型自由发挥非关键细节；分辨率、fps、像素格式、编码与合成命令不得写进创意 prompt。
+19. 输出严格 JSON。
 
 输入：
 shotList=<shotList>
@@ -11065,7 +11419,25 @@ modelHint=<modelHint>
     {
       "shotId": "SHOT_01",
       "durationSec": 6,
+      "startMs": 0,
+      "endMs": 6000,
+      "durationMs": 6000,
+      "timelineRevision": "audio-master-revision",
       "narrationText": "...",
+      "visualAnchor": {
+        "anchorId": "SHOT_01_visual_anchor",
+        "thesis": "这一镜唯一的画面表达",
+        "baseComposition": "主体与信息层的基础构图",
+        "primaryReferenceImage": {"id": "keyframe_SHOT_01", "role": "keyframe", "storageRef": "local://..."},
+        "timelineBeats": [
+          {"phase": "开场", "startMs": 0, "endMs": 1500, "visualChange": "..."},
+          {"phase": "发展", "startMs": 1500, "endMs": 5500, "visualChange": "..."},
+          {"phase": "收束", "startMs": 5500, "endMs": 6000, "visualChange": "..."}
+        ]
+      },
+      "ipArollPlan": {"visualAnchorRef": "SHOT_01_visual_anchor", "timeline": []},
+      "hyperframesPlan": {"visualAnchorRef": "SHOT_01_visual_anchor", "hyperKeyframes": []},
+      "aigcPlan": {"visualAnchorRef": "SHOT_01_visual_anchor", "primaryReferenceImage": {}, "timeline": [], "prompt": "文学化分时 Vibe Prompt"},
       "prompt": "...",
       "negativePrompt": "...",
       "continuity": "...",

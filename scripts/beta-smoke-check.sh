@@ -66,6 +66,10 @@ check_release_env() {
   fi
   local required=(
     AUTH_TOKEN_SECRET
+    OBSERVABILITY_SEALING_KEY
+    OBSERVABILITY_SEALING_DOMAIN
+    OBSERVABILITY_SOURCE_ENVIRONMENT
+    OBSERVABILITY_SOURCE_MIGRATION_APPROVED
     POSTGRES_PASSWORD
     MINIO_SECRET_KEY
     CORS_ALLOWED_ORIGINS
@@ -86,6 +90,22 @@ check_release_env() {
   if [[ "${SANDBOX_FALLBACK:-false}" == "true" ]]; then
     fail "SANDBOX_FALLBACK must be false in release/production mode"
   fi
+  case "${OBSERVABILITY_SOURCE_MIGRATION_APPROVED:-}" in
+    none)
+      if [[ -n "${OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS:-}" ]]; then
+        fail "observability source migration marker none requires an empty previous source"
+      fi
+      ;;
+    development-\>production)
+      if [[ "${OBSERVABILITY_SOURCE_ENVIRONMENT:-}" != "production" ||
+            "${OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS:-}" != "development" ]]; then
+        fail "observability source migration approved marker requires previous source development and current source production"
+      fi
+      ;;
+    *)
+      fail "observability source migration approval marker is invalid"
+      ;;
+  esac
 }
 
 info "Tangying AIOS closed beta smoke check"

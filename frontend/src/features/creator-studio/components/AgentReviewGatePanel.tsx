@@ -1,7 +1,17 @@
-import { useState } from 'react'
-import { approveAgentReview } from '../../../services/api'
+import { useEffect, useState } from 'react'
+import { approveAgentReview, regenerateAgentStage } from '../../../services/api'
 import type { AgentReviewItem } from '../../../utils/types'
-import { creatorStepForAgentReview, creatorStepLabel } from '../logic'
+import {
+  creatorAgentReviewApprovalBlocked,
+  creatorAgentReviewCanRegenerate,
+  creatorAgentReviewContent,
+  creatorAgentReviewRegenerationHint,
+  creatorStepForAgentReview,
+  creatorStepLabel,
+} from '../logic'
+import { parseArtifactJson, safeCreatorReviewText } from '../artifactPresentation'
+import JsonArtifactViewer from './JsonArtifactViewer'
+import MarkdownArtifactViewer from './MarkdownArtifactViewer'
 
 interface AgentReviewGatePanelProps {
   runId: string
@@ -12,8 +22,25 @@ interface AgentReviewGatePanelProps {
 export default function AgentReviewGatePanel({ runId, review, onApproved }: AgentReviewGatePanelProps) {
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
+  const [regenerationHint, setRegenerationHint] = useState(() => creatorAgentReviewRegenerationHint(review))
   const stepId = creatorStepForAgentReview(review)
-  const content = review.reviewContent?.trim() || reviewOutputText(review.reviewOutput)
+  const content = creatorAgentReviewContent(review)
+  const canRegenerate = creatorAgentReviewCanRegenerate(review)
+  const approvalBlocked = creatorAgentReviewApprovalBlocked(review)
+  const qualityReview = review.reviewPhase === 'quality_gate'
+  const parsedContent = parseArtifactJson(content)
+  const structuredContent = review.reviewOutput && Object.keys(review.reviewOutput).length > 0
+    ? review.reviewOutput
+    : parsedContent.ok && parsedContent.value && typeof parsedContent.value === 'object'
+      ? parsedContent.value
+      : undefined
+  const readableContent = safeCreatorReviewText(content)
+  const jsonReviewContent = structuredContent ?? (readableContent === undefined && content ? content : undefined)
+
+  useEffect(() => {
+    setRegenerationHint(creatorAgentReviewRegenerationHint(review))
+    setError('')
+  }, [review])
 
   const approve = async () => {
     if (working) return
@@ -29,6 +56,20 @@ export default function AgentReviewGatePanel({ runId, review, onApproved }: Agen
     }
   }
 
+  const regenerate = async () => {
+    if (working || !canRegenerate) return
+    setWorking(true)
+    setError('')
+    try {
+      await regenerateAgentStage(runId, review.id, regenerationHint.trim() || undefined)
+      await onApproved()
+    } catch {
+      setError('暂时无法重新生成，请稍后重试。')
+    } finally {
+      setWorking(false)
+    }
+  }
+
   return (
     <section className="artifact-review-panel creator-agent-review" aria-labelledby="creator-agent-review-title">
       <div className="artifact-review-heading">
@@ -38,25 +79,30 @@ export default function AgentReviewGatePanel({ runId, review, onApproved }: Agen
         </div>
         <span className="artifact-state is-needs_review">待审核</span>
       </div>
-      <p className="artifact-selection-help">确认当前结果后，系统会继续执行下一步。</p>
-      {content && <pre className="creator-agent-review-content">{content}</pre>}
+      <p className="creator-review-guidance">{review.reviewReason || '确认当前结果后，系统会继续执行下一步。'}</p>
+      {qualityReview && readableContent
+        ? <div className="creator-quality-summary"><p>{readableContent}</p></div>
+        : jsonReviewContent !== undefined
+          ? <JsonArtifactViewer content={jsonReviewContent} />
+          : readableContent && <MarkdownArtifactViewer content={readableContent} />}
+      {canRegenerate && <label className="artifact-editor-label">修改要求
+        <textarea
+          value={regenerationHint}
+          onChange={event => setRegenerationHint(event.target.value)}
+          placeholder="例如：把口播扩充到 55 秒，并保留开场钩子"
+          disabled={working}
+        />
+      </label>}
+      {approvalBlocked && <p className="creator-form-error" role="alert">质量未通过时不要直接放行，请先按建议重新生成。</p>}
       <div className="artifact-actions">
-        <button type="button" className="creator-primary-button" disabled={working} onClick={() => void approve()}>
+        {canRegenerate && <button type="button" className="creator-secondary-button" disabled={working} onClick={() => void regenerate()}>
+          {working ? '正在处理…' : '按要求重新生成'}
+        </button>}
+        <button type="button" className="creator-primary-button" disabled={working || approvalBlocked} onClick={() => void approve()}>
           {working ? '正在继续…' : '审核并继续'}
         </button>
       </div>
       {error && <p className="creator-form-error" role="alert">{error}</p>}
     </section>
   )
-}
-
-function reviewOutputText(output: Record<string, unknown> | undefined): string {
-  if (!output || Object.keys(output).length === 0) return ''
-  const preferred = output.script ?? output.summary ?? output.content ?? output.result
-  if (typeof preferred === 'string') return preferred
-  try {
-    return JSON.stringify(output, null, 2)
-  } catch {
-    return ''
-  }
 }

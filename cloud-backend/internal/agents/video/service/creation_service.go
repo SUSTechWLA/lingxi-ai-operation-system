@@ -303,7 +303,6 @@ func (s *CreationService) GenerateShots(ctx context.Context, userID, projectID s
 			SceneSummary:      "单一主场景内的信息表达",
 			SingleScene:       true,
 			VisualChangeLevel: model.VisualChangeLow,
-			Narration:         spec.Topic,
 			MainAction:        "围绕主题做连续口播或视觉解释",
 			Camera:            "稳定镜头，低变化",
 			TransitionIn:      "承接上一镜信息",

@@ -97,8 +97,13 @@ type CreateArtifactRequest struct {
 	Model         string
 	Metadata      map[string]interface{}
 	// ForceNewVersion creates a version even when an identical content hash
-	// already exists. It is reserved for explicit history restores.
+	// already exists. It is reserved for explicit revision/history mutations.
 	ForceNewVersion bool
+	// ExpectedParentID and ExpectedParentVersion opt into compare-and-swap
+	// creation. The service builds the candidate from this authorized lineage,
+	// and Repository.Save verifies it against the locked current row.
+	ExpectedParentID      string
+	ExpectedParentVersion int
 	// RestoredFromID records the historical artifact selected for an explicit
 	// restore. It is copied to immutable provenance metadata on creation.
 	RestoredFromID string

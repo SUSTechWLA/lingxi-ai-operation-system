@@ -11,6 +11,11 @@ const apiResponseOutfile = join(tempDir, 'apiResponse.mjs')
 const layerSelectorsOutfile = join(tempDir, 'talkingHeadLayerSelectors.mjs')
 const creatorRoutesOutfile = join(tempDir, 'creatorRoutes.mjs')
 const focusCycleOutfile = join(tempDir, 'focusCycle.mjs')
+const developerDiagnosticsOutfile = join(tempDir, 'developerDiagnostics.mjs')
+const toolCallInspectorOutfile = join(tempDir, 'toolCallInspector.mjs')
+const artifactRegistryOutfile = join(tempDir, 'artifactRegistry.cjs')
+const gateInspectorOutfile = join(tempDir, 'gateInspector.mjs')
+const recoveryPanelOutfile = join(tempDir, 'recoveryPanel.cjs')
 
 try {
   await build({
@@ -51,6 +56,48 @@ try {
     bundle: true,
     format: 'esm',
     platform: 'node',
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/features/developer-console/developerDiagnostics.ts', import.meta.url).pathname],
+    outfile: developerDiagnosticsOutfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/features/developer-console/components/ToolCallInspector.tsx', import.meta.url).pathname],
+    outfile: toolCallInspectorOutfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/features/developer-console/components/ArtifactRegistry.tsx', import.meta.url).pathname],
+    outfile: artifactRegistryOutfile,
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    define: { 'import.meta.env': '{}' },
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/features/developer-console/components/GateInspector.tsx', import.meta.url).pathname],
+    outfile: gateInspectorOutfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/features/developer-console/components/RecoveryPanel.tsx', import.meta.url).pathname],
+    outfile: recoveryPanelOutfile,
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    define: { 'import.meta.env': '{}' },
     logLevel: 'silent',
   })
 
@@ -111,17 +158,52 @@ try {
   const { buildTalkingHeadLayerDisplays } = await import(pathToFileURL(layerSelectorsOutfile))
   const { parseAppRoute, replaceHashRoute } = await import(pathToFileURL(creatorRoutesOutfile))
   const { cycleFocusIndex } = await import(pathToFileURL(focusCycleOutfile))
+  const {
+    buildDiagnosticsNodes,
+    classifyDiagnosticTransport,
+    diagnosticDurationMs,
+    isTerminalAgentRunStatus,
+    loadProjectDiagnostics,
+    diagnosticsSnapshotForScope,
+    redactDiagnosticValue,
+    selectDiagnosticsProject,
+    serializeRedactedDiagnosticValue,
+  } = await import(pathToFileURL(developerDiagnosticsOutfile))
+  const {
+    buildToolCallGroups,
+    filterToolCalls,
+    toolCallCopyText,
+  } = await import(pathToFileURL(toolCallInspectorOutfile))
+  const {
+    buildArtifactLineage,
+    filterArtifactRegistryRows,
+  } = await import(pathToFileURL(artifactRegistryOutfile))
+  const { buildGateInspectionItems } = await import(pathToFileURL(gateInspectorOutfile))
+  const {
+    buildDiagnosticPackage,
+    selectLatestFailedNode,
+    serializeDiagnosticPackage,
+  } = await import(pathToFileURL(recoveryPanelOutfile))
+  const diagnosticsApiSource = await readFile(new URL('../src/services/api.ts', import.meta.url), 'utf8')
   const directorPageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
   const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
   const creatorShellSource = await readFile(new URL('../src/features/creator-studio/CreatorShell.tsx', import.meta.url), 'utf8')
   const developerConsoleSource = await readFile(new URL('../src/features/developer-console/DeveloperConsolePage.tsx', import.meta.url), 'utf8')
+  const developerDiagnosticsSource = await readFile(new URL('../src/features/developer-console/developerDiagnostics.ts', import.meta.url), 'utf8')
+  const diagnosticsSummarySource = await readFile(new URL('../src/features/developer-console/components/DiagnosticsSummary.tsx', import.meta.url), 'utf8')
+  const diagnosticsTimelineSource = await readFile(new URL('../src/features/developer-console/components/DiagnosticsTimeline.tsx', import.meta.url), 'utf8')
+  const toolCallInspectorSource = await readFile(new URL('../src/features/developer-console/components/ToolCallInspector.tsx', import.meta.url), 'utf8')
+  const artifactRegistrySource = await readFile(new URL('../src/features/developer-console/components/ArtifactRegistry.tsx', import.meta.url), 'utf8')
+  const gateInspectorSource = await readFile(new URL('../src/features/developer-console/components/GateInspector.tsx', import.meta.url), 'utf8')
+  const recoveryPanelSource = await readFile(new URL('../src/features/developer-console/components/RecoveryPanel.tsx', import.meta.url), 'utf8')
+  const globalStylesSource = await readFile(new URL('../src/index.css', import.meta.url), 'utf8')
   assert.match(creatorShellSource, /开始创作/)
   assert.match(creatorShellSource, /我的视频/)
   for (const forbiddenCreatorTerm of ['追踪', '角色', '原始产物', 'Provider', 'Run']) {
     assert.doesNotMatch(creatorShellSource, new RegExp(forbiddenCreatorTerm))
   }
   assert.doesNotMatch(creatorShellSource, /developer-console|DeveloperConsolePage|DirectorStudioPage/)
-  assert.match(developerConsoleSource, /import DirectorStudioPage from ['"]\.\.\/\.\.\/pages\/DirectorStudioPage['"]/)
+  assert.doesNotMatch(creatorShellSource, /ToolCallInspector|工具与 MCP/)
   assert.match(appSource, /hashchange/)
   assert.match(appSource, /removeEventListener\('hashchange', syncRoute\)/)
   assert.match(appSource, /history\.replaceState\(null, '', nextHash\)/)
@@ -154,17 +236,671 @@ try {
   assert.deepEqual(parseAppRoute('#/videos/project/steps/not-a-step', false), { kind: 'creator', page: 'create', shouldReplace: true })
   assert.deepEqual(parseAppRoute('#/videos/project/steps/script/extra', false), { kind: 'creator', page: 'create', shouldReplace: true })
   assert.deepEqual(parseAppRoute('#/videos/%E0%A4%A/steps/script', false), { kind: 'creator', page: 'create', shouldReplace: true })
-  assert.deepEqual(parseAppRoute('#/developer/review', false), { kind: 'creator', page: 'create', shouldReplace: true })
-  for (const view of ['overview', 'review', 'trace', 'assets', 'roles', 'export', 'system']) {
+  const diagnosticsViews = ['summary', 'timeline', 'tools', 'artifacts', 'gates', 'recovery']
+  for (const developerRoute of ['#/developer', ...diagnosticsViews.map((view) => `#/developer/${view}`), '#/developer/not-a-view']) {
+    assert.deepEqual(parseAppRoute(developerRoute, false), { kind: 'creator', page: 'create', shouldReplace: true })
+  }
+  assert.deepEqual(parseAppRoute('#/developer', true), { kind: 'developer', view: 'summary' })
+  for (const view of diagnosticsViews) {
     assert.deepEqual(parseAppRoute(`#/developer/${view}`, true), { kind: 'developer', view })
   }
   assert.deepEqual(parseAppRoute('#/developer/not-a-view', true), { kind: 'creator', page: 'create', shouldReplace: true })
+  assert.doesNotMatch(developerConsoleSource, /DirectorStudioPage/)
+  assert.doesNotMatch(developerConsoleSource, /DirectorNavKey/)
+  assert.match(developerConsoleSource, /DeveloperDiagnosticsView/)
+  for (const apiName of [
+    'fetchVideoProjects',
+    'getAgentRun',
+    'getAgentRunTrace',
+    'getAgentRunReviews',
+    'fetchProjectArtifactRegistry',
+    'getTaskDetails',
+    'getTaskContext',
+  ]) {
+    assert.match(developerConsoleSource, new RegExp(`\\b${apiName}\\b`))
+  }
+  assert.match(diagnosticsApiSource, /export (?:const|async function) fetchProjectArtifactRegistry/)
+  assert.match(diagnosticsApiSource, /params: \{ includeHistory: true \}/)
+  assert.match(diagnosticsApiSource, /export (?:const|async function) getTaskDetails/)
+  assert.match(diagnosticsApiSource, /`\/task\/\$\{encodeURIComponent\(taskId\)\}`/)
+  assert.match(diagnosticsApiSource, /export (?:const|async function) getTaskContext/)
+  assert.match(diagnosticsApiSource, /`\/task\/\$\{encodeURIComponent\(taskId\)\}\/context`/)
+  assert.match(developerConsoleSource, /new AbortController\(\)/)
+  assert.match(developerConsoleSource, /controller\.abort\(\)/)
+  assert.match(developerConsoleSource, /window\.setInterval/)
+  assert.match(developerConsoleSource, /window\.clearInterval/)
+  assert.match(developerDiagnosticsSource, /Promise\.allSettled/)
+  assert.match(developerConsoleSource, /DiagnosticsSummary/)
+  assert.match(developerConsoleSource, /DiagnosticsTimeline/)
+  assert.match(developerConsoleSource, /currentView === 'summary'/)
+  assert.match(developerConsoleSource, /currentView === 'timeline'/)
+  for (const summaryLabel of ['项目', '运行 ID', '任务 ID', '运行状态', '创建时间', '更新时间', '耗时', '节点状态', '待处理门禁', '失败节点', '产物']) {
+    assert.match(diagnosticsSummarySource, new RegExp(summaryLabel))
+  }
+  assert.match(diagnosticsSummarySource, /<select/)
+  assert.match(diagnosticsSummarySource, /navigator\.clipboard\.writeText/)
+  assert.match(diagnosticsTimelineSource, /<ol/)
+  assert.match(diagnosticsTimelineSource, /<details/)
+  assert.match(diagnosticsTimelineSource, /type="search"/)
+  assert.match(diagnosticsTimelineSource, /serializeRedactedDiagnosticValue/)
+  assert.doesNotMatch(diagnosticsTimelineSource, /<details[^>]*\sopen(?:=|\s|>)/)
+  assert.match(developerConsoleSource, /ToolCallInspector/)
+  assert.match(developerConsoleSource, /currentView === 'tools'/)
+  assert.match(toolCallInspectorSource, /type="search"/)
+  assert.match(toolCallInspectorSource, /navigator\.clipboard\.writeText/)
+  assert.match(toolCallInspectorSource, /serializeRedactedDiagnosticValue/)
+  assert.match(toolCallInspectorSource, /aria-pressed=/)
+  assert.doesNotMatch(toolCallInspectorSource, /<details[^>]*\sopen(?:=|\s|>)/)
+  assert.match(developerConsoleSource, /currentView === 'artifacts'/)
+  assert.match(developerConsoleSource, /currentView === 'gates'/)
+  assert.match(developerConsoleSource, /currentView === 'recovery'/)
+  assert.match(developerConsoleSource, /<RecoveryPanel/)
+  assert.match(artifactRegistrySource, /fetchArtifactContent\([^,]+,\s*controller\.signal\)/)
+  assert.match(artifactRegistrySource, /fetchArtifactHistory\([^,]+,\s*controller\.signal\)/)
+  assert.match(artifactRegistrySource, /controller\.abort\(\)/)
+  assert.match(artifactRegistrySource, /serializeRedactedDiagnosticValue/)
+  assert.doesNotMatch(artifactRegistrySource, /<details[^>]*\sopen(?:=|\s|>)/)
+  assert.doesNotMatch(gateInspectorSource, /approveAgentReview|rejectAgentReview|approve|reject/)
+  for (const controlLabel of ['刷新快照', '重试最新失败节点', '复制脱敏诊断包', '下载脱敏诊断 JSON']) {
+    assert.match(recoveryPanelSource, new RegExp(controlLabel))
+  }
+  assert.match(recoveryPanelSource, /window\.confirm/)
+  assert.match(recoveryPanelSource, /retryLatestFailedAgentNode/)
+  assert.match(recoveryPanelSource, /navigator\.clipboard\.writeText/)
+  assert.match(recoveryPanelSource, /disabled=/)
+  assert.match(recoveryPanelSource, /role="status"/)
+  assert.doesNotMatch(recoveryPanelSource, /retry all|retryAll|全部重试|重试全部/i)
+  assert.match(globalStylesSource, /\.diagnostics-metric-grid/)
+  assert.match(globalStylesSource, /\.diagnostics-timeline/)
+  assert.match(globalStylesSource, /\.diagnostics-json-panel/)
+  assert.match(globalStylesSource, /\.diagnostics-tool-inspector/)
+  assert.match(globalStylesSource, /\.diagnostics-artifact-registry/)
+  assert.match(globalStylesSource, /\.diagnostics-gate-inspector/)
+  assert.match(globalStylesSource, /\.diagnostics-recovery-panel/)
+  assert.match(globalStylesSource, /@media\s*\(max-width:\s*390px\)/)
   assert.equal(replaceHashRoute('#/create'), '#/create')
   assert.equal(cycleFocusIndex(0, 2, false), 1)
   assert.equal(cycleFocusIndex(1, 2, false), 0)
   assert.equal(cycleFocusIndex(0, 2, true), 1)
   assert.equal(cycleFocusIndex(1, 2, true), 0)
   assert.equal(cycleFocusIndex(0, 0, false), -1)
+
+  const failedNodeTie = [
+    { id: 'node-b', name: 'Node B', status: 'FAILED', completedAt: '2026-01-01T00:00:02.000Z' },
+    { id: 'node-c', name: 'Node C', status: 'FAILED', completedAt: '2026-01-01T00:00:02.000Z' },
+    { id: 'node-a', name: 'Node A', status: 'FAILED', completedAt: '2026-01-01T00:00:01.000Z' },
+    { id: 'node-running', name: 'Node running', status: 'RUNNING', completedAt: '2026-01-01T00:00:03.000Z' },
+  ]
+  assert.equal(selectLatestFailedNode(failedNodeTie)?.id, 'node-b')
+  assert.equal(selectLatestFailedNode([...failedNodeTie].reverse())?.id, 'node-b')
+  assert.equal(selectLatestFailedNode([{ id: 'node-ok', status: 'SUCCESS' }]), undefined)
+
+  const diagnosticPackage = buildDiagnosticPackage({
+    generatedAt: '2026-01-02T03:04:05.000Z',
+    project: { id: 'project-1', name: 'Project One' },
+    diagnostics: {
+      projectId: 'project-1',
+      runId: 'run-1',
+      errors: [],
+      run: {
+        id: 'run-1',
+        taskId: 'task-1',
+        status: 'FAILED',
+        secret: 'run-secret',
+        body: 'RUN_MEDIA_BODY',
+        previewUrl: 'data:video/mp4;base64,RUN_MEDIA_DATA_URL',
+        binaryPayload: new Uint8Array([82, 85, 78, 95, 77, 69, 68, 73, 65]),
+        metadata: { contentHash: 'run-content-hash' },
+      },
+      task: {
+        id: 'task-1',
+        Authorization: 'Bearer task-secret',
+        payload: { content: 'TASK_MEDIA_CONTENT' },
+        cache: { inlineJson: 'TASK_INLINE_JSON' },
+      },
+      nodes: [
+        ...failedNodeTie,
+        {
+          id: 'node-media',
+          name: 'Node media',
+          status: 'SUCCESS',
+          response: { data: 'NODE_MEDIA_DATA' },
+          trace: { raw: 'NODE_RAW_PAYLOAD' },
+        },
+      ],
+      reviews: [{
+        id: 'review-1',
+        credential: 'review-secret',
+        evidence: { base64: 'REVIEW_MEDIA_BASE64' },
+        attachment: { blob: 'REVIEW_MEDIA_BLOB' },
+      }],
+      artifacts: [{
+        id: 'artifact-1',
+        name: 'preview.mp4',
+        storageRef: 'local://projects/project-1/preview.mp4',
+        contentHash: 'artifact-content-hash',
+        body: 'raw-body',
+        content: 'raw-content',
+        data: 'base64-media-data',
+        nested: {
+          mediaBody: 'ARTIFACT_MEDIA_BODY',
+          fileBody: 'ARTIFACT_FILE_BODY',
+        },
+      }],
+      context: [{
+        id: 'context-1',
+        password: 'context-secret',
+        payload: { bytes: 'CONTEXT_MEDIA_BYTES' },
+      }],
+    },
+  })
+  assert.deepEqual(Object.keys(diagnosticPackage), [
+    'generatedAt', 'project', 'run', 'task', 'nodes', 'reviews', 'artifacts', 'contexts',
+  ])
+  assert.equal(diagnosticPackage.run.secret, '[REDACTED]')
+  assert.equal(diagnosticPackage.task.Authorization, '[REDACTED]')
+  assert.equal(diagnosticPackage.reviews[0].credential, '[REDACTED]')
+  assert.equal(diagnosticPackage.contexts[0].password, '[REDACTED]')
+  assert.equal('body' in diagnosticPackage.run, false)
+  assert.equal(diagnosticPackage.run.previewUrl, '[MEDIA BODY REMOVED]')
+  assert.equal(diagnosticPackage.run.binaryPayload, '[MEDIA BODY REMOVED]')
+  assert.equal('content' in diagnosticPackage.task.payload, false)
+  assert.equal('inlineJson' in diagnosticPackage.task.cache, false)
+  assert.equal('data' in diagnosticPackage.nodes.at(-1).response, false)
+  assert.equal('raw' in diagnosticPackage.nodes.at(-1).trace, false)
+  assert.equal('base64' in diagnosticPackage.reviews[0].evidence, false)
+  assert.equal('blob' in diagnosticPackage.reviews[0].attachment, false)
+  assert.equal('body' in diagnosticPackage.artifacts[0], false)
+  assert.equal('content' in diagnosticPackage.artifacts[0], false)
+  assert.equal('data' in diagnosticPackage.artifacts[0], false)
+  assert.equal('mediaBody' in diagnosticPackage.artifacts[0].nested, false)
+  assert.equal('fileBody' in diagnosticPackage.artifacts[0].nested, false)
+  assert.equal('bytes' in diagnosticPackage.contexts[0].payload, false)
+  assert.equal(diagnosticPackage.run.metadata.contentHash, 'run-content-hash')
+  assert.equal(diagnosticPackage.artifacts[0].contentHash, 'artifact-content-hash')
+  const serializedPackage = serializeDiagnosticPackage(diagnosticPackage)
+  assert.doesNotMatch(
+    serializedPackage,
+    /run-secret|task-secret|review-secret|context-secret|RUN_MEDIA|TASK_MEDIA|TASK_INLINE|NODE_MEDIA|NODE_RAW|REVIEW_MEDIA|raw-body|raw-content|base64-media-data|ARTIFACT_MEDIA|ARTIFACT_FILE|CONTEXT_MEDIA/,
+  )
+
+  assert.deepEqual(
+    redactDiagnosticValue({
+      Authorization: 'Bearer token',
+      nested: {
+        COOKIE: 'session=abc',
+        apiKey: 'key',
+        api_key: 'key-2',
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        secret: 'secret',
+        password: 'password',
+        credential: 'credential',
+        signedUrl: 'https://example.test/private',
+        signature: 'signature',
+        list: [
+          { 'Set-Cookie': 'session=def' },
+          '/Users/alice/project/file.png',
+          String.raw`C:\Users\alice\project\file.png`,
+          'local://projects/vp-1/output.mp4',
+          'project-17',
+          'assets/output.mp4',
+        ],
+      },
+    }),
+    {
+      Authorization: '[REDACTED]',
+      nested: {
+        COOKIE: '[REDACTED]',
+        apiKey: '[REDACTED]',
+        api_key: '[REDACTED]',
+        accessToken: '[REDACTED]',
+        refreshToken: '[REDACTED]',
+        secret: '[REDACTED]',
+        password: '[REDACTED]',
+        credential: '[REDACTED]',
+        signedUrl: '[REDACTED]',
+        signature: '[REDACTED]',
+        list: [
+          { 'Set-Cookie': '[REDACTED]' },
+          '<local-path>/file.png',
+          String.raw`<local-path>\file.png`,
+          'local://projects/vp-1/output.mp4',
+          'project-17',
+          'assets/output.mp4',
+        ],
+      },
+    },
+  )
+  const cyclicDiagnostic = { password: 'hidden' }
+  cyclicDiagnostic.self = cyclicDiagnostic
+  assert.doesNotThrow(() => redactDiagnosticValue(cyclicDiagnostic))
+  assert.doesNotThrow(() => redactDiagnosticValue(new Proxy({}, {
+    ownKeys() {
+      throw new Error('malformed diagnostic value')
+    },
+  })))
+  const revokedDiagnostic = Proxy.revocable({}, {})
+  revokedDiagnostic.revoke()
+  assert.doesNotThrow(() => redactDiagnosticValue(revokedDiagnostic.proxy))
+  assert.doesNotThrow(() => classifyDiagnosticTransport(revokedDiagnostic.proxy))
+  assert.deepEqual(buildDiagnosticsNodes(revokedDiagnostic.proxy), [])
+
+  let diagnosticCallbackCalls = 0
+  const inheritedToJSON = Object.create({
+    toJSON() {
+      diagnosticCallbackCalls += 1
+      return { leaked: 'inherited-secret' }
+    },
+  })
+  inheritedToJSON.visible = 7n
+  const accessorValue = {}
+  Object.defineProperty(accessorValue, 'value', {
+    enumerable: true,
+    get() {
+      diagnosticCallbackCalls += 1
+      return 'accessor-secret'
+    },
+  })
+  const serializationCycle = {}
+  serializationCycle.self = serializationCycle
+  const serializationInput = {
+    password: 'top-level-secret',
+    ownToJSON: {
+      visible: 3n,
+      toJSON() {
+        diagnosticCallbackCalls += 1
+        return { leaked: 'own-secret' }
+      },
+    },
+    inheritedToJSON,
+    callback() {
+      diagnosticCallbackCalls += 1
+    },
+    values: [2n, undefined, Symbol('private-symbol'), accessorValue, serializationCycle],
+  }
+  const serializationSafeDiagnostic = redactDiagnosticValue(serializationInput)
+  assert.equal(diagnosticCallbackCalls, 0)
+  assert.doesNotThrow(() => JSON.stringify(serializationSafeDiagnostic))
+  assert.deepEqual(JSON.parse(JSON.stringify(serializationSafeDiagnostic)), {
+    password: '[REDACTED]',
+    ownToJSON: { visible: '3', toJSON: '[Function]' },
+    inheritedToJSON: { visible: '7' },
+    callback: '[Function]',
+    values: ['2', '[Undefined]', '[Symbol]', { value: '[Accessor]' }, { self: '[Circular]' }],
+  })
+  assert.equal(
+    serializeRedactedDiagnosticValue(serializationInput),
+    '{"password":"[REDACTED]","ownToJSON":{"visible":"3","toJSON":"[Function]"},"inheritedToJSON":{"visible":"7"},"callback":"[Function]","values":["2","[Undefined]","[Symbol]",{"value":"[Accessor]"},{"self":"[Circular]"}]}',
+  )
+  assert.equal(serializeRedactedDiagnosticValue(() => 'callable-secret'), '"[Function]"')
+  assert.equal(diagnosticCallbackCalls, 0)
+
+  const embeddedSensitiveNodes = buildDiagnosticsNodes({
+    nodes: [{
+      id: 'embedded-sensitive',
+      status: 'FAILED',
+      error: String.raw`Request failed: Authorization: Bearer super-secret at /Users/alice/.config/key.json; UNC \\server\share\secret.txt and shallow /etc; keep https://docs.example.test/help?next=/guides/start#target=/reference/api; retry remains available`,
+      request: {
+        message: String.raw`Upload failed with Cookie: session=abc123; theme=dark from C:\Users\alice\AppData\Local\agent\session.json; keep this context`,
+        context: 'Worker rejected credential=client-credential token: oauth-token secret=hidden-secret; useful tail remains',
+        pathBoundaries: String.raw`Inspect \\server\share\secret.txt and /etc, but keep https://docs.example.test/help?next=/guides/start&mode=plain#target=/reference/api`,
+        download: 'https://cdn.example.test/render.mp4?X-Amz-Credential=AKIA-EXAMPLE&X-Amz-Signature=deadbeef&variant=preview',
+        publicUrl: 'https://cdn.example.test/assets/video.mp4?variant=preview',
+      },
+    }],
+  })
+  const embeddedSensitiveError = embeddedSensitiveNodes[0]?.error ?? ''
+  assert.match(embeddedSensitiveError, /Request failed:/)
+  assert.match(embeddedSensitiveError, /retry remains available/)
+  assert.doesNotMatch(embeddedSensitiveError, /super-secret|\/Users\/alice|shallow \/etc/)
+  assert.equal(embeddedSensitiveError.includes(String.raw`\\server\share`), false)
+  assert.match(embeddedSensitiveError, /UNC <local-path>\\secret\.txt and shallow <local-path>\/etc/)
+  assert.match(embeddedSensitiveError, /https:\/\/docs\.example\.test\/help\?next=\/guides\/start#target=\/reference\/api/)
+  const embeddedSensitiveJson = serializeRedactedDiagnosticValue(embeddedSensitiveNodes[0]?.request)
+  const embeddedSensitivePayload = JSON.parse(embeddedSensitiveJson)
+  const embeddedSensitiveText = Object.values(embeddedSensitivePayload).join('\n')
+  for (const sensitiveValue of ['session=abc123', 'theme=dark', String.raw`C:\Users\alice`, String.raw`\\server\share`, 'client-credential', 'oauth-token', 'hidden-secret', 'AKIA-EXAMPLE', 'deadbeef']) {
+    assert.equal(embeddedSensitiveText.includes(sensitiveValue), false)
+  }
+  assert.match(embeddedSensitiveJson, /Upload failed with/)
+  assert.match(embeddedSensitiveJson, /keep this context/)
+  assert.match(embeddedSensitiveJson, /Worker rejected/)
+  assert.match(embeddedSensitiveJson, /useful tail remains/)
+  assert.match(embeddedSensitiveJson, /https:\/\/cdn\.example\.test\/render\.mp4/)
+  assert.match(embeddedSensitiveJson, /variant=preview/)
+  assert.match(embeddedSensitiveJson, /https:\/\/cdn\.example\.test\/assets\/video\.mp4\?variant=preview/)
+  assert.equal(
+    embeddedSensitivePayload.pathBoundaries.includes('https://docs.example.test/help?next=/guides/start&mode=plain#target=/reference/api'),
+    true,
+  )
+  assert.equal(embeddedSensitivePayload.pathBoundaries.includes('and /etc,'), false)
+
+  assert.equal(diagnosticDurationMs('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.250Z'), 1250)
+  assert.equal(diagnosticDurationMs('invalid', '2026-01-01T00:00:01.250Z'), undefined)
+  assert.equal(diagnosticDurationMs('2026-01-01T00:00:02.000Z', '2026-01-01T00:00:01.250Z'), undefined)
+  assert.equal(diagnosticDurationMs(Symbol('malformed'), '2026-01-01T00:00:01.250Z'), undefined)
+  assert.equal(classifyDiagnosticTransport({ transport: 'control' }), 'control')
+  assert.equal(classifyDiagnosticTransport({ transport: 'control:cancel' }), 'control')
+  assert.equal(classifyDiagnosticTransport({ transport: 'tool/run' }), 'tool')
+  assert.equal(classifyDiagnosticTransport({ server: 'filesystem' }), 'mcp')
+  assert.equal(classifyDiagnosticTransport({ provider: 'mcp-provider' }), 'mcp')
+  assert.equal(classifyDiagnosticTransport({ provider: 'mcp://video-qa' }), 'mcp')
+  assert.equal(classifyDiagnosticTransport({ toolName: 'mcp__video_qa__inspect' }), 'mcp')
+  assert.equal(classifyDiagnosticTransport({ tool: 'render_video' }), 'tool')
+  assert.equal(classifyDiagnosticTransport({ transport: 'not-mcp' }), 'unknown')
+  assert.equal(classifyDiagnosticTransport({ provider: 'not-mcp' }), 'unknown')
+  assert.equal(classifyDiagnosticTransport({ transport: 'uncontrolled' }), 'unknown')
+  assert.equal(classifyDiagnosticTransport({ type: 'controller' }), 'unknown')
+  assert.equal(classifyDiagnosticTransport({ transport: 'toolbox' }), 'unknown')
+  assert.equal(classifyDiagnosticTransport(null), 'unknown')
+
+  assert.deepEqual(
+    buildDiagnosticsNodes({
+      nodes: [
+        {
+          id: 'node-b',
+          name: 'Second',
+          type: 'tool',
+          status: 'SUCCESS',
+          createdAt: '2026-01-01T00:00:02.000Z',
+          completedAt: 'invalid',
+          retryCount: 2,
+          maxRetry: 3,
+          tool: 'render_video',
+          input: { authorization: 'secret-token', source: '/Users/alice/source.mov' },
+          output: { file: String.raw`C:\Users\alice\result.mp4` },
+        },
+        {
+          id: 'node-a',
+          name: 'First',
+          status: 'RUNNING',
+          startedAt: '2026-01-01T00:00:01.000Z',
+          completedAt: '2026-01-01T00:00:01.500Z',
+          transport: 'mcp',
+          request: [{ password: 'hidden' }],
+          response: { artifactId: 'local://projects/vp-1/output.mp4' },
+        },
+        {
+          id: 'node-c',
+          createdAt: '2026-01-01T00:00:02.000Z',
+        },
+      ],
+    }),
+    [
+      {
+        id: 'node-a',
+        name: 'First',
+        type: 'unknown',
+        status: 'RUNNING',
+        startedAt: '2026-01-01T00:00:01.000Z',
+        completedAt: '2026-01-01T00:00:01.500Z',
+        durationMs: 500,
+        retryCount: 0,
+        maxRetry: 0,
+        transport: 'mcp',
+        request: [{ password: '[REDACTED]' }],
+        response: { artifactId: 'local://projects/vp-1/output.mp4' },
+        relatedArtifactIds: ['local://projects/vp-1/output.mp4'],
+      },
+      {
+        id: 'node-b',
+        name: 'Second',
+        type: 'tool',
+        status: 'SUCCESS',
+        startedAt: '2026-01-01T00:00:02.000Z',
+        completedAt: 'invalid',
+        retryCount: 2,
+        maxRetry: 3,
+        toolName: 'render_video',
+        transport: 'tool',
+        request: { authorization: '[REDACTED]', source: '<local-path>/source.mov' },
+        response: { file: String.raw`<local-path>\result.mp4` },
+      },
+      {
+        id: 'node-c',
+        name: 'node-c',
+        type: 'unknown',
+        status: 'unknown',
+        startedAt: '2026-01-01T00:00:02.000Z',
+        retryCount: 0,
+        maxRetry: 0,
+        transport: 'unknown',
+      },
+    ],
+  )
+  assert.deepEqual(buildDiagnosticsNodes({ nodes: 'not-an-array' }), [])
+  assert.deepEqual(buildDiagnosticsNodes(null), [])
+
+  const toolCallFixtures = [
+    {
+      id: 'tool-node',
+      name: 'Render frame',
+      type: 'tool',
+      status: 'SUCCESS',
+      retryCount: 0,
+      maxRetry: 1,
+      toolName: 'render_frame',
+      transport: 'tool',
+      request: { password: '[REDACTED]', prompt: 'hidden-request-value' },
+      response: { artifactId: 'artifact-rendered' },
+      relatedArtifactIds: ['artifact-rendered'],
+    },
+    {
+      id: 'mcp-failed-node',
+      name: 'Fetch source',
+      type: 'mcp',
+      status: 'FAILED',
+      retryCount: 0,
+      maxRetry: 2,
+      toolName: 'fetch_asset',
+      serverName: 'asset-server',
+      transport: 'mcp',
+      error: 'NetworkTimeout: rejected customer alice@example.com from prompt confidential-campaign; access_token=super-hidden-error',
+      errorClass: 'NetworkTimeout',
+    },
+    {
+      id: 'mcp-retried-node',
+      name: 'Publish result',
+      type: 'mcp',
+      status: 'SUCCESS',
+      retryCount: 2,
+      maxRetry: 3,
+      toolName: 'publish_asset',
+      serverName: 'publish-server',
+      transport: 'mcp',
+    },
+    {
+      id: 'control-node',
+      name: 'Review gate',
+      type: 'control',
+      status: 'PENDING',
+      retryCount: 0,
+      maxRetry: 0,
+      transport: 'control',
+    },
+  ]
+  assert.deepEqual(
+    buildToolCallGroups(toolCallFixtures).map((group) => ({
+      key: group.key,
+      callIds: group.calls.map((call) => call.id),
+    })),
+    [
+      { key: 'tool', callIds: ['tool-node'] },
+      { key: 'mcp:asset-server', callIds: ['mcp-failed-node'] },
+      { key: 'mcp:publish-server', callIds: ['mcp-retried-node'] },
+    ],
+  )
+  assert.deepEqual(filterToolCalls(toolCallFixtures, 'all', '').map((call) => call.id), [
+    'tool-node', 'mcp-failed-node', 'mcp-retried-node',
+  ])
+  assert.deepEqual(filterToolCalls(toolCallFixtures, 'tool', '').map((call) => call.id), ['tool-node'])
+  assert.deepEqual(filterToolCalls(toolCallFixtures, 'mcp', '').map((call) => call.id), [
+    'mcp-failed-node', 'mcp-retried-node',
+  ])
+  assert.deepEqual(filterToolCalls(toolCallFixtures, 'failed', '').map((call) => call.id), ['mcp-failed-node'])
+  assert.deepEqual(filterToolCalls(toolCallFixtures, 'retried', '').map((call) => call.id), ['mcp-retried-node'])
+  for (const query of ['render_frame', 'asset-server', 'mcp-failed-node', 'NetworkTimeout']) {
+    assert.equal(filterToolCalls(toolCallFixtures, 'all', query).length, 1)
+  }
+  for (const hiddenQuery of [
+    'hidden-request-value',
+    'alice@example.com',
+    'confidential-campaign',
+    'super-hidden-error',
+  ]) {
+    assert.deepEqual(filterToolCalls(toolCallFixtures, 'all', hiddenQuery), [])
+  }
+  const copiedToolCall = toolCallCopyText({
+    ...toolCallFixtures[0],
+    request: { password: 'copy-secret', source: '/Users/alice/private.mov' },
+    response: { accessToken: 'copy-response-secret' },
+    error: 'RenderError: credential=copy-error-secret',
+  })
+  assert.match(copiedToolCall, /\[REDACTED\]/)
+  assert.match(copiedToolCall, /<local-path>\/private\.mov/)
+  assert.doesNotMatch(copiedToolCall, /copy-secret|copy-response-secret|copy-error-secret|\/Users\/alice/)
+
+  const artifactFixtures = [
+    {
+      id: 'artifact-current', projectId: 'project-1', workflowRunId: 'run-1', stageName: 'script',
+      unitId: 'unit-1', kind: 'VIDEO_SCRIPT', name: 'creator script', mimeType: 'text/markdown', version: 2, parentId: 'artifact-old',
+      storageType: 'inline', storageRef: 'safe/script.md', sizeBytes: 42, contentHash: 'sha256:current',
+      isCurrent: true, status: 'valid', producedByRole: 'writer', producedByTool: 'draft_script',
+      createdAt: '2026-01-02T00:00:00.000Z',
+    },
+    {
+      id: 'artifact-old', projectId: 'project-1', workflowRunId: 'run-1', stageName: 'script',
+      kind: 'VIDEO_SCRIPT', name: 'creator script', mimeType: 'text/markdown', version: 1, storageType: 'inline', sizeBytes: 20,
+      contentHash: 'sha256:old', isCurrent: false, status: 'stale', producedByNode: 'node-old',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'artifact-log', projectId: 'project-1', workflowRunId: 'run-1', stageName: 'render',
+      kind: 'LOG', name: 'render trace', version: 1, storageType: 'local',
+      storageRef: '/Users/alice/private/render.log', sizeBytes: 99, contentHash: 'sha256:log',
+      isCurrent: true, status: 'failed', producedByNode: 'node-render',
+      metadata: { creatorFacing: false }, createdAt: '2026-01-03T00:00:00.000Z',
+    },
+  ]
+  assert.deepEqual(filterArtifactRegistryRows(artifactFixtures, {
+    currency: 'current', kind: 'all', stage: 'all', status: 'all', facing: 'all', query: '',
+  }).map((artifact) => artifact.id), ['artifact-log', 'artifact-current'])
+  assert.deepEqual(filterArtifactRegistryRows(artifactFixtures, {
+    currency: 'history', kind: 'all', stage: 'all', status: 'all', facing: 'all', query: '',
+  }).map((artifact) => artifact.id), ['artifact-old'])
+  assert.equal(filterArtifactRegistryRows(artifactFixtures, {
+    currency: 'all', kind: 'LOG', stage: 'render', status: 'failed', facing: 'technical', query: 'artifact-log',
+  }).length, 1)
+  assert.equal(filterArtifactRegistryRows(artifactFixtures, {
+    currency: 'all', kind: 'VIDEO_SCRIPT', stage: 'script', status: 'valid', facing: 'creator', query: 'CREATOR SCRIPT',
+  }).length, 1)
+  assert.deepEqual(buildArtifactLineage(artifactFixtures[0], [artifactFixtures[0], artifactFixtures[1]]), [
+    { id: 'artifact-current', parentId: 'artifact-old', version: 2, isCurrent: true, relationship: 'current' },
+    { id: 'artifact-old', parentId: undefined, version: 1, isCurrent: false, relationship: 'parent' },
+  ])
+
+  assert.deepEqual(buildGateInspectionItems([
+    {
+      id: 'review-human', nodeId: 'node-human', status: 'APPROVED', stage: 'script',
+      humanReview: { required: true, title: 'Script review' }, blocksDownstream: true,
+      artifactId: 'artifact-current', reviewerId: 'Editor A', reviewComment: 'Looks good',
+      reviewedAt: '2026-01-04T00:00:00.000Z',
+    },
+    {
+      id: 'review-quality', nodeId: 'node-quality', status: 'REJECTED', reviewPhase: 'quality_gate',
+      sourceNodeId: 'node-producer', artifactId: 'artifact-log', blocksDownstream: true,
+    },
+  ], [
+    { id: 'node-human', name: 'Script review', type: 'REVIEW_GATE', status: 'SUCCESS', retryCount: 0, maxRetry: 0, transport: 'control' },
+    { id: 'node-quality', name: 'Script quality', type: 'QUALITY_GATE', status: 'FAILED', retryCount: 0, maxRetry: 0, transport: 'control' },
+    { id: 'node-control', name: 'Dependency control', type: 'control', status: 'PENDING', retryCount: 0, maxRetry: 0, transport: 'control' },
+    { id: 'node-tool', name: 'Render', type: 'tool', status: 'SUCCESS', retryCount: 0, maxRetry: 0, transport: 'tool' },
+  ]), [
+    {
+      id: 'review-human', kind: 'human', title: 'Script review', status: 'APPROVED', stage: 'script',
+      blockingDownstream: true, sourceArtifactId: 'artifact-current', sourceNodeId: 'node-human',
+      reviewer: 'Editor A', comment: 'Looks good', time: '2026-01-04T00:00:00.000Z',
+    },
+    {
+      id: 'review-quality', kind: 'quality', title: 'review-quality', status: 'REJECTED',
+      blockingDownstream: true, sourceArtifactId: 'artifact-log', sourceNodeId: 'node-producer',
+    },
+    {
+      id: 'node-control', kind: 'control', title: 'Dependency control', status: 'PENDING',
+      blockingDownstream: false, sourceNodeId: 'node-control',
+    },
+  ])
+
+  const projectFixtures = [
+    { id: 'newest-without-run', updatedAt: '2026-01-04T00:00:00.000Z' },
+    { id: 'older-with-run', currentRunId: 'run-old', updatedAt: '2026-01-02T00:00:00.000Z' },
+    { id: 'newest-with-run', currentRunId: 'run-new', updatedAt: '2026-01-03T00:00:00.000Z' },
+  ]
+  assert.equal(selectDiagnosticsProject(projectFixtures)?.id, 'newest-with-run')
+  assert.deepEqual(projectFixtures.map((project) => project.id), [
+    'newest-without-run', 'older-with-run', 'newest-with-run',
+  ])
+  assert.equal(selectDiagnosticsProject([
+    { id: 'older', updatedAt: '2026-01-02T00:00:00.000Z' },
+    { id: 'newer', updatedAt: '2026-01-03T00:00:00.000Z' },
+  ])?.id, 'newer')
+  assert.equal(selectDiagnosticsProject([]), undefined)
+  assert.equal(isTerminalAgentRunStatus('SUCCESS'), true)
+  assert.equal(isTerminalAgentRunStatus('FAILED'), true)
+  assert.equal(isTerminalAgentRunStatus('CANCELLED'), true)
+  assert.equal(isTerminalAgentRunStatus('RUNNING'), false)
+  assert.equal(isTerminalAgentRunStatus('CREATED'), false)
+  const priorScopeSnapshot = { projectId: 'project-old', runId: 'run-old', errors: [] }
+  assert.equal(diagnosticsSnapshotForScope(priorScopeSnapshot, 'project-new', 'run-new'), null)
+  assert.equal(diagnosticsSnapshotForScope(priorScopeSnapshot, 'project-old', 'run-old'), priorScopeSnapshot)
+
+  const scopedCalls = []
+  const scopedController = new AbortController()
+  const scopedResult = await loadProjectDiagnostics({
+    projectId: 'project-selected',
+    runId: 'run-selected',
+    signal: scopedController.signal,
+    api: {
+      getRun: async (runId, signal) => {
+        scopedCalls.push(['run', runId, signal])
+        return { id: runId, taskId: 'task-selected', message: 'diagnose', status: 'RUNNING', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:01.000Z' }
+      },
+      getTrace: async (runId, signal) => {
+        scopedCalls.push(['trace', runId, signal])
+        throw new Error('trace unavailable')
+      },
+      getReviews: async (runId, signal) => {
+        scopedCalls.push(['reviews', runId, signal])
+        return { runId, reviews: [{ id: 'review-1', nodeId: 'node-1', status: 'PENDING' }] }
+      },
+      getArtifacts: async (projectId, signal) => {
+        scopedCalls.push(['artifacts', projectId, signal])
+        return { artifacts: [{ id: 'artifact-1', projectId }] }
+      },
+      getTask: async (taskId, signal) => {
+        scopedCalls.push(['task', taskId, signal])
+        return { id: taskId }
+      },
+      getContext: async (taskId, signal) => {
+        scopedCalls.push(['context', taskId, signal])
+        return [{ taskId }]
+      },
+    },
+  })
+  assert.equal(scopedResult.projectId, 'project-selected')
+  assert.equal(scopedResult.runId, 'run-selected')
+  assert.equal(scopedResult.run?.id, 'run-selected')
+  assert.deepEqual(scopedResult.task, { id: 'task-selected' })
+  assert.deepEqual(scopedResult.context, [{ taskId: 'task-selected' }])
+  assert.deepEqual(scopedResult.reviews.map((review) => review.id), ['review-1'])
+  assert.deepEqual(scopedResult.artifacts.map((artifact) => artifact.id), ['artifact-1'])
+  assert.deepEqual(scopedResult.errors, ['trace'])
+  assert.equal(scopedCalls.find(([name]) => name === 'artifacts')?.[1], 'project-selected')
+  assert.equal(scopedCalls.find(([name]) => name === 'task')?.[1], 'task-selected')
+  assert.equal(scopedCalls.find(([name]) => name === 'context')?.[1], 'task-selected')
+  assert.equal(scopedCalls.every(([, , signal]) => signal === scopedController.signal), true)
+
   assert.match(directorPageSource, /放大播放/)
   assert.doesNotMatch(directorPageSource, /图片预览已就绪|照片预览已就绪|视频预览已就绪|参考图已登记|产物已登记/)
   assert.doesNotMatch(directorPageSource, /QA \{openGroup\.production\.qaStatus\}|\{openGroup\.production\.sourceType\}/)

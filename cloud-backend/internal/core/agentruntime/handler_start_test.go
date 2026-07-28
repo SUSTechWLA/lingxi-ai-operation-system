@@ -372,7 +372,8 @@ func TestCancelRunPausesTaskAndMarksProjectStopped(t *testing.T) {
 	projectUpdater := &recordingProjectLifecycleUpdater{}
 	taskPauser := &recordingTaskPauser{}
 	handler := NewHandler(
-		NewRunner(&fakeOrchestrator{taskID: "task-1"}, store, staticPlanner{}, NewPlanGuard(nil, nil), NewPlanCompiler(nil)),
+		NewRunner(&fakeOrchestrator{taskID: "task-1"}, store, staticPlanner{}, NewPlanGuard(nil, nil), NewPlanCompiler(nil)).
+			WithObservability(newTerminalReplayEmitter(t, 0)),
 		nil,
 		nil,
 	).WithProjectLifecycleUpdater(projectUpdater).WithTaskPauser(taskPauser)

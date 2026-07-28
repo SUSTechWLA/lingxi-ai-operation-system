@@ -1,6 +1,12 @@
 package workflow
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/tangying-ai/aios-core/internal/core/database"
+)
 
 // RunStatus represents the lifecycle of a WorkflowRun.
 type RunStatus string
@@ -27,23 +33,98 @@ const (
 	StageInvalidated     StageStatus = "INVALIDATED"
 )
 
+// RunManifest intentionally admits only versioned identifiers and hashes.
+// Prompts, arguments, credentials, and arbitrary request metadata are excluded.
+type RunManifest struct {
+	SchemaVersion          string    `json:"schemaVersion"`
+	Runtime                string    `json:"runtime"`
+	RunID                  string    `json:"runId"`
+	TraceID                string    `json:"traceId,omitempty"`
+	ToolRegistrySnapshotID string    `json:"toolRegistrySnapshotId,omitempty"`
+	ToolRegistrySHA256     string    `json:"toolRegistrySha256,omitempty"`
+	ParentRunID            *string   `json:"parentRunId,omitempty"`
+	ReplayFromStageID      *string   `json:"replayFromStageId,omitempty"`
+	CreatedAt              time.Time `json:"createdAt"`
+}
+
+func buildWorkflowRunManifest(run *WorkflowRun) *RunManifest {
+	if run == nil {
+		return nil
+	}
+	return &RunManifest{
+		SchemaVersion:          "1",
+		Runtime:                "cloud-workflow",
+		RunID:                  run.ID,
+		TraceID:                run.TraceID,
+		ToolRegistrySnapshotID: run.ToolRegistrySnapshotID,
+		ParentRunID:            cloneWorkflowStringPointer(run.ParentRunID),
+		ReplayFromStageID:      cloneWorkflowStringPointer(run.ReplayFromStageID),
+		CreatedAt:              run.CreatedAt,
+	}
+}
+
+func validateWorkflowRunManifest(manifest *RunManifest) error {
+	if manifest == nil {
+		return nil
+	}
+	for field, value := range map[string]string{
+		"runtime": manifest.Runtime, "run ID": manifest.RunID, "trace ID": manifest.TraceID,
+		"tool snapshot ID": manifest.ToolRegistrySnapshotID,
+	} {
+		if len(value) > database.RunManifestMaxIdentifierBytes {
+			return fmt.Errorf("%s: %s bytes %d exceeds %d", database.RunManifestLimitExceededCode, field, len(value), database.RunManifestMaxIdentifierBytes)
+		}
+	}
+	if len(manifest.SchemaVersion) > database.RunManifestMaxVersionBytes {
+		return fmt.Errorf("%s: schema version bytes %d exceeds %d", database.RunManifestLimitExceededCode, len(manifest.SchemaVersion), database.RunManifestMaxVersionBytes)
+	}
+	if len(manifest.ToolRegistrySHA256) > database.RunManifestMaxHashBytes {
+		return fmt.Errorf("%s: tool snapshot hash bytes %d exceeds %d", database.RunManifestLimitExceededCode, len(manifest.ToolRegistrySHA256), database.RunManifestMaxHashBytes)
+	}
+	for field, value := range map[string]*string{"parent run ID": manifest.ParentRunID, "replay stage ID": manifest.ReplayFromStageID} {
+		if value != nil && len(*value) > database.RunManifestMaxIdentifierBytes {
+			return fmt.Errorf("%s: %s bytes %d exceeds %d", database.RunManifestLimitExceededCode, field, len(*value), database.RunManifestMaxIdentifierBytes)
+		}
+	}
+	wire, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("marshal workflow run manifest for limits: %w", err)
+	}
+	if len(wire) > database.RunManifestMaxBytes {
+		return fmt.Errorf("%s: serialized bytes %d exceeds %d", database.RunManifestLimitExceededCode, len(wire), database.RunManifestMaxBytes)
+	}
+	return nil
+}
+
+func cloneWorkflowStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
 // WorkflowRun links a video project to an orchestrator task and tracks stage-level progress.
 type WorkflowRun struct {
-	ID              string                 `json:"id"`
-	ProjectID       string                 `json:"projectId"`
-	UserID          string                 `json:"userId"`
-	TemplateID      string                 `json:"templateId"`
-	TemplateVersion string                 `json:"templateVersion"`
-	TaskID          string                 `json:"taskId"`
-	Status          RunStatus              `json:"status"`
-	Attempt         int                    `json:"attempt"`
-	Input           map[string]interface{} `json:"input,omitempty"`
-	Output          map[string]interface{} `json:"output,omitempty"`
-	StageStatuses   map[string]StageStatus `json:"stageStatuses"`
-	TraceID         string                 `json:"traceId"`
-	StartedAt       *time.Time             `json:"startedAt,omitempty"`
-	FinishedAt      *time.Time             `json:"finishedAt,omitempty"`
-	CreatedAt       time.Time              `json:"createdAt"`
+	ID                     string                 `json:"id"`
+	ProjectID              string                 `json:"projectId"`
+	UserID                 string                 `json:"userId"`
+	TemplateID             string                 `json:"templateId"`
+	TemplateVersion        string                 `json:"templateVersion"`
+	TaskID                 string                 `json:"taskId"`
+	Status                 RunStatus              `json:"status"`
+	Attempt                int                    `json:"attempt"`
+	Input                  map[string]interface{} `json:"input,omitempty"`
+	Output                 map[string]interface{} `json:"output,omitempty"`
+	StageStatuses          map[string]StageStatus `json:"stageStatuses"`
+	TraceID                string                 `json:"traceId"`
+	ToolRegistrySnapshotID string                 `json:"toolRegistrySnapshotId,omitempty"`
+	RunManifest            *RunManifest           `json:"runManifest,omitempty"`
+	ParentRunID            *string                `json:"parentRunId,omitempty"`
+	ReplayFromStageID      *string                `json:"replayFromStageId,omitempty"`
+	StartedAt              *time.Time             `json:"startedAt,omitempty"`
+	FinishedAt             *time.Time             `json:"finishedAt,omitempty"`
+	CreatedAt              time.Time              `json:"createdAt"`
 }
 
 // StageRun tracks the execution of a single stage within a workflow run.

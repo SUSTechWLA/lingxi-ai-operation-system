@@ -1,6 +1,8 @@
 package model
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
@@ -8,6 +10,7 @@ import (
 
 type CreatorStepID string
 type CreatorStepState string
+type CreatorTaskStatus string
 
 const (
 	CreatorStepRequirements CreatorStepID = "requirements"
@@ -23,6 +26,12 @@ const (
 	CreatorStepConfirmed      CreatorStepState = "confirmed"
 	CreatorStepNeedsAttention CreatorStepState = "needs_attention"
 	CreatorStepFailed         CreatorStepState = "failed"
+
+	CreatorTaskGenerating  CreatorTaskStatus = "generating"
+	CreatorTaskRunning     CreatorTaskStatus = "running"
+	CreatorTaskProcessing  CreatorTaskStatus = "processing"
+	CreatorTaskQueued      CreatorTaskStatus = "queued"
+	CreatorTaskDispatching CreatorTaskStatus = "dispatching"
 )
 
 // CreatorStep is the stable, creator-facing summary of a production step.
@@ -35,26 +44,71 @@ type CreatorStep struct {
 	CurrentVersion    int              `json:"currentVersion,omitempty"`
 	ReviewID          string           `json:"reviewId,omitempty"`
 	RunID             string           `json:"runId,omitempty"`
+	HasHistory        bool             `json:"hasHistory"`
+	AttemptCount      int              `json:"attemptCount"`
+	ArtifactCount     int              `json:"artifactCount"`
+	StartedAt         *time.Time       `json:"startedAt,omitempty"`
+	UpdatedAt         *time.Time       `json:"updatedAt,omitempty"`
+	IsStale           bool             `json:"isStale"`
 	AllowedActions    []string         `json:"allowedActions"`
+}
+
+// CreatorArtifactDescriptor is a lightweight, creator-safe reference. Artifact
+// payloads continue to load through the authenticated artifact content route.
+type CreatorArtifactDescriptor struct {
+	ArtifactID     string        `json:"artifactId"`
+	StepID         CreatorStepID `json:"stepId"`
+	Name           string        `json:"name"`
+	Kind           string        `json:"kind"`
+	MimeType       string        `json:"mimeType,omitempty"`
+	ArtifactType   string        `json:"artifactType,omitempty"`
+	GenerationKind string        `json:"generationKind,omitempty"`
+	RelatedShotID  string        `json:"relatedShotId,omitempty"`
+	Version        int           `json:"version"`
+	Attempt        int           `json:"attempt"`
+	IsCurrent      bool          `json:"isCurrent"`
+	IsStale        bool          `json:"isStale"`
+	SizeBytes      int64         `json:"sizeBytes,omitempty"`
+	CreatedAt      time.Time     `json:"createdAt"`
+}
+
+// CreatorProcessEvent deliberately contains only allow-listed presentation
+// fields. Raw node input/output, prompts, tool arguments, and reasoning are not
+// part of this contract.
+type CreatorProcessEvent struct {
+	ID          string        `json:"id"`
+	StepID      CreatorStepID `json:"stepId"`
+	Attempt     int           `json:"attempt"`
+	State       string        `json:"state"`
+	SourceType  string        `json:"sourceType"`
+	SourceID    string        `json:"sourceId"`
+	Title       string        `json:"title"`
+	Summary     string        `json:"summary,omitempty"`
+	StartedAt   *time.Time    `json:"startedAt,omitempty"`
+	CompletedAt *time.Time    `json:"completedAt,omitempty"`
+	ArtifactIDs []string      `json:"artifactIds"`
 }
 
 // CreationView is the backend-authoritative state for the creator workspace.
 type CreationView struct {
-	Project       *VideoProject `json:"project"`
-	ActiveStep    CreatorStepID `json:"activeStep"`
-	Steps         []CreatorStep `json:"steps"`
-	ShotSummary   ShotSummary   `json:"shotSummary"`
-	ActiveTasks   []CreatorTask `json:"activeTasks"`
-	AssemblyDirty bool          `json:"assemblyDirty"`
+	Project                 *VideoProject                                 `json:"project"`
+	ActiveStep              CreatorStepID                                 `json:"activeStep"`
+	FinalDeliveryArtifactID string                                        `json:"finalDeliveryArtifactId,omitempty"`
+	Steps                   []CreatorStep                                 `json:"steps"`
+	ShotSummary             ShotSummary                                   `json:"shotSummary"`
+	ActiveTasks             []CreatorTask                                 `json:"activeTasks"`
+	AssemblyDirty           bool                                          `json:"assemblyDirty"`
+	ProcessTimeline         []CreatorProcessEvent                         `json:"processTimeline"`
+	StepArtifacts           map[CreatorStepID][]CreatorArtifactDescriptor `json:"stepArtifacts"`
 }
 
 // CreatorTask only exposes durable work that a creator can safely resume after reconnecting.
 type CreatorTask struct {
-	ID     string `json:"id"`
-	Scope  string `json:"scope"`
-	ShotID string `json:"shotId,omitempty"`
-	Status string `json:"status"`
-	Label  string `json:"label"`
+	ID     string            `json:"id"`
+	Scope  string            `json:"scope"`
+	ShotID string            `json:"shotId,omitempty"`
+	Status CreatorTaskStatus `json:"status"`
+	Label  string            `json:"label"`
 }
 
 // ShotPageQuery scopes a creator-facing Shot review list without returning full media payloads.
@@ -111,13 +165,24 @@ type ShotWorkspace struct {
 }
 
 type ArtifactSelection struct {
-	Kind    string   `json:"kind"`
-	X       *float64 `json:"x,omitempty"`
-	Y       *float64 `json:"y,omitempty"`
-	Width   *float64 `json:"width,omitempty"`
-	Height  *float64 `json:"height,omitempty"`
-	StartMs *int64   `json:"startMs,omitempty"`
-	EndMs   *int64   `json:"endMs,omitempty"`
+	Kind       string   `json:"kind"`
+	X          *float64 `json:"x,omitempty"`
+	Y          *float64 `json:"y,omitempty"`
+	Width      *float64 `json:"width,omitempty"`
+	Height     *float64 `json:"height,omitempty"`
+	StartMs    *int64   `json:"startMs,omitempty"`
+	EndMs      *int64   `json:"endMs,omitempty"`
+	Start      *int     `json:"start,omitempty"`
+	End        *int     `json:"end,omitempty"`
+	Text       string   `json:"text,omitempty"`
+	SourceHash string   `json:"sourceHash,omitempty"`
+}
+
+type ReplacementMaterial struct {
+	ContentHash string `json:"contentHash"`
+	StorageRef  string `json:"storageRef"`
+	MimeType    string `json:"mimeType"`
+	SizeBytes   int64  `json:"sizeBytes"`
 }
 
 type StepRevisionRequest struct {
@@ -127,11 +192,53 @@ type StepRevisionRequest struct {
 	Mode                     string                 `json:"mode"`
 	Instruction              string                 `json:"instruction,omitempty"`
 	DirectContent            string                 `json:"directContent,omitempty"`
+	ReplacementMaterial      *ReplacementMaterial   `json:"replacementMaterial,omitempty"`
 	ModelProviders           map[string]interface{} `json:"modelProviders,omitempty"`
 	RunID                    string                 `json:"runId,omitempty"`
 	ReviewID                 string                 `json:"reviewId,omitempty"`
 	ConfirmedAffectedShotIDs []string               `json:"confirmedAffectedShotIds,omitempty"`
 	Selection                *ArtifactSelection     `json:"selection,omitempty"`
+}
+
+func (r *StepRevisionRequest) UnmarshalJSON(data []byte) error {
+	idempotencyKey := r.IdempotencyKey
+	type stepRevisionRequestAlias StepRevisionRequest
+	var decoded stepRevisionRequestAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	allowed := map[string]bool{
+		"artifactId": true, "baseVersion": true, "mode": true, "runId": true, "reviewId": true,
+		"confirmedAffectedShotIds": true, "selection": true,
+	}
+	switch decoded.Mode {
+	case "direct":
+		allowed["directContent"] = true
+	case "instruction":
+		allowed["instruction"] = true
+		allowed["modelProviders"] = true
+	case "replace":
+		allowed["replacementMaterial"] = true
+	default:
+		// Impact preview uses the same wire model without a mutation mode.
+		if decoded.Mode == "" {
+			*r = StepRevisionRequest(decoded)
+			r.IdempotencyKey = idempotencyKey
+			return nil
+		}
+	}
+	for field := range fields {
+		if !allowed[field] {
+			return fmt.Errorf("field %q is not allowed for %q revision mode", field, decoded.Mode)
+		}
+	}
+	*r = StepRevisionRequest(decoded)
+	r.IdempotencyKey = idempotencyKey
+	return nil
 }
 
 type StepRestoreRequest struct {
@@ -160,6 +267,23 @@ type StepMutationResult struct {
 	Artifact *artifact.Artifact `json:"artifact"`
 	Impact   StepImpact         `json:"impact"`
 	View     *CreationView      `json:"view"`
+}
+
+type StepRegenerationRequest struct {
+	BaseArtifactID           string          `json:"baseArtifactId,omitempty"`
+	BaseVersion              int             `json:"baseVersion,omitempty"`
+	Instruction              string          `json:"instruction,omitempty"`
+	RunID                    string          `json:"runId,omitempty"`
+	ReviewID                 string          `json:"reviewId,omitempty"`
+	ConfirmedAffectedStepIDs []CreatorStepID `json:"confirmedAffectedStepIds"`
+}
+
+type StepRegenerationResult struct {
+	RunID    string        `json:"runId"`
+	ReviewID string        `json:"reviewId"`
+	Attempt  int           `json:"attempt"`
+	Impact   StepImpact    `json:"impact"`
+	View     *CreationView `json:"view"`
 }
 
 type CreatorArtifactVersion struct {

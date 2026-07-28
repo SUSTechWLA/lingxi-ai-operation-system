@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getAuthAccessToken, refreshAuthSession, logout } from './auth'
+import { getAuthAccessToken, isDefinitiveAuthFailure, refreshAuthSession, logout } from './auth'
 import {
   ApiResponse,
   SkillCatalogResponse,
@@ -70,7 +70,7 @@ api.interceptors.response.use(
         return api(original)
       } catch (refreshError) {
         refreshPromise = null
-        logout()
+        if (isDefinitiveAuthFailure(refreshError)) logout()
         throw refreshError
       }
     }
@@ -125,8 +125,8 @@ export const instantiateWorkflow = async (
   return response.data.data
 }
 
-export const fetchVideoProjects = async (): Promise<VideoProjectListResponse> => {
-  const response = await api.get<ApiResponse<VideoProjectListResponse>>('/video-projects')
+export const fetchVideoProjects = async (signal?: AbortSignal): Promise<VideoProjectListResponse> => {
+  const response = await api.get<ApiResponse<VideoProjectListResponse>>('/video-projects', { signal })
   return response.data.data
 }
 
@@ -172,23 +172,37 @@ export const approveVideoStage = async (
 }
 
 export const fetchProjectArtifacts = async (
-  projectId: string
+  projectId: string,
+  signal?: AbortSignal,
 ): Promise<ArtifactListResponse> => {
-  const response = await api.get<ApiResponse<ArtifactListResponse>>(`/video-projects/${projectId}/artifacts`)
+  const response = await api.get<ApiResponse<ArtifactListResponse>>(`/video-projects/${projectId}/artifacts`, { signal })
+  return response.data.data
+}
+
+export const fetchProjectArtifactRegistry = async (
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ArtifactListResponse> => {
+  const response = await api.get<ApiResponse<ArtifactListResponse>>(`/video-projects/${projectId}/artifacts`, {
+    params: { includeHistory: true },
+    signal,
+  })
   return response.data.data
 }
 
 export const fetchArtifactContent = async (
-  artifactId: string
+  artifactId: string,
+  signal?: AbortSignal,
 ): Promise<ArtifactContentResponse> => {
-  const response = await api.get<ApiResponse<ArtifactContentResponse>>(`/artifacts/${artifactId}/content`)
+  const response = await api.get<ApiResponse<ArtifactContentResponse>>(`/artifacts/${artifactId}/content`, { signal })
   return response.data.data
 }
 
 export const fetchArtifactHistory = async (
-  artifactId: string
+  artifactId: string,
+  signal?: AbortSignal,
 ): Promise<ArtifactHistoryResponse> => {
-  const response = await api.get<ApiResponse<ArtifactHistoryResponse>>(`/artifacts/${artifactId}/history`)
+  const response = await api.get<ApiResponse<ArtifactHistoryResponse>>(`/artifacts/${artifactId}/history`, { signal })
   return response.data.data
 }
 
@@ -253,23 +267,81 @@ export const startAgentRun = async (
 }
 
 export const getAgentRun = async (
-  runId: string
+  runId: string,
+  signal?: AbortSignal,
 ): Promise<AgentRun> => {
-  const response = await api.get<ApiResponse<{ run: AgentRun; task: unknown }>>(`/agent/runs/${runId}`)
+  const response = await api.get<ApiResponse<{ run: AgentRun; task: unknown }>>(`/agent/runs/${runId}`, { signal })
   return response.data.data.run
 }
 
+export async function getTaskDetails(taskId: string, signal?: AbortSignal): Promise<unknown> {
+  const response = await api.get<ApiResponse<unknown>>(`/task/${encodeURIComponent(taskId)}`, { signal })
+  return response.data.data
+}
+
+export async function getTaskContext(taskId: string, signal?: AbortSignal): Promise<unknown[]> {
+  const response = await api.get<ApiResponse<unknown[]>>(`/task/${encodeURIComponent(taskId)}/context`, { signal })
+  return Array.isArray(response.data.data) ? response.data.data : []
+}
+
+export interface FailedAgentNodeCandidate {
+  id: string
+  status: string
+  completedAt?: string | null
+}
+
+export interface RetryFailedAgentNodeResult {
+  taskId: string
+  nodeId: string
+}
+
+function completedAtTime(value?: string | null): number {
+  if (!value) return 0
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+export function selectLatestFailedAgentNode<T extends FailedAgentNodeCandidate>(
+  nodes: readonly T[],
+): T | undefined {
+  return nodes
+    .filter((node) => node.status === 'FAILED')
+    .slice()
+    .sort((left, right) => (
+      completedAtTime(right.completedAt) - completedAtTime(left.completedAt) ||
+      left.id.localeCompare(right.id)
+    ))[0]
+}
+
+export const retryLatestFailedAgentNode = async (
+  taskId: string,
+  expectedNodeId?: string,
+): Promise<RetryFailedAgentNodeResult> => {
+  const response = await api.get<ApiResponse<{
+    nodes?: Array<{ id: string; status: string; completedAt?: string | null }>
+  }>>(`/task/${encodeURIComponent(taskId)}`)
+  const failedNode = selectLatestFailedAgentNode(response.data.data.nodes ?? [])
+  if (!failedNode) throw new Error('没有可重试的失败步骤')
+  if (expectedNodeId && failedNode.id !== expectedNodeId) {
+    throw new Error(`最新失败节点已从 ${expectedNodeId} 变为 ${failedNode.id}，请刷新快照后确认`)
+  }
+  await api.post(`/node/${encodeURIComponent(failedNode.id)}/retry`)
+  return { taskId, nodeId: failedNode.id }
+}
+
 export const getAgentRunTrace = async (
-  runId: string
+  runId: string,
+  signal?: AbortSignal,
 ): Promise<unknown> => {
-  const response = await api.get<ApiResponse<unknown>>(`/agent/runs/${runId}/trace`)
+  const response = await api.get<ApiResponse<unknown>>(`/agent/runs/${runId}/trace`, { signal })
   return response.data.data
 }
 
 export const getAgentRunReviews = async (
-  runId: string
+  runId: string,
+  signal?: AbortSignal,
 ): Promise<AgentReviewListResponse> => {
-  const response = await api.get<ApiResponse<AgentReviewListResponse>>(`/agent/runs/${runId}/reviews`)
+  const response = await api.get<ApiResponse<AgentReviewListResponse>>(`/agent/runs/${runId}/reviews`, { signal })
   return response.data.data
 }
 

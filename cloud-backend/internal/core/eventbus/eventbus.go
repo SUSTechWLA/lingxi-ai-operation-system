@@ -2,12 +2,16 @@ package eventbus
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 
 	"github.com/IBM/sarama"
 	"go.uber.org/zap"
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
+	"github.com/tangying-ai/aios-core/internal/core/trustedcontext"
 )
 
 const (
@@ -30,8 +34,11 @@ type Event struct {
 	Payload        map[string]interface{} `json:"payload,omitempty"`
 	Output         map[string]interface{} `json:"output,omitempty"`
 	TraceID        string                 `json:"traceId,omitempty"`
+	SpanID         string                 `json:"spanId,omitempty"`
+	ParentSpanID   string                 `json:"parentSpanId,omitempty"`
 	IdempotencyKey string                 `json:"idempotencyKey,omitempty"`
 	ErrorMessage   string                 `json:"errorMessage,omitempty"`
+	OwnerUserID    string                 `json:"ownerUserId,omitempty"` // trusted internal transport metadata
 }
 
 type Producer struct {
@@ -77,11 +84,15 @@ func (p *Producer) Publish(topic, key string, event Event) error {
 	zap.L().Info("Event published", zap.String("topic", topic), zap.String("key", key))
 	return nil
 }
+
+func (p *Producer) PublishContext(ctx context.Context, topic, key string, event Event) error {
+	return p.Publish(topic, key, EnrichEventFromContext(ctx, event))
+}
 func (p *Producer) Close() error {
 	return p.producer.Close()
 }
 
-type HandlerFunc func(event Event) error
+type HandlerFunc func(context.Context, Event) error
 
 type Consumer struct {
 	consumer sarama.ConsumerGroup
@@ -157,7 +168,7 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 		}
 		event.Topic = msg.Topic
 
-		if err := h.handlerFn(event); err != nil {
+		if err := h.handleEvent(event); err != nil {
 			zap.L().Error("Failed to handle event",
 				zap.String("topic", msg.Topic),
 				zap.Error(err),
@@ -167,4 +178,49 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 		session.MarkMessage(msg, "")
 	}
 	return nil
+}
+
+func (h *consumerGroupHandler) handleEvent(event Event) error {
+	correlation := observability.Correlation{
+		TraceID:      event.TraceID,
+		SpanID:       newSpanID(),
+		ParentSpanID: event.SpanID,
+	}
+	ctx := observability.WithCorrelation(context.Background(), correlation)
+	if event.OwnerUserID != "" {
+		ctx = trustedcontext.WithUserID(ctx, event.OwnerUserID)
+	}
+	return h.handlerFn(ctx, event)
+}
+
+// EnrichEventFromContext snapshots trusted internal ownership and correlation
+// before an event crosses either the direct Kafka or transactional outbox boundary.
+func EnrichEventFromContext(ctx context.Context, event Event) Event {
+	correlation := observability.CorrelationFromContext(ctx)
+	if correlation.TraceID != "" {
+		event.TraceID = correlation.TraceID
+	}
+	if correlation.SpanID != "" {
+		event.SpanID = correlation.SpanID
+	}
+	if correlation.ParentSpanID != "" {
+		event.ParentSpanID = correlation.ParentSpanID
+	}
+	if event.OwnerUserID == "" {
+		event.OwnerUserID, _ = trustedcontext.UserID(ctx)
+	}
+	return event
+}
+
+func newSpanID() string {
+	for {
+		data := make([]byte, 8)
+		if _, err := rand.Read(data); err != nil {
+			panic("crypto/rand unavailable: " + err.Error())
+		}
+		value := hex.EncodeToString(data)
+		if value != "0000000000000000" {
+			return value
+		}
+	}
 }

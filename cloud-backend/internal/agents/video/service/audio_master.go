@@ -14,18 +14,23 @@ import (
 const defaultAudioSampleRate = 48000
 
 type AudioMasterRequest struct {
-	ScriptRevision       string
-	VoiceRevision        string
-	Language             string
-	TimelineSource       model.TimelineSource
-	VoiceoverArtifactRef string
-	VoiceProfileID       string
-	VoiceProfileVersion  string
-	SampleRate           int
-	Provider             string
-	Model                string
-	ToolVersion          string
-	ScriptSpans          []model.ScriptSpan
+	ScriptRevision          string
+	VoiceRevision           string
+	VoiceMode               string
+	Language                string
+	TimelineSource          model.TimelineSource
+	VoiceoverArtifactRef    string
+	VoiceProfileID          string
+	VoiceProfileVersion     string
+	ReferenceContentHash    string
+	ReferenceTranscriptHash string
+	SynthesisSettingsHash   string
+	MasteredOutputHash      string
+	SampleRate              int
+	Provider                string
+	Model                   string
+	ToolVersion             string
+	ScriptSpans             []model.ScriptSpan
 }
 
 func MillisecondsFromSeconds(seconds float64) int64 {
@@ -83,33 +88,43 @@ func BuildAudioMasterTimeline(req AudioMasterRequest) (model.AudioMasterTimeline
 	}
 
 	fingerprintInput := struct {
-		SchemaVersion        int                  `json:"schemaVersion"`
-		ScriptRevision       string               `json:"scriptRevision"`
-		VoiceRevision        string               `json:"voiceRevision"`
-		Language             string               `json:"language"`
-		TimelineSource       model.TimelineSource `json:"timelineSource"`
-		VoiceoverArtifactRef string               `json:"voiceoverArtifactRef,omitempty"`
-		VoiceProfileID       string               `json:"voiceProfileId,omitempty"`
-		VoiceProfileVersion  string               `json:"voiceProfileVersion,omitempty"`
-		SampleRate           int                  `json:"sampleRate"`
-		Provider             string               `json:"provider,omitempty"`
-		Model                string               `json:"model,omitempty"`
-		ToolVersion          string               `json:"toolVersion,omitempty"`
-		ScriptSpans          []model.ScriptSpan   `json:"scriptSpans"`
+		SchemaVersion           int                  `json:"schemaVersion"`
+		ScriptRevision          string               `json:"scriptRevision"`
+		VoiceRevision           string               `json:"voiceRevision"`
+		VoiceMode               string               `json:"voiceMode,omitempty"`
+		Language                string               `json:"language"`
+		TimelineSource          model.TimelineSource `json:"timelineSource"`
+		VoiceoverArtifactRef    string               `json:"voiceoverArtifactRef,omitempty"`
+		VoiceProfileID          string               `json:"voiceProfileId,omitempty"`
+		VoiceProfileVersion     string               `json:"voiceProfileVersion,omitempty"`
+		ReferenceContentHash    string               `json:"referenceContentHash,omitempty"`
+		ReferenceTranscriptHash string               `json:"referenceTranscriptHash,omitempty"`
+		SynthesisSettingsHash   string               `json:"synthesisSettingsHash,omitempty"`
+		MasteredOutputHash      string               `json:"masteredOutputHash,omitempty"`
+		SampleRate              int                  `json:"sampleRate"`
+		Provider                string               `json:"provider,omitempty"`
+		Model                   string               `json:"model,omitempty"`
+		ToolVersion             string               `json:"toolVersion,omitempty"`
+		ScriptSpans             []model.ScriptSpan   `json:"scriptSpans"`
 	}{
-		SchemaVersion:        model.TalkingHeadSchemaVersion,
-		ScriptRevision:       req.ScriptRevision,
-		VoiceRevision:        req.VoiceRevision,
-		Language:             language,
-		TimelineSource:       source,
-		VoiceoverArtifactRef: req.VoiceoverArtifactRef,
-		VoiceProfileID:       req.VoiceProfileID,
-		VoiceProfileVersion:  req.VoiceProfileVersion,
-		SampleRate:           sampleRate,
-		Provider:             req.Provider,
-		Model:                req.Model,
-		ToolVersion:          req.ToolVersion,
-		ScriptSpans:          req.ScriptSpans,
+		SchemaVersion:           model.TalkingHeadSchemaVersion,
+		ScriptRevision:          req.ScriptRevision,
+		VoiceRevision:           req.VoiceRevision,
+		VoiceMode:               req.VoiceMode,
+		Language:                language,
+		TimelineSource:          source,
+		VoiceoverArtifactRef:    req.VoiceoverArtifactRef,
+		VoiceProfileID:          req.VoiceProfileID,
+		VoiceProfileVersion:     req.VoiceProfileVersion,
+		ReferenceContentHash:    req.ReferenceContentHash,
+		ReferenceTranscriptHash: req.ReferenceTranscriptHash,
+		SynthesisSettingsHash:   req.SynthesisSettingsHash,
+		MasteredOutputHash:      req.MasteredOutputHash,
+		SampleRate:              sampleRate,
+		Provider:                req.Provider,
+		Model:                   req.Model,
+		ToolVersion:             req.ToolVersion,
+		ScriptSpans:             req.ScriptSpans,
 	}
 	data, _ := json.Marshal(fingerprintInput)
 	sum := sha256.Sum256(data)

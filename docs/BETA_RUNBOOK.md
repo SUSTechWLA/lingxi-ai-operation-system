@@ -57,6 +57,11 @@ Important beta variables:
 | Variable | Purpose |
 |---|---|
 | `AUTH_TOKEN_SECRET` | Long random auth/encryption secret. Required to be strong in `GIN_MODE=release`. |
+| `OBSERVABILITY_SEALING_KEY` | Canonical `base64:` transport of 32-64 random HMAC key bytes for durable agent terminal events. Generate it once and keep it stable across process restarts. |
+| `OBSERVABILITY_SEALING_DOMAIN` | Stable sealing-domain identifier. Default: `cloud-agent-terminal-v1`. |
+| `OBSERVABILITY_SOURCE_ENVIRONMENT` | Explicit stable environment in the signed observability source identity. It does not inherit `GIN_MODE` or `APP_ENV`; one-click uses `production`. |
+| `OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS` | Temporary comma-separated allowlist for authenticated source-environment migration. It never permits service, component, domain, owner, row-binding, or HMAC changes. |
+| `OBSERVABILITY_SOURCE_MIGRATION_APPROVED` | Non-secret lineage audit marker. `none` requires an empty previous-source allowlist; `development->production` requires the exact `development` allowlist and explicit operator approval. |
 | `POSTGRES_PASSWORD` | Database password. Do not use defaults in release/production. |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | Object storage credentials. Do not use defaults in release/production. |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated frontend origins, for example `http://localhost:3000`. Must not be `*` in release/production. |
@@ -69,6 +74,132 @@ Important beta variables:
 | `TANGYING_DEVICE_ID` | Stable local runner device id. |
 
 Do not put real secrets in docs, tests, screenshots, or issue comments.
+
+Generate `OBSERVABILITY_SEALING_KEY` independently from the auth and storage
+credentials. Production accepts only strict, canonical `base64:` transport of
+32-64 non-repeating random bytes:
+
+```bash
+(printf 'base64:'; openssl rand -base64 32 | tr -d '\n'; printf '\n')
+```
+
+Plain text, hex text, repeated blocks, placeholders, whitespace, malformed
+base64, and out-of-range decoded lengths stop startup. The one-click installer
+creates `.env.one-click` as an owner-only `0600` file and verifies its owner and
+mode before use. An upgrade validates the complete input first, writes one
+owner-only temporary file in the same directory, verifies its owner and mode,
+and installs it with one atomic rename. Invalid keys, domains,
+sources, lineage markers, duplicate variables, or unsupported carriage returns
+leave the original file bytes unchanged. It preserves a valid existing sealing
+key byte-for-byte. An invalid or missing key in an existing file stops the
+installer; it is never silently rotated or printed.
+
+### Signed source migration
+
+`GIN_MODE` and `APP_ENV` control runtime validation only. They no longer define
+the signed observability source identity. Set
+`OBSERVABILITY_SOURCE_ENVIRONMENT` explicitly and keep it stable while terminal
+outbox rows are pending. A fresh one-click environment uses `production` and no
+previous-source allowlist:
+
+```dotenv
+OBSERVABILITY_SOURCE_ENVIRONMENT=production
+OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=
+OBSERVABILITY_SOURCE_MIGRATION_APPROVED=none
+```
+
+The pre-upgrade one-click deployment signed terminal envelopes as `development`
+because it had neither `GIN_MODE` nor `APP_ENV`. File existence, key format,
+permissions, and timestamps do not prove that lineage. The installer therefore
+does not enable the bridge for an existing file by default. To upgrade a real
+development-signing deployment, make the approval explicit:
+
+```bash
+bash scripts/one-click-deploy.sh up \
+  --migrate-observability-source-from development
+```
+
+`development` is the only accepted migration source. Missing, unknown, or
+duplicate source options stop before the environment is changed. The successful
+command also requires the existing environment with its exact historical
+sealing key; a missing file stops instead of generating a new, incompatible
+key. It records a non-secret audit message and persists the exact pair:
+
+```dotenv
+OBSERVABILITY_SOURCE_ENVIRONMENT=production
+OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development
+OBSERVABILITY_SOURCE_MIGRATION_APPROVED=development->production
+```
+
+An environment created by the earlier automatic migration may already contain
+`OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=development` without the approval
+marker. That value is not accepted as proof. One-click stops without changing
+the file and asks for the same explicit command above. After approval, reruns
+reuse the persisted pair without widening it. A current production or unknown
+existing file with no migration marker receives the safe `none`/empty pair.
+
+The installer accepts LF or CRLF files and normalizes valid CRLF to LF only as
+part of the successful atomic replacement. Embedded carriage returns and any
+later validation failure leave the original bytes unchanged. During delivery,
+a legacy v1 digest or v2 HMAC envelope must first pass its original signature or
+digest, sealing domain where present, owner, trusted claimed-row binding, and
+the exact service and component identities. Only the explicitly allowlisted
+`development` environment can change. The backend then reseals the envelope as
+`production` and persists it with the run/event/claim CAS before invoking the
+callback. Claim loss or a failed CAS forbids the callback. Existing `production`
+v2 envelopes restore directly and are not rewritten; unlisted environments and
+changed service/component identities fail closed.
+
+Keep `development` allowlisted until the terminal outbox is drained. Stop new
+producers and confirm:
+
+```sql
+SELECT count(*)
+FROM agent_runs
+WHERE terminal_event_json IS NOT NULL
+  AND terminal_event_delivered_at IS NULL;
+```
+
+When the count is zero, set the lineage pair together:
+
+```dotenv
+OBSERVABILITY_PREVIOUS_SOURCE_ENVIRONMENTS=
+OBSERVABILITY_SOURCE_MIGRATION_APPROVED=none
+```
+
+Then restart all backend instances together. Leaving
+`development->production` paired with an empty allowlist, or leaving
+`development` paired with `none`, is rejected. For rollback, restore the exact
+prior key and domain. Do not roll back to a binary that signs only `development`
+while any newly resealed `production` envelope remains pending; drain first or
+keep the source-migration-capable binary in service until the count reaches
+zero.
+
+For an upgrade from the prior plain/hex transport, re-encode the exact previous
+key text as bytes without changing those HMAC bytes:
+
+```bash
+old_key='<exact previous OBSERVABILITY_SEALING_KEY value>'
+printf 'base64:'
+printf '%s' "$old_key" | openssl base64 -A
+printf '\n'
+```
+
+Before an intentional key/domain rotation, stop producers and drain pending
+terminal rows. Confirm the drain with:
+
+```sql
+SELECT count(*)
+FROM agent_runs
+WHERE terminal_event_json IS NOT NULL
+  AND terminal_event_delivered_at IS NULL;
+```
+
+Rotate only when the count is zero, then restart all backend instances with the
+same new value. If pending delivery reports a signature mismatch, stop the new
+deployment and restore the exact previous key/domain. For a binary rollback to
+the prior release, also restore that release's exact prior textual key value;
+keep both binary and secret rollback material until the outbox is fully drained.
 
 ## Start Cloud Backend
 
@@ -85,7 +216,7 @@ cd cloud-backend
 GIN_MODE=release go run ./cmd/tangying-ai-os
 ```
 
-Release mode will reject weak auth/database/MinIO secrets, wildcard CORS, disabled sandbox, and sandbox fallback.
+Release mode will reject weak auth/database/MinIO/sealing secrets, wildcard CORS, disabled sandbox, and sandbox fallback. The Compose one-click backend sets `GIN_MODE=release` and `APP_ENV=production` explicitly, so omitting one variable cannot bypass production validation.
 
 ## Start Local Backend / Local Agent
 

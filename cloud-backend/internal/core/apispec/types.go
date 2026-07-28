@@ -165,6 +165,10 @@ type Schema struct {
 	Enum                 []any                 `json:"enum,omitempty"`
 	Minimum              *float64              `json:"minimum,omitempty"`
 	Maximum              *float64              `json:"maximum,omitempty"`
+	MinLength            *int                  `json:"minLength,omitempty"`
+	MaxLength            *int                  `json:"maxLength,omitempty"`
+	MinItems             *int                  `json:"minItems,omitempty"`
+	MaxItems             *int                  `json:"maxItems,omitempty"`
 	Pattern              string                `json:"pattern,omitempty"`
 	Default              any                   `json:"default,omitempty"`
 	Nullable             bool                  `json:"nullable,omitempty"`

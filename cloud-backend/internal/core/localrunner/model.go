@@ -109,38 +109,43 @@ type LocalArtifactPolicy struct {
 
 // LocalJob represents a task dispatched to a local runner.
 type LocalJob struct {
-	ID                    string                 `json:"jobId"`
-	RunnerID              string                 `json:"runnerId,omitempty"`
-	UserID                string                 `json:"userId,omitempty"`
-	TargetRunnerID        string                 `json:"targetRunnerId,omitempty"`
-	CatalogRevision       string                 `json:"catalogRevision,omitempty"`
-	MCPProviderID         string                 `json:"mcpProviderId,omitempty"`
-	MCPLogicalToolName    string                 `json:"mcpLogicalToolName,omitempty"`
-	MCPRemoteToolName     string                 `json:"mcpRemoteToolName,omitempty"`
-	ProjectID             string                 `json:"projectId"`
-	TaskID                string                 `json:"taskId,omitempty"`
-	NodeID                string                 `json:"nodeId,omitempty"`
-	ToolName              string                 `json:"toolName,omitempty"`
-	Command               string                 `json:"command"`
-	Payload               map[string]interface{} `json:"payload"`
-	Status                JobStatus              `json:"status,omitempty"`
-	Progress              float64                `json:"progress,omitempty"`
-	CurrentStep           string                 `json:"currentStep,omitempty"`
-	Message               string                 `json:"message,omitempty"`
-	Output                map[string]interface{} `json:"output,omitempty"`
-	Error                 map[string]interface{} `json:"error,omitempty"`
-	ErrorMessage          string                 `json:"errorMessage,omitempty"`
-	Diagnostics           map[string]interface{} `json:"diagnostics,omitempty"`
-	Retryable             bool                   `json:"retryable,omitempty"`
-	TimeoutSec            int                    `json:"timeoutSec,omitempty"`
-	ArtifactPolicy        LocalArtifactPolicy    `json:"artifactPolicy,omitempty"`
-	IdempotencyKey        string                 `json:"idempotencyKey,omitempty"`
-	Attempt               int                    `json:"attempt,omitempty"`
-	ResultCallbackState   CallbackState          `json:"resultCallbackState,omitempty"`
-	FollowupCallbackState CallbackState          `json:"followupCallbackState,omitempty"`
-	LeaseExpiresAt        *time.Time             `json:"leaseExpiresAt,omitempty"`
-	CreatedAt             time.Time              `json:"createdAt,omitempty"`
-	UpdatedAt             time.Time              `json:"updatedAt,omitempty"`
+	ID                         string                 `json:"jobId"`
+	RunnerID                   string                 `json:"runnerId,omitempty"`
+	UserID                     string                 `json:"userId,omitempty"`
+	TargetRunnerID             string                 `json:"targetRunnerId,omitempty"`
+	CatalogRevision            string                 `json:"catalogRevision,omitempty"`
+	MCPProviderID              string                 `json:"mcpProviderId,omitempty"`
+	MCPLogicalToolName         string                 `json:"mcpLogicalToolName,omitempty"`
+	MCPRemoteToolName          string                 `json:"mcpRemoteToolName,omitempty"`
+	ProjectID                  string                 `json:"projectId"`
+	TaskID                     string                 `json:"taskId,omitempty"`
+	NodeID                     string                 `json:"nodeId,omitempty"`
+	ToolName                   string                 `json:"toolName,omitempty"`
+	Command                    string                 `json:"command"`
+	Payload                    map[string]interface{} `json:"payload"`
+	Status                     JobStatus              `json:"status,omitempty"`
+	Progress                   float64                `json:"progress,omitempty"`
+	CurrentStep                string                 `json:"currentStep,omitempty"`
+	Message                    string                 `json:"message,omitempty"`
+	Output                     map[string]interface{} `json:"output,omitempty"`
+	Error                      map[string]interface{} `json:"error,omitempty"`
+	ErrorMessage               string                 `json:"errorMessage,omitempty"`
+	Diagnostics                map[string]interface{} `json:"diagnostics,omitempty"`
+	Retryable                  bool                   `json:"retryable,omitempty"`
+	TimeoutSec                 int                    `json:"timeoutSec,omitempty"`
+	ArtifactPolicy             LocalArtifactPolicy    `json:"artifactPolicy,omitempty"`
+	IdempotencyKey             string                 `json:"idempotencyKey,omitempty"`
+	Attempt                    int                    `json:"attempt,omitempty"`
+	TraceID                    string                 `json:"-"`
+	SpanID                     string                 `json:"-"`
+	ParentSpanID               string                 `json:"-"`
+	ResultCallbackState        CallbackState          `json:"resultCallbackState,omitempty"`
+	FollowupCallbackState      CallbackState          `json:"followupCallbackState,omitempty"`
+	ObservabilityCallbackState CallbackState          `json:"-"`
+	LeaseExpiresAt             *time.Time             `json:"leaseExpiresAt,omitempty"`
+	CompletedAt                *time.Time             `json:"completedAt,omitempty"`
+	CreatedAt                  time.Time              `json:"createdAt,omitempty"`
+	UpdatedAt                  time.Time              `json:"updatedAt,omitempty"`
 }
 
 type RegisterRunnerRequest struct {
@@ -228,6 +233,9 @@ type DispatchLocalJobRequest struct {
 	TimeoutSec         int                    `json:"timeoutSec,omitempty"`
 	ArtifactPolicy     LocalArtifactPolicy    `json:"artifactPolicy,omitempty"`
 	IdempotencyKey     string                 `json:"idempotencyKey,omitempty"`
+	TraceID            string                 `json:"-"`
+	SpanID             string                 `json:"-"`
+	ParentSpanID       string                 `json:"-"`
 }
 
 // Local command constants — single source of truth for all local job commands.

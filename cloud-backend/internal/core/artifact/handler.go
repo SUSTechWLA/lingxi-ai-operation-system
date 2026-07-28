@@ -2,8 +2,10 @@ package artifact
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -36,6 +38,7 @@ type handlerArtifactStore interface {
 	revisionArtifactStore
 	GetHistory(context.Context, string, string, string) ([]*Artifact, error)
 	ListByProject(context.Context, string) ([]*Artifact, error)
+	ListAllVersionsByProject(context.Context, string) ([]*Artifact, error)
 }
 
 // ProjectAccessChecker resolves project ownership without coupling the core
@@ -65,7 +68,7 @@ func NewHandler(service *Service, runRepo *workflow.RunRepository, nodeRepo mode
 func newHandlerForStore(service handlerArtifactStore, runRepo *workflow.RunRepository, nodeRepo modelRepo.NodeRepo) *Handler {
 	handler := &Handler{service: service, runRepo: runRepo, nodeRepo: nodeRepo}
 	handler.revisions = NewRevisionService(service)
-	handler.revisions.SetContentResolver(handler.hydrateLocalTextArtifactContent)
+	handler.revisions.SetContentResolver(handler.hydrateLocalReviewArtifactContent)
 	return handler
 }
 
@@ -111,7 +114,7 @@ func (h *Handler) ListProjectArtifacts(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		return
 	}
-	artifacts, err := h.service.ListByProject(c.Request.Context(), projectID)
+	artifacts, err := listArtifactsByProject(c.Request.Context(), h.service, projectID, c.Query("includeHistory") == "true")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		return
@@ -120,6 +123,16 @@ func (h *Handler) ListProjectArtifacts(c *gin.Context) {
 		artifacts = []*Artifact{}
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": gin.H{"artifacts": artifacts}})
+}
+
+// ReconcileProjectArtifacts materializes reviewable artifacts that still live
+// only in successful workflow-node output. It is idempotent and is used by the
+// creator view so historical projects repair themselves before being displayed.
+func (h *Handler) ReconcileProjectArtifacts(ctx context.Context, projectID string) error {
+	if h == nil || h.service == nil || h.runRepo == nil || h.nodeRepo == nil {
+		return nil
+	}
+	return h.materializeProject(ctx, projectID)
 }
 
 func (h *Handler) GetArtifact(c *gin.Context) {
@@ -136,18 +149,43 @@ func (h *Handler) GetArtifactContent(c *gin.Context) {
 		return
 	}
 	content, mediaURL, mediaURLs := artifactContent(artifact)
-	if hydrated, ok := h.hydrateLocalTextArtifactContent(c.Request.Context(), artifact); ok {
-		content = string(hydrated)
-		mediaURLs = mediaURLsFromString(string(hydrated))
-		mediaURL = firstMediaURL(mediaURLs)
-	}
-	mediaURLs = normalizeMediaURLs(mediaURLs)
-	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": gin.H{
+	data := gin.H{
 		"artifact":  artifact,
 		"content":   content,
 		"mediaUrl":  mediaURL,
 		"mediaUrls": mediaURLs,
-	}})
+	}
+	if reviewText, err := h.ResolveReviewableText(c.Request.Context(), artifact); err == nil {
+		data["reviewText"] = reviewText
+		reviewTextHash := sha256.Sum256([]byte(reviewText))
+		data["reviewTextSourceHash"] = fmt.Sprintf("sha256:%x", reviewTextHash)
+		if artifact.StorageType == StorageLocal {
+			content = reviewText
+			mediaURLs = mediaURLsFromString(reviewText)
+			data["content"] = content
+			data["mediaUrls"] = mediaURLs
+		}
+		mediaURL = firstMediaURL(mediaURLs)
+		data["mediaUrl"] = mediaURL
+	}
+	mediaURLs = normalizeMediaURLs(mediaURLs)
+	data["mediaUrls"] = mediaURLs
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": data})
+}
+
+// ResolveReviewableText returns the canonical source string used by both
+// artifact review responses and conflict-safe creator text selections.
+func (h *Handler) ResolveReviewableText(ctx context.Context, item *Artifact) (string, error) {
+	if item == nil {
+		return "", ErrRevisionContentUnavailable
+	}
+	if item.InlineJSON != "" || item.StorageType == StorageInline {
+		return item.InlineJSON, nil
+	}
+	if hydrated, ok := h.hydrateLocalReviewArtifactContent(ctx, item); ok {
+		return string(hydrated), nil
+	}
+	return "", ErrRevisionContentUnavailable
 }
 
 func (h *Handler) GetArtifactHistory(c *gin.Context) {
@@ -236,6 +274,9 @@ func (h *Handler) authorizeProject(c *gin.Context, projectID string) bool {
 }
 
 func (h *Handler) materializeProject(ctx context.Context, projectID string) error {
+	if h.runRepo == nil || h.nodeRepo == nil {
+		return nil
+	}
 	seenTaskIDs := map[string]bool{}
 	runs, err := h.runRepo.FindByProject(ctx, projectID)
 	if err != nil {
@@ -333,8 +374,8 @@ func taskProjectID(task *model.Task) string {
 	return ""
 }
 
-func (h *Handler) hydrateLocalTextArtifactContent(ctx context.Context, artifact *Artifact) ([]byte, bool) {
-	if !shouldHydrateLocalTextArtifact(artifact) || h.runRepo == nil || h.nodeRepo == nil {
+func (h *Handler) hydrateLocalReviewArtifactContent(ctx context.Context, artifact *Artifact) ([]byte, bool) {
+	if !shouldHydrateLocalReviewArtifact(artifact) || h.runRepo == nil || h.nodeRepo == nil {
 		return nil, false
 	}
 	taskID := strings.TrimSpace(artifact.TaskID)
@@ -360,7 +401,7 @@ func (h *Handler) hydrateLocalTextArtifactContent(ctx context.Context, artifact 
 	return nil, false
 }
 
-func shouldHydrateLocalTextArtifact(artifact *Artifact) bool {
+func shouldHydrateLocalReviewArtifact(artifact *Artifact) bool {
 	if artifact == nil || artifact.StorageType != StorageLocal {
 		return false
 	}
@@ -370,7 +411,12 @@ func shouldHydrateLocalTextArtifact(artifact *Artifact) bool {
 	if strings.TrimSpace(artifact.InlineJSON) != "" {
 		return false
 	}
-	return artifact.Kind == KindMarkdown || strings.HasPrefix(artifact.MimeType, "text/")
+	mimeType := strings.ToLower(strings.TrimSpace(artifact.MimeType))
+	return artifact.Kind == KindMarkdown ||
+		strings.HasPrefix(mimeType, "text/") ||
+		mimeType == "application/json" ||
+		strings.HasSuffix(mimeType, "+json") ||
+		isStructuredJSONArtifactKind(artifact.Kind)
 }
 
 func contentFromMatchingNodeArtifact(projectID, workflowRunID string, artifact *Artifact, node *model.Node) ([]byte, bool) {
@@ -385,7 +431,7 @@ func contentFromMatchingNodeArtifact(projectID, workflowRunID string, artifact *
 		return nil, false
 	}
 	for _, req := range requests {
-		if exactArtifactRequestMatch(artifact, req) && len(req.Data) > 0 {
+		if exactArtifactRequestMatch(artifact, req) && req.Data != nil {
 			return req.Data, true
 		}
 	}

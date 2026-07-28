@@ -1,9 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import AuthScreen from './components/AuthScreen'
-import { fetchCurrentUser, getStoredAuthSession, logout, type AuthUser } from './services/auth'
+import { fetchCurrentUser, getStoredAuthSession, isDefinitiveAuthFailure, logout, type AuthUser } from './services/auth'
 import { fetchLocalAgentHealth } from './services/localAgent'
 import CreatorShell from './features/creator-studio/CreatorShell'
-import { parseAppRoute, replaceHashRoute, type AppRoute } from './creatorRoutes'
+import { parseAppRoute, replaceHashRoute, type AppRoute, type DeveloperDiagnosticsView } from './creatorRoutes'
 
 const developerConsoleEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEVELOPER_CONSOLE === '1'
 const DeveloperConsolePage = developerConsoleEnabled ? lazy(() => import('./features/developer-console/DeveloperConsolePage')) : null
@@ -15,6 +15,10 @@ function currentRoute(): AppRoute {
 function replaceCreatorHash() {
   const nextHash = replaceHashRoute('#/create')
   if (window.location.hash !== nextHash) window.history.replaceState(null, '', nextHash)
+}
+
+function developerHash(view: DeveloperDiagnosticsView) {
+  return `#/developer/${view}`
 }
 
 function App() {
@@ -35,15 +39,20 @@ function App() {
 
   useEffect(() => {
     const restoreSession = async () => {
-      if (!getStoredAuthSession()) {
+      const storedSession = getStoredAuthSession()
+      if (!storedSession) {
         setAuthChecking(false)
         return
       }
       try {
         const user = await fetchCurrentUser()
         setAuthUser(user)
-      } catch {
-        logout()
+      } catch (error) {
+        if (isDefinitiveAuthFailure(error)) {
+          logout()
+        } else {
+          setAuthUser(storedSession.user)
+        }
       } finally {
         setAuthChecking(false)
       }
@@ -97,7 +106,7 @@ function App() {
           user={authUser}
           serviceStatus={serviceStatus}
           currentView={route.view}
-          onViewChange={(view) => { window.location.hash = `#/developer/${view}` }}
+          onViewChange={(view) => { window.location.hash = developerHash(view) }}
           onLogout={handleLogout}
         />
       </Suspense>

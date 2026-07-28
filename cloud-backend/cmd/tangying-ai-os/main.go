@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -36,6 +37,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/model/repository"
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/fake"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	orchestratorHandler "github.com/tangying-ai/aios-core/internal/core/orchestrator/handler"
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 	"github.com/tangying-ai/aios-core/internal/core/outbox"
@@ -61,9 +63,8 @@ import (
 )
 
 func main() {
-	mode := "development"
-	if os.Getenv("GIN_MODE") == "release" {
-		mode = "production"
+	mode := runtimeMode(os.Getenv("GIN_MODE"), os.Getenv("APP_ENV"))
+	if mode == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
@@ -72,16 +73,37 @@ func main() {
 	if err := cfg.ValidateForMode(mode); err != nil {
 		zap.L().Fatal("Invalid runtime configuration", zap.Error(err))
 	}
+	observabilitySource, observabilitySealing, err := cloudObservabilitySourceIdentity(cfg.Observability)
+	if err != nil {
+		zap.L().Fatal("Invalid observability source identity configuration", zap.Error(err))
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var backgroundWorkers sync.WaitGroup
-
 	// Infrastructure
 	pool := database.NewPool(ctx, cfg.Postgres)
 	defer pool.Close()
 
 	database.RunMigrations(ctx, pool)
+	observabilityRepository := observability.NewRepository(pool)
+	observabilityEmitter, err := observability.NewPersistentEmitter(
+		observabilitySource,
+		cloudObservabilityRuntime(),
+		observability.NewCompositeSink(logger.NewEventSink(zap.L()), observability.NewRepositorySink(observabilityRepository)),
+		1024,
+		observabilitySealing,
+	)
+	if err != nil {
+		zap.L().Fatal("Invalid persistent observability configuration", zap.Error(err))
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		if err := observabilityEmitter.Close(closeCtx); err != nil {
+			zap.L().Error("Failed to close observability emitter", zap.Error(err))
+		}
+	}()
 
 	rdb := redisClient.NewClient(cfg.Redis)
 	defer rdb.Close()
@@ -155,7 +177,8 @@ func main() {
 		}
 	}
 
-	nodeExecutor := workerService.NewNodeExecutor(toolRegistry, producer, cfg.Worker, directExec, sandboxExec, nodeRepo)
+	nodeExecutor := workerService.NewNodeExecutor(toolRegistry, producer, cfg.Worker, directExec, sandboxExec, nodeRepo).
+		WithObservability(observabilityEmitter.ForComponent(observability.ComponentWorker))
 	nodeExecutor.SetLocalJobDispatcher(localRunnerService)
 
 	// Publish
@@ -188,13 +211,14 @@ func main() {
 		zap.Int("roleAgents", len(videoDirectorRegistry.List())))
 
 	// Translator — uses toolManifestSvc to inject available tool list into LLM prompt
-	nlService := translatorSvc.NewNlToDagService(serverModelConfig, cfg.Services.OrchestratorURL, toolManifestSvc)
+	nlService := translatorSvc.NewNlToDagService(serverModelConfig, cfg.Services.OrchestratorURL, toolManifestSvc).
+		WithObservability(observabilityEmitter.ForComponent(observability.ComponentTranslator))
 
 	// Kafka consumers
 	workerConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-worker-group",
 		[]string{eventbus.TopicNodeReady},
-		func(event eventbus.Event) error {
-			go nodeExecutor.ExecuteNode(ctx, event)
+		func(eventCtx context.Context, event eventbus.Event) error {
+			go nodeExecutor.ExecuteNode(eventCtx, event)
 			return nil
 		},
 	)
@@ -203,19 +227,19 @@ func main() {
 
 	orchestratorConsumer := eventbus.NewConsumer(cfg.Kafka, "orchestrator-group",
 		[]string{eventbus.TopicNodeResult},
-		func(event eventbus.Event) error {
+		func(eventCtx context.Context, event eventbus.Event) error {
 			switch event.Status {
 			case "RUNNING":
-				if _, err := stateService.TransitionNode(ctx, event.NodeID, model.NodeRunning, nil, ""); err != nil {
+				if _, err := stateService.TransitionNode(eventCtx, event.NodeID, model.NodeRunning, nil, ""); err != nil {
 					zap.L().Error("Failed to set node RUNNING", zap.Error(err))
 				}
 			case "SUCCESS":
-				if err := stateMachine.OnSuccess(ctx, event.NodeID, event.Output); err != nil {
+				if err := stateMachine.OnSuccess(eventCtx, event.NodeID, event.Output); err != nil {
 					zap.L().Error("Failed to handle node success", zap.Error(err))
 				}
-				dependencyChecker.OnNodeExecuted(ctx, event.NodeID, event.TaskID)
+				dependencyChecker.OnNodeExecuted(eventCtx, event.NodeID, event.TaskID)
 			case "FAILED":
-				if err := stateMachine.OnFailure(ctx, event.NodeID, event.ErrorMessage); err != nil {
+				if err := stateMachine.OnFailure(eventCtx, event.NodeID, event.ErrorMessage); err != nil {
 					zap.L().Error("Failed to handle node failure", zap.Error(err))
 				}
 			}
@@ -228,11 +252,11 @@ func main() {
 	// Progress consumer — handles heartbeat and progress events from long-running nodes
 	progressConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-progress-group",
 		[]string{eventbus.TopicProgress},
-		func(event eventbus.Event) error {
+		func(eventCtx context.Context, event eventbus.Event) error {
 			switch event.Status {
 			case "HEARTBEAT":
 				// Update heartbeat timestamp in DB
-				if err := nodeRepo.UpdateHeartbeat(ctx, event.NodeID, -1, ""); err != nil {
+				if err := nodeRepo.UpdateHeartbeat(eventCtx, event.NodeID, -1, ""); err != nil {
 					zap.L().Error("Failed to update heartbeat", zap.Error(err))
 				}
 			case "PROGRESS":
@@ -247,7 +271,7 @@ func main() {
 						step = s
 					}
 				}
-				if err := nodeRepo.UpdateHeartbeat(ctx, event.NodeID, progress, step); err != nil {
+				if err := nodeRepo.UpdateHeartbeat(eventCtx, event.NodeID, progress, step); err != nil {
 					zap.L().Error("Failed to update progress", zap.Error(err))
 				}
 				// Also record context for auditing
@@ -260,7 +284,7 @@ func main() {
 						Message:      fmt.Sprintf("Progress: %.0f%% — %s", progress*100, step),
 						Metadata:     map[string]interface{}{"progress": progress, "step": step},
 					}
-					_ = contextRepo.Save(ctx, c)
+					_ = contextRepo.Save(eventCtx, c)
 				}
 			case "CHECKPOINT":
 				// Persist checkpoint data
@@ -278,7 +302,7 @@ func main() {
 						checkpointData = cp
 					}
 				}
-				if err := nodeRepo.UpdateHeartbeat(ctx, event.NodeID, progress, step); err != nil {
+				if err := nodeRepo.UpdateHeartbeat(eventCtx, event.NodeID, progress, step); err != nil {
 					zap.L().Error("Failed to update checkpoint heartbeat", zap.Error(err))
 				}
 				c := &model.Context{
@@ -290,7 +314,7 @@ func main() {
 					SnapshotData: checkpointData,
 					Metadata:     map[string]interface{}{"progress": progress, "step": step},
 				}
-				_ = contextRepo.Save(ctx, c)
+				_ = contextRepo.Save(eventCtx, c)
 				zap.L().Info("Checkpoint persisted",
 					zap.String("nodeId", event.NodeID),
 					zap.Float64("progress", progress),
@@ -304,8 +328,8 @@ func main() {
 
 	contextConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-context-group",
 		[]string{eventbus.TopicNodeResult, eventbus.TopicNodeFailed},
-		func(event eventbus.Event) error {
-			return contextService.HandleEvent(ctx, event)
+		func(eventCtx context.Context, event eventbus.Event) error {
+			return contextService.HandleEvent(eventCtx, event)
 		},
 	)
 	contextConsumer.Start()
@@ -316,13 +340,11 @@ func main() {
 	defer scheduler.Stop()
 
 	// HTTP server
-	r := gin.Default()
 	allowedCORSOrigins := configuredCORSOrigins(cfg.Server.CORSAllowedOrigins)
-
-	// CORS middleware
-	r.Use(corsMiddleware(allowedCORSOrigins))
+	r := newHTTPRouter(allowedCORSOrigins, observabilityEmitter)
 
 	auth.NewHandler(authService).RegisterRoutes(r)
+	observability.NewHandler(observabilityRepository).RegisterRoutes(r, requireAuth)
 	orchestratorHandler.NewOrchestratorHandler(orchestratorService, stateMachine, taskExecutionCtrl, contextService).RegisterRoutes(r, requireAuth)
 	health.NewHandler([]health.DependencyCheck{
 		{Name: "postgres", Check: pool.Ping},
@@ -335,7 +357,8 @@ func main() {
 	handler.NewContextHandler(contextService).RegisterRoutes(r, requireAuth)
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r, requireAuth)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r, requireAuth)
-	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, requireAuth)
+	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, requireAuth).
+		WithObservability(observabilityEmitter.ForComponent(observability.ComponentLocalRunner))
 	localRunnerHandler.WithToolManifestResolver(toolRegistry)
 	localRunnerHandler.RegisterRoutes(r)
 	// Preflight: check local capabilities before starting a video pipeline.
@@ -409,6 +432,10 @@ func main() {
 
 	agentPlanner := buildAgentPlanner(cfg, toolRegistry)
 	videoDirectorAdapter := &stageDirectorRegistry{videoDirectorRegistry}
+	agentObservability, err := observabilityEmitter.ForPersistentComponent(observability.ComponentAgentRuntime)
+	if err != nil {
+		zap.L().Fatal("Invalid agent observability configuration", zap.Error(err))
+	}
 	agentRunner := agentruntime.NewRunner(
 		orchestratorService,
 		agentRunRepo,
@@ -420,7 +447,11 @@ func main() {
 			return pc
 		}(),
 	).WithPlanJudge(videoPlanJudge.NewRuntimeJudge()).
+		WithObservability(agentObservability).
 		WithRequestToolResolver(agentruntime.NewLocalMCPRequestToolResolver(toolRegistry, localRunnerService))
+	if err := agentRunner.ValidateConfiguration(); err != nil {
+		zap.L().Fatal("Invalid agent runtime configuration", zap.Error(err))
+	}
 	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine).
 		WithRegenerationDispatcher(taskExecutionCtrl)
 	agentRuntimeHandler.RegisterRoutes(r, requireAuth)
@@ -503,14 +534,10 @@ func main() {
 			return failShotRegenerationFromAgentTerminal(ctx, videoCreationSvc, videoProjectRepo, event)
 		})
 		shotRegenerationReconciler := videoSvc.NewShotRegenerationReconciler(videoProjectRepo, videoCreationSvc, 5*time.Second, 50)
-		backgroundWorkers.Add(2)
+		backgroundWorkers.Add(1)
 		go func() {
 			defer backgroundWorkers.Done()
 			shotRegenerationReconciler.Run(ctx)
-		}()
-		go func() {
-			defer backgroundWorkers.Done()
-			agentRunner.RunTerminalDelivery(ctx, 5*time.Second, 50)
 		}()
 		videoHandler.NewCreationHandler(videoCreationSvc, requireAuth).RegisterRoutes(r)
 		videoAssistant.NewHandler(requireAuth).RegisterRoutes(r)
@@ -519,8 +546,10 @@ func main() {
 		workflowRunRepo := workflow.NewRunRepository(pool)
 		// Wire the state machine to sync node statuses to the workflow run's
 		// stage_statuses JSONB so the frontend progress panel shows live status.
-		stateMachine.SetStageStatusSyncer(&runStatusSyncer{runRepo: workflowRunRepo})
-		workflowRunSvc := workflow.NewRunService(workflowRepo, workflowRunRepo, orchestratorService)
+		workflowRunSvc := workflow.NewRunService(workflowRepo, workflowRunRepo, orchestratorService).
+			WithObservability(observabilityEmitter.ForComponent(observability.ComponentWorkflow)).
+			WithToolRegistrySnapshotProvider(workflowToolSnapshotProvider{registry: toolRegistry})
+		stateMachine.SetStageStatusSyncer(&runStatusSyncer{service: workflowRunSvc, resolver: workflowRunRepo})
 		stageApprovalSvc := workflow.NewStageApprovalService(workflowRunRepo, nodeRepo, stateMachine)
 
 		// Checkpoint store and service — persists stage boundaries for recovery.
@@ -530,7 +559,7 @@ func main() {
 		_ = workflow.EnsureCheckpointSchema(ctx, pool)
 
 		// Decision log store — audit trail for every approval, rejection, and pipeline decision.
-		decisionLogStore := workflow.NewDecisionLogStore(pool)
+		decisionLogStore := workflow.NewDecisionLogStoreWithResolver(pool, workflowRunRepo)
 		_ = workflow.EnsureDecisionLogSchema(ctx, pool)
 
 		// Wire decision log into the agent runtime handler so approve/reject
@@ -577,7 +606,15 @@ func main() {
 			return content, nil
 		})
 		creatorViewSvc := videoSvc.NewCreatorViewService(videoProjectSvc, videoCreationSvc, artifactSvc).
-			WithStepMutations(artifactHandler.RevisionService(), agentRuntimeHandler.ReviewMutations())
+			WithStepMutations(artifactHandler.RevisionService(), agentRuntimeHandler.ReviewMutations()).
+			WithArtifactReconciler(artifactHandler).
+			WithProcessAudit(func(ctx context.Context, runID string) (*videoSvc.CreatorRunAudit, error) {
+				run, err := agentRunRepo.FindRun(ctx, runID)
+				if err != nil || run == nil {
+					return nil, err
+				}
+				return &videoSvc.CreatorRunAudit{ID: run.ID, TaskID: run.TaskID, UserID: run.UserID}, nil
+			}, nodeRepo)
 		videoHandler.NewCreatorViewHandler(videoProjectSvc, creatorViewSvc, requireAuth).RegisterRoutes(r)
 		artifactHandler.RegisterRoutes(r, requireAuth)
 
@@ -631,6 +668,12 @@ func main() {
 		zap.L().Info("Video project and watch workflow run services registered")
 	}
 
+	backgroundWorkers.Add(1)
+	go func() {
+		defer backgroundWorkers.Done()
+		agentRunner.RunTerminalDelivery(ctx, 5*time.Second, 50)
+	}()
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler: r,
@@ -665,6 +708,99 @@ func main() {
 	zap.L().Info("Server exited")
 }
 
+func runtimeMode(ginMode, appEnv string) string {
+	for _, value := range []string{ginMode, appEnv} {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "release", "production", "prod":
+			return "production"
+		}
+	}
+	return "development"
+}
+
+func cloudObservabilitySourceIdentity(cfg config.ObservabilityConfig) (
+	observability.Source,
+	observability.PersistentSealingConfig,
+	error,
+) {
+	environment, previous, err := cfg.SourceIdentity()
+	if err != nil {
+		return observability.Source{}, observability.PersistentSealingConfig{}, err
+	}
+	return observability.Source{
+			Service: "cloud-backend", Component: "http-server", Environment: environment,
+		}, observability.PersistentSealingConfig{
+			Domain: cfg.SealingDomain, Key: cfg.SealingKey, PreviousSourceEnvironments: previous,
+		}, nil
+}
+
+var (
+	buildAppVersion = "0.2.1"
+	buildGitCommit  string
+)
+
+func cloudObservabilityRuntime() observability.Runtime {
+	appVersion := strings.TrimSpace(os.Getenv("APP_VERSION"))
+	if appVersion == "" {
+		appVersion = strings.TrimSpace(buildAppVersion)
+	}
+	gitCommit := strings.TrimSpace(os.Getenv("GIT_COMMIT"))
+	if gitCommit == "" {
+		gitCommit = strings.TrimSpace(buildGitCommit)
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if appVersion == "" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			appVersion = info.Main.Version
+		}
+		if gitCommit == "" {
+			for _, setting := range info.Settings {
+				if setting.Key == "vcs.revision" {
+					gitCommit = strings.TrimSpace(setting.Value)
+					break
+				}
+			}
+		}
+	}
+	if appVersion == "" {
+		appVersion = "development"
+	}
+	return observability.Runtime{
+		AppVersion:            appVersion,
+		GitCommit:             gitCommit,
+		WorkflowVersion:       "cloud-workflow-v1",
+		PromptTemplateVersion: "translator-dag-v1",
+	}
+}
+
+type workflowToolSnapshotProvider struct {
+	registry interface {
+		ListManifests() []*tool.ToolManifest
+	}
+}
+
+func (p workflowToolSnapshotProvider) Snapshot(context.Context) (workflow.ToolRegistrySnapshot, error) {
+	if p.registry == nil {
+		return workflow.ToolRegistrySnapshot{}, fmt.Errorf("tool registry is required")
+	}
+	snapshot, err := agentruntime.BuildToolSnapshot(p.registry.ListManifests())
+	if err != nil {
+		return workflow.ToolRegistrySnapshot{}, err
+	}
+	return workflow.ToolRegistrySnapshot{
+		ID:            snapshot.ID,
+		SHA256:        snapshot.SHA256,
+		CanonicalJSON: append(json.RawMessage(nil), snapshot.CanonicalJSON...),
+	}, nil
+}
+
+func newHTTPRouter(allowedCORSOrigins []string, emitter *observability.Emitter) *gin.Engine {
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(corsMiddleware(allowedCORSOrigins))
+	router.Use(observability.Middleware(emitter))
+	return router
+}
+
 func buildAgentPlanner(cfg *config.Config, toolRegistry *tool.ToolRegistry) agentruntime.Planner {
 	maxTools := cfg.Agent.PlannerMaxTools
 	if maxTools <= 0 {
@@ -687,15 +823,20 @@ func buildAgentPlanner(cfg *config.Config, toolRegistry *tool.ToolRegistry) agen
 // StageStatusSyncer interface, keeping the run's stage_statuses JSONB in
 // sync with the DAG node state machine.
 type runStatusSyncer struct {
-	runRepo *workflow.RunRepository
+	service interface {
+		UpdateStageStatus(context.Context, string, string, workflow.StageStatus) error
+	}
+	resolver interface {
+		FindRunIDByTaskID(context.Context, string) (string, error)
+	}
 }
 
 func (s *runStatusSyncer) UpdateStageStatus(ctx context.Context, runID, stageName string, status string) error {
-	return s.runRepo.UpdateStageStatus(ctx, runID, stageName, workflow.StageStatus(status))
+	return s.service.UpdateStageStatus(ctx, runID, stageName, workflow.StageStatus(status))
 }
 
 func (s *runStatusSyncer) FindRunIDByTaskID(ctx context.Context, taskID string) (string, error) {
-	return s.runRepo.FindRunIDByTaskID(ctx, taskID)
+	return s.resolver.FindRunIDByTaskID(ctx, taskID)
 }
 
 // taskProjectIDResolver resolves a project ID from a task ID by looking up
@@ -1460,8 +1601,17 @@ func (r *stageDirectorRegistry) Get(stageName string) agentruntime.StageDirector
 }
 
 func (a *decisionLogAdapter) Save(ctx context.Context, r *agentruntime.DecisionLogRecord) error {
+	if r == nil {
+		return fmt.Errorf("decision record is required")
+	}
+	if strings.TrimSpace(r.TaskID) == "" {
+		return fmt.Errorf("decision taskId is required")
+	}
+	if a == nil || a.store == nil {
+		return fmt.Errorf("decision log store is required")
+	}
 	return a.store.Save(ctx, &workflow.DecisionLogRecord{
-		WorkflowRunID:  r.WorkflowRunID,
+		WorkflowRunID:  strings.TrimSpace(r.WorkflowRunID),
 		TaskID:         r.TaskID,
 		StageName:      r.StageName,
 		DecisionType:   r.DecisionType,

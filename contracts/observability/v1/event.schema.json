@@ -1,0 +1,273 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tangying.ai/contracts/observability/v1/event.schema.json",
+  "title": "Tangying observability event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "occurredAt",
+    "ingestedAt",
+    "producerSequence",
+    "severity",
+    "eventType",
+    "messageKey",
+    "source",
+    "correlation",
+    "execution",
+    "runtime",
+    "evidence",
+    "error",
+    "privacy"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": { "severity": { "const": "ERROR" } },
+        "required": ["severity"]
+      },
+      "then": {
+        "properties": { "error": { "$ref": "#/$defs/error" } }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": { "enum": ["llm.call.cancelled", "verify.check.cancelled"] }
+        },
+        "required": ["eventType"]
+      },
+      "then": {
+        "properties": {
+          "severity": { "const": "WARN" },
+          "execution": {
+            "properties": { "status": { "const": "CANCELLED" } }
+          },
+          "error": { "type": "null" }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "eventId": { "type": "string", "pattern": "^evt_[A-Za-z0-9_-]+$" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "ingestedAt": { "type": "string", "format": "date-time" },
+    "producerSequence": { "type": "integer", "minimum": 0 },
+    "severity": { "enum": ["DEBUG", "INFO", "WARN", "ERROR"] },
+    "eventType": {
+      "enum": [
+        "request.accepted",
+        "request.completed",
+        "request.failed",
+        "request.authentication.succeeded",
+        "request.authentication.failed",
+        "task.created",
+        "task.cancellation.requested",
+        "task.completed",
+        "task.failed",
+        "task.cancelled",
+        "run.manifest.created",
+        "workflow.run.queued",
+        "workflow.run.started",
+        "workflow.run.completed",
+        "workflow.run.failed",
+        "workflow.run.cancelled",
+        "workflow.stage.queued",
+        "workflow.stage.started",
+        "workflow.stage.progress",
+        "workflow.stage.checkpointed",
+        "workflow.stage.paused",
+        "workflow.stage.resumed",
+        "workflow.stage.completed",
+        "workflow.stage.failed",
+        "workflow.stage.cancelled",
+        "agent.run.started",
+        "agent.run.completed",
+        "agent.run.failed",
+        "agent.run.cancelled",
+        "agent.plan.validation.started",
+        "agent.plan.validation.completed",
+        "agent.plan.validation.failed",
+        "agent.decision.recorded",
+        "agent.result.submitted",
+        "llm.call.started",
+        "llm.call.completed",
+        "llm.call.failed",
+        "llm.call.cancelled",
+        "mcp.connection.started",
+        "mcp.connection.completed",
+        "mcp.connection.failed",
+        "mcp.discovery.started",
+        "mcp.discovery.completed",
+        "mcp.discovery.failed",
+        "mcp.tool.call.started",
+        "mcp.tool.call.completed",
+        "mcp.tool.call.failed",
+        "tool.call.started",
+        "tool.call.completed",
+        "tool.call.failed",
+        "local.job.started",
+        "local.job.completed",
+        "local.job.failed",
+        "verify.check.started",
+        "verify.check.passed",
+        "verify.check.warned",
+        "verify.check.failed",
+        "verify.check.cancelled",
+        "correct.operation.started",
+        "correct.operation.completed",
+        "correct.operation.failed",
+        "recovery.retry.started",
+        "recovery.retry.completed",
+        "recovery.retry.failed",
+        "recovery.fallback.started",
+        "recovery.fallback.completed",
+        "recovery.fallback.failed",
+        "artifact.created",
+        "artifact.validated",
+        "artifact.validation.failed",
+        "artifact.materialized",
+        "artifact.preview.available",
+        "artifact.exported",
+        "user.decision.recorded"
+      ]
+    },
+    "messageKey": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$" },
+    "source": { "$ref": "#/$defs/source" },
+    "correlation": { "$ref": "#/$defs/correlation" },
+    "execution": { "$ref": "#/$defs/execution" },
+    "runtime": { "$ref": "#/$defs/runtime" },
+    "evidence": { "$ref": "#/$defs/evidence" },
+    "error": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/error" }
+      ]
+    },
+    "privacy": { "$ref": "#/$defs/privacy" }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "component", "environment"],
+      "properties": {
+        "service": { "type": "string", "minLength": 1 },
+        "component": { "type": "string", "minLength": 1 },
+        "environment": { "type": "string", "minLength": 1 }
+      }
+    },
+    "correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traceId", "spanId"],
+      "properties": {
+        "traceId": { "type": "string", "pattern": "^trc_[A-Za-z0-9_-]+$" },
+        "spanId": { "type": "string", "pattern": "^spn_[A-Za-z0-9_-]+$" },
+        "parentSpanId": { "type": "string", "pattern": "^spn_[A-Za-z0-9_-]+$" },
+        "sessionId": { "type": "string", "pattern": "^ses_[A-Za-z0-9_-]+$" },
+        "projectId": { "type": "string", "pattern": "^prj_[A-Za-z0-9_-]+$" },
+        "taskId": { "type": "string", "pattern": "^tsk_[A-Za-z0-9_-]+$" },
+        "workflowRunId": { "type": "string", "pattern": "^wfr_[A-Za-z0-9_-]+$" },
+        "agentRunId": { "type": "string", "pattern": "^agr_[A-Za-z0-9_-]+$" },
+        "stageId": { "type": "string", "minLength": 1 },
+        "shotId": { "type": "string", "pattern": "^shot_[A-Za-z0-9_-]+$" },
+        "artifactId": { "type": "string", "pattern": "^art_[A-Za-z0-9_-]+$" },
+        "toolCallId": { "type": "string", "pattern": "^call_[A-Za-z0-9_-]+$" },
+        "providerJobId": { "type": "string", "pattern": "^job_[A-Za-z0-9_-]+$" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "attempt"],
+      "properties": {
+        "status": { "enum": ["QUEUED", "STARTED", "IN_PROGRESS", "COMPLETED", "FAILED", "CANCELLED", "PAUSED", "SKIPPED"] },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "durationMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "appVersion": { "type": "string" },
+        "gitCommit": { "type": "string" },
+        "workflowVersion": { "type": "string" },
+        "toolRegistrySnapshotId": { "type": "string" },
+        "promptTemplateVersion": { "type": "string" },
+        "provider": { "type": "string" },
+        "model": { "type": "string" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inputRefs": { "type": "array", "items": { "type": "string", "pattern": "^artifact://" } },
+        "outputRefs": { "type": "array", "items": { "type": "string", "pattern": "^artifact://" } },
+        "inputHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "outputHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "sizeBytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "class", "fingerprint", "retryable", "userMessageKey", "suggestedActionKey"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "AUTH.SESSION.EXPIRED",
+            "REQUEST.HANDLER.FAILED",
+            "WORKFLOW.STAGE.TIMEOUT",
+            "WORKFLOW.RUN.EXECUTION_FAILED",
+            "WORKFLOW.STAGE.EXECUTION_FAILED",
+            "AGENT.PLAN.VALIDATION_FAILED",
+            "AGENT.PLAN.GENERATION_FAILED",
+            "AGENT.PLAN.COMPILATION_FAILED",
+            "AGENT.DAG.SUBMISSION_FAILED",
+            "AGENT.RUN.TIMEOUT",
+            "AGENT.RUNTIME.INTERNAL_FAILURE",
+            "LLM.PROVIDER.RATE_LIMITED",
+            "LLM.RESPONSE.SCHEMA_INVALID",
+            "LLM.TRANSPORT.UNAVAILABLE",
+            "LLM.CALL.TIMEOUT",
+            "LLM.CALL.INTERNAL_FAILURE",
+            "MCP.CONNECTION.UNAVAILABLE",
+            "MCP.TOOL.NOT_FOUND",
+            "TOOL.ARGUMENT.SCHEMA_INVALID",
+            "TOOL.EXECUTION.FAILED",
+            "LOCAL.JOB.EXECUTION_FAILED",
+            "ARTIFACT.FILE.MISSING",
+            "ARTIFACT.HASH.MISMATCH",
+            "RENDER.BLENDER.PROCESS_FAILED",
+            "RENDER.FFMPEG.CODEC_UNSUPPORTED",
+            "MEDIA.AUDIO.DURATION_MISMATCH"
+          ]
+        },
+        "class": { "enum": ["AUTHENTICATION", "TIMEOUT", "VALIDATION", "PROVIDER", "CONNECTION", "NOT_FOUND", "INTEGRITY", "RENDER", "MEDIA", "EXECUTION"] },
+        "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "retryable": { "type": "boolean" },
+        "causedByEventId": { "type": "string", "pattern": "^evt_[A-Za-z0-9_-]+$" },
+        "userMessageKey": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$" },
+        "developerDetail": { "type": "string", "pattern": "^diagnostic\\.[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$" },
+        "suggestedActionKey": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$" },
+        "evidenceRefs": { "type": "array", "items": { "type": "string", "pattern": "^artifact://" } },
+        "protectedStackRef": { "type": "string", "pattern": "^artifact://" }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "redactedFields"],
+      "properties": {
+        "classification": { "enum": ["PUBLIC", "INTERNAL", "SENSITIVE", "SECRET"] },
+        "redactedFields": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      }
+    }
+  }
+}

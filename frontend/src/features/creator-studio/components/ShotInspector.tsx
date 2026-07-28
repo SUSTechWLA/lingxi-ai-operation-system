@@ -1,12 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { acceptShotCandidate, getCreatorArtifactContent } from '../../../services/creatorApi'
+import { getLocalAgentBaseUrl } from '../../../services/localAgent'
 import type { ShotListItem, ShotRegenerationResult, ShotUnit, ShotWorkspace } from '../types'
-import { canSubmitShotDuration, isCreatorConflict, SHOT_QUEUE_CONFLICT_COPY } from '../logic'
+import {
+  projectHistoricalShotReview,
+  type HistoricalShot,
+  type HistoricalShotLoadedArtifact,
+  type HistoricalShotReview,
+} from '../completedShotProjection'
+import { buildHistoricalDetail, type HistoricalDetail } from '../historicalDetail'
+import { canSubmitShotDuration, isCreatorConflict, mapWithConcurrency, resolveCreatorArtifactMediaUrl, SHOT_QUEUE_CONFLICT_COPY } from '../logic'
 import ShotImprovePanel from './ShotImprovePanel'
+import SimpleAudioPlayer from './SimpleAudioPlayer'
+import SimpleVideoPlayer from './SimpleVideoPlayer'
 
 interface ShotInspectorProps {
   projectId: string
   workspace: ShotWorkspace | null
+  historicalShot?: HistoricalShot
   item?: ShotListItem
   previous?: ShotListItem
   next?: ShotListItem
@@ -16,7 +27,7 @@ interface ShotInspectorProps {
   onRegenerationStarted: (result: ShotRegenerationResult) => Promise<void> | void
 }
 
-export default function ShotInspector({ projectId, workspace, item, previous, next, totalShots, onShotChanged, onReload, onRegenerationStarted }: ShotInspectorProps) {
+export default function ShotInspector({ projectId, workspace, historicalShot, item, previous, next, totalShots, onShotChanged, onReload, onRegenerationStarted }: ShotInspectorProps) {
   const [candidateId, setCandidateId] = useState('')
   const [mediaUrl, setMediaUrl] = useState<string | null>(null)
   const [mediaState, setMediaState] = useState<'idle' | 'loading' | 'unavailable'>('idle')
@@ -79,6 +90,8 @@ export default function ShotInspector({ projectId, workspace, item, previous, ne
 
   useEffect(() => () => { controllerRef.current?.abort(); acceptControllerRef.current?.abort() }, [])
 
+  if (historicalShot) return <HistoricalShotInspector projectId={projectId} shot={historicalShot} />
+
   if (!workspace || !shot) return <section className="shot-inspector artifact-review-panel"><p className="artifact-empty">从左侧队列选择一个 Shot 开始审核。</p></section>
 
   const accept = () => {
@@ -117,14 +130,14 @@ export default function ShotInspector({ projectId, workspace, item, previous, ne
     <section className="shot-inspector artifact-review-panel" aria-labelledby="shot-inspector-title">
       <div className="artifact-review-heading"><div><p className="creator-eyebrow">当前镜头</p><h2 id="shot-inspector-title">Shot {item?.sequenceIndex || shot.sequenceIndex} · {shot.title || '未命名镜头'}</h2></div><span className="artifact-state">v{shot.version}</span></div>
       {!durationValid && <p className="creator-form-error" role="alert">这个 Shot 时长无效（必须小于 15 秒），不能接受或重新生成。</p>}
-      <div className="shot-candidate-tabs" role="tablist" aria-label="候选版本">{candidates.map(candidate => <button key={candidate.candidateId} type="button" role="tab" aria-selected={candidate.candidateId === selectedCandidate?.candidateId} onClick={() => setCandidateId(candidate.candidateId)}>候选 {candidate.attemptIndex || 1}</button>)}</div>
+      <div className="shot-candidate-tabs" role="tablist" aria-label="候选版本">{candidates.map((candidate, index) => <button key={candidate.candidateId} type="button" role="tab" aria-selected={candidate.candidateId === selectedCandidate?.candidateId} onClick={() => setCandidateId(candidate.candidateId)}>候选 {index + 1}</button>)}</div>
       <div className="shot-video-stage">
         {mediaState === 'loading' && <p className="artifact-empty">正在加载候选预览…</p>}
         {mediaUrl && <video className="artifact-video-preview" controls src={mediaUrl}>你的浏览器不支持视频预览。</video>}
         {mediaState === 'unavailable' && <p className="artifact-empty">预览不可用：当前候选没有可解析的视频产物。你仍可审核下方元数据。</p>}
       </div>
       <div className="shot-inspector-meta">
-        <p><strong>质量检查</strong>{selectedCandidate?.qaReport?.summary || qualityCopy(selectedCandidate?.qaReport?.status || shot.qaStatus)}</p>
+        <p><strong>质量检查</strong>{qualityCopy(selectedCandidate?.qaReport?.status || shot.qaStatus)}</p>
         <p><strong>旁白</strong>{shot.narration || '未填写旁白'}</p>
         <p><strong>时间范围</strong>{formatRange(shot)}</p>
         <p><strong>参考</strong>{candidateRefs.length ? `已关联 ${candidateRefs.length} 项视频产物` : '没有可用参考产物'}</p>
@@ -135,6 +148,176 @@ export default function ShotInspector({ projectId, workspace, item, previous, ne
       <ShotImprovePanel projectId={projectId} workspace={workspace} item={item} totalShots={totalShots} onRegenerationStarted={onRegenerationStarted} onConflict={onReload} />
     </section>
   )
+}
+
+function HistoricalShotInspector({ projectId, shot }: { projectId: string; shot: HistoricalShot }) {
+  const [loadedArtifacts, setLoadedArtifacts] = useState<HistoricalShotLoadedArtifact[]>([])
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'partial'>('loading')
+  const [expandedImage, setExpandedImage] = useState<{ src: string; label: string } | null>(null)
+  const [activeDetail, setActiveDetail] = useState<HistoricalDetail | null>(null)
+  const detailTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const detailCloseRef = useRef<HTMLButtonElement | null>(null)
+  const artifactKey = shot.artifactIds.join('|')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setLoadedArtifacts([])
+    setLoadState('loading')
+    setExpandedImage(null)
+    setActiveDetail(null)
+    void mapWithConcurrency(shot.artifactIds, 3, async artifactId => {
+      try {
+        const response = await getCreatorArtifactContent(artifactId, controller.signal)
+        const resolvedMediaUrl = resolveCreatorArtifactMediaUrl(projectId, response, getLocalAgentBaseUrl())
+        return {
+          artifactId,
+          content: response.content,
+          reviewText: response.reviewText,
+          mediaUrl: resolvedMediaUrl,
+          mediaUrls: resolvedMediaUrl ? [resolvedMediaUrl] : response.mediaUrls,
+        } satisfies HistoricalShotLoadedArtifact
+      } catch (caught) {
+        if (controller.signal.aborted) throw caught
+        return null
+      }
+    }).then(results => {
+      if (controller.signal.aborted) return
+      const available = results.filter((item): item is NonNullable<typeof item> => item !== null)
+      setLoadedArtifacts(available)
+      setLoadState(available.length === shot.artifactIds.length ? 'ready' : 'partial')
+    }).catch(() => {
+      if (!controller.signal.aborted) setLoadState('partial')
+    })
+    return () => controller.abort()
+  }, [artifactKey, projectId, shot.artifactIds])
+
+  useEffect(() => {
+    if (!expandedImage) return
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setExpandedImage(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [expandedImage])
+
+  useEffect(() => {
+    if (!activeDetail) return
+    detailCloseRef.current?.focus()
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') closeHistoricalDetail()
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [activeDetail])
+
+  const openHistoricalDetail = (id: string, title: string, text: string, trigger: HTMLButtonElement) => {
+    const detail = buildHistoricalDetail(id, title, text)
+    if (!detail) return
+    detailTriggerRef.current = trigger
+    setActiveDetail(detail)
+  }
+
+  const closeHistoricalDetail = () => {
+    setActiveDetail(null)
+    window.requestAnimationFrame(() => detailTriggerRef.current?.focus())
+  }
+
+  const review = useMemo(() => projectHistoricalShotReview(shot, loadedArtifacts), [loadedArtifacts, shot])
+  const videos = review.media.filter(item => item.kind === 'video')
+  const images = review.media.filter(item => item.kind === 'image')
+  const audio = review.media.filter(item => item.kind === 'audio')
+
+  return (
+    <section className="shot-inspector historical-shot-dossier artifact-review-panel" aria-labelledby="shot-inspector-title">
+      <div className="artifact-review-heading historical-shot-heading">
+        <div>
+          <p className="creator-eyebrow">Shot 审核档案</p>
+          <h2 id="shot-inspector-title">Shot {shot.sequenceIndex} · {review.title}</h2>
+          <p>集中审阅这一镜的旁白、画面、三层设计和实际媒体。</p>
+        </div>
+        <span className="artifact-state">{review.durationSec !== undefined ? `${review.durationSec} 秒` : '已完成'}</span>
+      </div>
+
+      {loadState === 'loading' && <p className="artifact-empty" role="status">正在整理这一镜的创作内容…</p>}
+      {loadState === 'partial' && <p className="historical-shot-read-notice" role="status">部分旧媒体无法读取，下面仍展示已经找回的脚本与画面设计。</p>}
+      {loadState !== 'loading' && !review.hasReadableContent && <p className="artifact-empty">这个旧项目没有留下可读的 Shot 内容，可从“分镜与素材”步骤重新生成。</p>}
+
+      {review.narration && <section className="historical-shot-narration" aria-labelledby="historical-shot-narration-title">
+        <p className="creator-eyebrow">旁白</p>
+        <h3 id="historical-shot-narration-title">这一镜说什么</h3>
+        <blockquote className="historical-shot-text-preview">{historicalTextPreview(review.narration)}</blockquote>
+        <HistoricalDetailButton onOpen={openHistoricalDetail} detailId={`${shot.id}-narration`} title="完整旁白" text={review.narration} label="查看完整旁白" />
+      </section>}
+
+      {(review.details.length > 0 || review.screenText.length > 0) && <section className="historical-shot-section" aria-labelledby="historical-shot-visual-title">
+        <div className="historical-shot-section-heading">
+          <div><p className="creator-eyebrow">镜头设计</p><h3 id="historical-shot-visual-title">画面与动作</h3></div>
+          {review.screenText.length > 0 && <div className="historical-shot-screen-text" aria-label="画面文字">{review.screenText.map(text => <span key={text}>{text}</span>)}</div>}
+        </div>
+        <dl className="historical-shot-details">{review.details.map(item => <div key={item.label}><dt>{item.label}</dt><dd><span className="historical-shot-text-preview">{historicalTextPreview(item.value)}</span><HistoricalDetailButton onOpen={openHistoricalDetail} detailId={`${shot.id}-${item.label}`} title={item.label} text={item.value} /></dd></div>)}</dl>
+      </section>}
+
+      <section className="historical-shot-section" aria-labelledby="historical-shot-layers-title">
+        <p className="creator-eyebrow">画面分层</p>
+        <h3 id="historical-shot-layers-title">三层如何配合</h3>
+        <div className="historical-shot-layers">
+          <HistoricalLayerCard index="01" title="IP A-roll" summary={layerSummary(review, 'ip')} empty="这个旧 Shot 没有留下角色口播设计说明。" detailId={`${shot.id}-ip-aroll`} onOpen={openHistoricalDetail} />
+          <HistoricalLayerCard index="02" title="文字层" summary={layerSummary(review, 'text')} empty="这个旧 Shot 没有留下文字动效设计说明。" detailId={`${shot.id}-text-layer`} onOpen={openHistoricalDetail} />
+          <HistoricalLayerCard index="03" title="补充画面" summary={layerSummary(review, 'enrichment')} empty="这个旧 Shot 没有留下补充素材设计说明。" detailId={`${shot.id}-enrichment-layer`} onOpen={openHistoricalDetail} />
+        </div>
+      </section>
+
+      <section className="historical-shot-section historical-shot-media" aria-labelledby="historical-shot-media-title">
+        <p className="creator-eyebrow">实际产物</p>
+        <h3 id="historical-shot-media-title">视频、参考图与语音</h3>
+        {videos.length > 0 ? <div className="historical-shot-videos">{videos.map(item => <article key={`${item.artifactId}:${item.url}`}><h4>{item.label}</h4><SimpleVideoPlayer src={item.url} title={`Shot ${shot.sequenceIndex} ${item.label}`} downloadName={`shot-${shot.sequenceIndex}.mp4`} /></article>)}</div> : <p className="artifact-empty">这一镜没有可单独播放的视频片段，可在“成片预览”查看完整视频。</p>}
+        {images.length > 0 ? <div className="historical-shot-images">{images.map(item => <button key={`${item.artifactId}:${item.url}`} type="button" onClick={() => setExpandedImage({ src: item.url, label: item.label })} aria-label={`放大查看 ${item.label}`}><img src={item.url} alt={`Shot ${shot.sequenceIndex} ${item.label}`} /><span>{item.label} · 点击放大</span></button>)}</div> : <p className="artifact-empty">这一镜没有可预览的独立参考图。</p>}
+        {audio.length > 0 ? <div className="historical-shot-audio">{audio.map(item => <SimpleAudioPlayer key={`${item.artifactId}:${item.url}`} src={item.url} title={`Shot ${shot.sequenceIndex} ${item.label}`} downloadName={`shot-${shot.sequenceIndex}-audio`} />)}</div> : <p className="artifact-empty">这一镜没有可单独播放的语音文件，旁白文字仍可在上方审核。</p>}
+      </section>
+
+      {expandedImage && <div className="historical-shot-image-backdrop" role="presentation" onPointerDown={event => { if (event.currentTarget === event.target) setExpandedImage(null) }}>
+        <aside className="historical-shot-image-dialog" role="dialog" aria-modal="true" aria-label={`查看 ${expandedImage.label}`}>
+          <button type="button" className="creator-secondary-button" onClick={() => setExpandedImage(null)}>关闭</button>
+          <img src={expandedImage.src} alt={`放大的 ${expandedImage.label}`} />
+        </aside>
+      </div>}
+
+      {activeDetail && <div className="historical-detail-backdrop" role="presentation" onPointerDown={event => { if (event.currentTarget === event.target) closeHistoricalDetail() }}>
+        <aside className="historical-detail-drawer" role="dialog" aria-modal="true" aria-labelledby={activeDetail.titleId} aria-describedby={activeDetail.bodyId} onKeyDown={event => {
+          if (event.key === 'Tab') {
+            event.preventDefault()
+            detailCloseRef.current?.focus()
+          }
+        }}>
+          <header>
+            <div><p className="creator-eyebrow">Shot {shot.sequenceIndex} · 完整内容</p><h3 id={activeDetail.titleId}>{activeDetail.title}</h3></div>
+            <button ref={detailCloseRef} type="button" className="creator-secondary-button" onClick={closeHistoricalDetail} aria-label="关闭完整内容">关闭</button>
+          </header>
+          <p id={activeDetail.bodyId} className="historical-detail-body">{activeDetail.text}</p>
+        </aside>
+      </div>}
+    </section>
+  )
+}
+
+type OpenHistoricalDetail = (id: string, title: string, text: string, trigger: HTMLButtonElement) => void
+
+function HistoricalLayerCard({ index, title, summary, empty, detailId, onOpen }: { index: string; title: string; summary?: string; empty: string; detailId: string; onOpen: OpenHistoricalDetail }) {
+  const text = summary || empty
+  return <article><span>{index}</span><h4>{title}</h4><p className="historical-shot-text-preview">{historicalTextPreview(text)}</p><HistoricalDetailButton onOpen={onOpen} detailId={detailId} title={title} text={text} /></article>
+}
+
+function HistoricalDetailButton({ detailId, title, text, label = '查看完整内容', onOpen }: { detailId: string; title: string; text: string; label?: string; onOpen: OpenHistoricalDetail }) {
+  return <button type="button" className="historical-shot-detail-button" onClick={event => onOpen(detailId, title, text, event.currentTarget)}>{label}</button>
+}
+
+function historicalTextPreview(text: string, maximumCharacters = 180): string {
+  const compact = text.replace(/\s+/gu, ' ').trim()
+  return compact.length <= maximumCharacters ? compact : `${compact.slice(0, maximumCharacters).trimEnd()}…`
+}
+
+function layerSummary(review: HistoricalShotReview, key: HistoricalShotReview['layers'][number]['key']): string | undefined {
+  return review.layers.find(layer => layer.key === key)?.summary
 }
 
 function qualityCopy(status: string | undefined): string {

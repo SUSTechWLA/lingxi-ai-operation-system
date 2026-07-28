@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -30,15 +32,15 @@ type DecisionLogRecord struct {
 
 // Decision type constants.
 const (
-	DecisionStageApproval        = "stage_approval"
-	DecisionStageRejection       = "stage_rejection"
-	DecisionStageEdit            = "stage_edited"
-	DecisionStageRegeneration    = "stage_regenerated"
-	DecisionRenderRuntimeSelect  = "render_runtime_selection"
-	DecisionPipelineSelection    = "pipeline_selection"
-	DecisionProposalSelection    = "proposal_selection"
-	DecisionPreviewApproval      = "preview_approval"
-	DecisionFinalRenderApproval  = "final_render_approval"
+	DecisionStageApproval       = "stage_approval"
+	DecisionStageRejection      = "stage_rejection"
+	DecisionStageEdit           = "stage_edited"
+	DecisionStageRegeneration   = "stage_regenerated"
+	DecisionRenderRuntimeSelect = "render_runtime_selection"
+	DecisionPipelineSelection   = "pipeline_selection"
+	DecisionProposalSelection   = "proposal_selection"
+	DecisionPreviewApproval     = "preview_approval"
+	DecisionFinalRenderApproval = "final_render_approval"
 )
 
 // DecisionLogStore persists decision log records.
@@ -48,11 +50,14 @@ type DecisionLogStore interface {
 	FindByStage(ctx context.Context, workflowRunID, stageName string) ([]*DecisionLogRecord, error)
 }
 
+type DecisionWorkflowRunResolver interface {
+	FindRunIDByTaskID(ctx context.Context, taskID string) (string, error)
+}
+
 // SaveSimple implements a simplified save that accepts id, taskID, stageName,
 // decisionType, selected, approved, reviewerID, and comment. It is suitable for
 // use as an agentruntime.DecisionLogWriter adapter.
 func (s *pgxDecisionLogStore) SaveSimple(ctx context.Context, taskID, stageName, decisionType, selected, reviewerID, comment string, approved bool) error {
-	workflowRunID := "" // resolved by caller if available
 	return s.Save(ctx, &DecisionLogRecord{
 		TaskID:         taskID,
 		StageName:      stageName,
@@ -61,17 +66,41 @@ func (s *pgxDecisionLogStore) SaveSimple(ctx context.Context, taskID, stageName,
 		ApprovedByUser: approved,
 		ReviewerID:     reviewerID,
 		Comment:        comment,
-		WorkflowRunID:  workflowRunID,
 	})
 }
 
+func (s *pgxDecisionLogStore) resolveWorkflowRunID(ctx context.Context, taskID string) (string, error) {
+	if s == nil || s.resolver == nil {
+		return "", fmt.Errorf("workflowRunId resolver is required")
+	}
+	workflowRunID, err := s.resolver.FindRunIDByTaskID(ctx, taskID)
+	if err != nil {
+		return "", fmt.Errorf("resolve workflowRunId: %w", err)
+	}
+	workflowRunID = strings.TrimSpace(workflowRunID)
+	if workflowRunID == "" {
+		return "", fmt.Errorf("workflowRunId is required")
+	}
+	return workflowRunID, nil
+}
+
 type pgxDecisionLogStore struct {
-	pool *pgxpool.Pool
+	db       decisionLogDB
+	resolver DecisionWorkflowRunResolver
+}
+
+type decisionLogDB interface {
+	Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...interface{}) (pgx.Rows, error)
 }
 
 // NewDecisionLogStore creates a DecisionLogStore backed by pgxpool.Pool.
 func NewDecisionLogStore(pool *pgxpool.Pool) DecisionLogStore {
-	return &pgxDecisionLogStore{pool: pool}
+	return &pgxDecisionLogStore{db: pool}
+}
+
+func NewDecisionLogStoreWithResolver(pool *pgxpool.Pool, resolver DecisionWorkflowRunResolver) DecisionLogStore {
+	return &pgxDecisionLogStore{db: pool, resolver: resolver}
 }
 
 // EnsureDecisionLogSchema creates the decision_logs table if it does not exist.
@@ -97,10 +126,29 @@ func EnsureDecisionLogSchema(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 func (s *pgxDecisionLogStore) Save(ctx context.Context, d *DecisionLogRecord) error {
+	if d == nil {
+		return fmt.Errorf("decision log record is required")
+	}
+	d.TaskID = strings.TrimSpace(d.TaskID)
+	if d.TaskID == "" {
+		return fmt.Errorf("decision taskId is required")
+	}
+	resolved, err := s.resolveWorkflowRunID(ctx, d.TaskID)
+	if err != nil {
+		return err
+	}
+	supplied := strings.TrimSpace(d.WorkflowRunID)
+	if supplied != "" && supplied != resolved {
+		return fmt.Errorf("decision workflowRunId does not belong to task")
+	}
+	d.WorkflowRunID = resolved
 	if d.ID == "" {
 		d.ID = "dl-" + uuid.NewString()[:8]
 	}
-	_, err := s.pool.Exec(ctx,
+	if s == nil || s.db == nil {
+		return fmt.Errorf("decision log store is not configured")
+	}
+	_, err = s.db.Exec(ctx,
 		`INSERT INTO decision_logs (id, workflow_run_id, task_id, stage_name, decision_type, selected, options_considered, approved_by_user, reviewer_id, comment)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		d.ID, d.WorkflowRunID, d.TaskID, d.StageName, d.DecisionType, d.Selected,
@@ -114,7 +162,7 @@ func (s *pgxDecisionLogStore) Save(ctx context.Context, d *DecisionLogRecord) er
 }
 
 func (s *pgxDecisionLogStore) FindByRun(ctx context.Context, workflowRunID string) ([]*DecisionLogRecord, error) {
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.db.Query(ctx,
 		`SELECT id, workflow_run_id, task_id, stage_name, decision_type, selected, options_considered, approved_by_user, reviewer_id, comment, created_at
 		 FROM decision_logs WHERE workflow_run_id=$1 ORDER BY created_at ASC`, workflowRunID)
 	if err != nil {
@@ -125,7 +173,7 @@ func (s *pgxDecisionLogStore) FindByRun(ctx context.Context, workflowRunID strin
 }
 
 func (s *pgxDecisionLogStore) FindByStage(ctx context.Context, workflowRunID, stageName string) ([]*DecisionLogRecord, error) {
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.db.Query(ctx,
 		`SELECT id, workflow_run_id, task_id, stage_name, decision_type, selected, options_considered, approved_by_user, reviewer_id, comment, created_at
 		 FROM decision_logs WHERE workflow_run_id=$1 AND stage_name=$2 ORDER BY created_at ASC`, workflowRunID, stageName)
 	if err != nil {

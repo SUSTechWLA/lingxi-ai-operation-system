@@ -19,6 +19,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/model/repository"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
@@ -38,6 +39,12 @@ type NodeExecutor struct {
 	localDispatcher localJobDispatcher
 	renderChecker   RenderDependencyChecker
 	projectResolver ProjectIDResolver
+	events          observability.EventEmitter
+}
+
+func (ne *NodeExecutor) WithObservability(emitter observability.EventEmitter) *NodeExecutor {
+	ne.events = emitter
+	return ne
 }
 
 type executorInterface interface {
@@ -164,13 +171,23 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	// REVIEW_GATE and CONTROL nodes are synchronization points, not executable tools.
 	// They pause execution and wait for human approval via the review API.
 	if event.Type == string(model.NodeTypeReviewGate) || event.Type == string(model.NodeTypeControl) {
-		ne.publishSuccess(taskID, nodeID, traceID, payload, idempotencyKey)
+		ne.publishSuccess(ctx, taskID, nodeID, traceID, payload, idempotencyKey)
 		return
 	}
 
 	toolName := tool.DetermineToolName(event.Type, payload)
 	parameters := tool.ExtractParameters(payload)
 	manifest := ne.toolRegistry.GetManifest(toolName)
+	toolCtx := ne.buildToolContext(ctx, nodeID, taskID, isLongRunning)
+	lifecycle := ne.startToolBoundary(ctx, taskID, nodeID, idempotencyKey, toolCtx.RetryCount+1)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			lifecycle.fail("TOOL.EXECUTION.FAILED", nil)
+			lifecycle.finish()
+			panic(recovered)
+		}
+		lifecycle.finish()
+	}()
 
 	// Resolve {{node_id.output.field}} references and validate only the logical
 	// tool arguments, excluding transport metadata added by DAG compilation.
@@ -180,23 +197,23 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		if resolveErr == nil {
 			resolveErr = fmt.Errorf("exact output reference remains unresolved")
 		}
-		ne.publishFailure(taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
+		ne.publishFailure(ctx, taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
+		lifecycle.fail("TOOL.EXECUTION.FAILED", nil)
 		return
 	}
 	contractManifest := ne.executionContractManifest(toolName, parameters, manifest)
 	contractArguments := executionContractArguments(payload, parameters, contractManifest)
 	contractArguments, resolveErr = ne.resolveParameters(ctx, taskID, contractArguments)
 	if resolveErr != nil {
-		ne.publishFailure(taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
+		ne.publishFailure(ctx, taskID, nodeID, traceID, inputReferenceUnresolvedCode+": "+resolveErr.Error(), idempotencyKey, nil)
+		lifecycle.fail("TOOL.EXECUTION.FAILED", nil)
 		return
 	}
 	if err := validateExecutionInput(contractManifest, contractArguments); err != nil {
-		ne.publishFailure(taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
+		ne.publishFailure(ctx, taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
+		lifecycle.fail("TOOL.ARGUMENT.SCHEMA_INVALID", nil)
 		return
 	}
-
-	// Build tool context with checkpoint data for retries.
-	toolCtx := ne.buildToolContext(ctx, nodeID, taskID, isLongRunning)
 
 	// Local execution plane: dispatch to local runner and return. External
 	// bridge nodes keep "external" as the executable tool, so also inspect the
@@ -204,8 +221,11 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	if localManifest := ne.localExecutionManifest(toolName, parameters, manifest); localManifest != nil {
 		idempotencyKey = ne.localDispatchIdempotencyKey(ctx, nodeID, idempotencyKey)
 		if err := ne.dispatchLocalNode(ctx, event, localManifest, parameters, idempotencyKey); err != nil {
-			ne.publishFailure(taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
+			ne.publishFailure(ctx, taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
+			lifecycle.fail("TOOL.EXECUTION.FAILED", nil)
+			return
 		}
+		lifecycle.complete(nil)
 		return
 	}
 
@@ -216,7 +236,7 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		isLongRunning, heartbeatTimeoutSec)
 	defer hbCancel()
 
-	ne.publishEvent(eventbus.TopicNodeResult, idempotencyKey, eventbus.Event{
+	ne.publishEvent(ctx, eventbus.TopicNodeResult, idempotencyKey, eventbus.Event{
 		TaskID: taskID,
 		NodeID: nodeID,
 		Status: "RUNNING",
@@ -244,7 +264,9 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		if result.ResourceUsage != nil {
 			failureData["resourceUsage"] = result.ResourceUsage
 		}
-		ne.publishFailure(taskID, nodeID, traceID, result.Error, idempotencyKey, failureData)
+		ne.publishFailure(ctx, taskID, nodeID, traceID, result.Error, idempotencyKey, failureData)
+		size := int64(len(result.Stdout) + len(result.Stderr))
+		lifecycle.fail("TOOL.EXECUTION.FAILED", &size)
 		return
 	}
 
@@ -261,7 +283,88 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		data["outputRef"] = result.OutputRef
 	}
 
-	ne.publishSuccess(taskID, nodeID, traceID, data, idempotencyKey)
+	ne.publishSuccess(ctx, taskID, nodeID, traceID, data, idempotencyKey)
+	size := int64(len(result.Stdout) + len(result.Stderr))
+	lifecycle.complete(&size)
+}
+
+type toolLifecycleBoundary struct {
+	executor    *NodeExecutor
+	ctx         context.Context
+	correlation observability.Correlation
+	attempt     int64
+	startedAt   time.Time
+	status      observability.ExecutionStatus
+	code        string
+	size        *int64
+	finished    bool
+}
+
+func (ne *NodeExecutor) startToolBoundary(ctx context.Context, taskID, nodeID, toolCallID string, attempt int) *toolLifecycleBoundary {
+	ctx = observability.EnsureCorrelation(ctx)
+	correlation := observability.CorrelationFromContext(ctx)
+	correlation.TaskID = taskID
+	correlation.StageID = nodeID
+	correlation.ToolCallID = toolCallID
+	b := &toolLifecycleBoundary{executor: ne, ctx: ctx, correlation: correlation, attempt: int64(attempt), startedAt: time.Now(), status: observability.ExecutionStatusFailed, code: "TOOL.EXECUTION.FAILED"}
+	ne.emitToolLifecycle(ctx, observability.EventTypeToolCallStarted, observability.ExecutionStatusStarted, observability.SeverityInfo, correlation, b.attempt, nil, nil, nil)
+	if b.attempt > 1 {
+		ne.emitToolLifecycle(ctx, observability.EventTypeRecoveryRetryStarted, observability.ExecutionStatusStarted, observability.SeverityInfo, correlation, b.attempt, nil, nil, nil)
+	}
+	return b
+}
+func (b *toolLifecycleBoundary) complete(size *int64) {
+	b.status = observability.ExecutionStatusCompleted
+	b.code = ""
+	b.size = size
+}
+func (b *toolLifecycleBoundary) fail(code string, size *int64) {
+	b.status = observability.ExecutionStatusFailed
+	b.code = code
+	b.size = size
+}
+func (b *toolLifecycleBoundary) finish() {
+	if b == nil || b.finished {
+		return
+	}
+	b.finished = true
+	duration := time.Since(b.startedAt).Milliseconds()
+	eventType, severity := observability.EventTypeToolCallCompleted, observability.SeverityInfo
+	var eventErr *observability.EventError
+	if b.status == observability.ExecutionStatusFailed {
+		eventType = observability.EventTypeToolCallFailed
+		severity = observability.SeverityError
+		eventErr = observability.NormalizeError(b.code, errors.New("tool execution failed"), "worker-tool-executor", "")
+	}
+	b.executor.emitToolLifecycle(b.ctx, eventType, b.status, severity, b.correlation, b.attempt, &duration, eventErr, b.size)
+	if b.attempt > 1 {
+		retryType := observability.EventTypeRecoveryRetryCompleted
+		if b.status == observability.ExecutionStatusFailed {
+			retryType = observability.EventTypeRecoveryRetryFailed
+		}
+		b.executor.emitToolLifecycle(b.ctx, retryType, b.status, severity, b.correlation, b.attempt, &duration, eventErr, b.size)
+	}
+}
+
+func (ne *NodeExecutor) emitToolLifecycle(ctx context.Context, eventType observability.EventType, status observability.ExecutionStatus, severity observability.Severity, correlation observability.Correlation, attempt int64, durationMs *int64, eventErr *observability.EventError, sizeBytes *int64) {
+	if ne == nil {
+		return
+	}
+	observability.EmitSafely(ctx, ne.events, "worker-tool-executor", observability.Event{
+		EventType:   eventType,
+		MessageKey:  string(eventType),
+		Severity:    severity,
+		Correlation: correlation,
+		Execution: observability.Execution{
+			Status: status, Attempt: attempt, DurationMs: durationMs,
+		},
+		Evidence: observability.Evidence{SizeBytes: sizeBytes},
+		Error:    eventErr,
+		Privacy: observability.Privacy{
+			Classification: observability.PrivacyInternal,
+			RedactedFields: []string{"tool.arguments", "tool.result", "tool.stdout", "tool.stderr"},
+		},
+	})
 }
 
 // hydratePayloadFromDB reads image_urls and long-running metadata from the node
@@ -308,7 +411,7 @@ func (ne *NodeExecutor) buildToolContext(ctx context.Context, nodeID, taskID str
 		NodeID:     nodeID,
 		RetryCount: 0,
 	}
-	if isLongRunning && ne.nodeRepo != nil {
+	if ne.nodeRepo != nil {
 		if node, err := ne.nodeRepo.FindByID(ctx, nodeID); err == nil && node != nil {
 			toolCtx.RetryCount = node.RetryCount
 		}
@@ -350,16 +453,16 @@ func (ne *NodeExecutor) setupLongRunningHeartbeat(
 	)
 
 	// First heartbeat immediately.
-	ne.publishProgress(taskID, nodeID, 0, "started")
-	ne.publishHeartbeat(taskID, nodeID, idempotencyKey)
+	ne.publishProgress(hbCtx, taskID, nodeID, 0, "started")
+	ne.publishHeartbeat(hbCtx, taskID, nodeID, idempotencyKey)
 
 	// Progress callback for the tool.
 	progressCb := func(_ context.Context, update tool.ProgressUpdate) {
 		if update.Progress > 0 {
-			ne.publishProgress(taskID, nodeID, update.Progress, update.Step)
+			ne.publishProgress(hbCtx, taskID, nodeID, update.Progress, update.Step)
 		}
 		if update.Checkpoint != nil {
-			ne.publishCheckpoint(taskID, nodeID, update.Progress, update.Step, update.Checkpoint)
+			ne.publishCheckpoint(hbCtx, taskID, nodeID, update.Progress, update.Step, update.Checkpoint)
 		}
 	}
 
@@ -372,7 +475,7 @@ func (ne *NodeExecutor) setupLongRunningHeartbeat(
 			case <-hbCtx.Done():
 				return
 			case <-ticker.C:
-				ne.publishHeartbeat(taskID, nodeID, idempotencyKey)
+				ne.publishHeartbeat(hbCtx, taskID, nodeID, idempotencyKey)
 			}
 		}
 	}()
@@ -442,6 +545,11 @@ func (ne *NodeExecutor) executeTool(
 	} else if et, ok := t.(tool.ExecutableTool); ok {
 		resultCh := make(chan tool.ToolResult, 1)
 		go func() {
+			defer func() {
+				if recover() != nil {
+					resultCh <- tool.FailureResult("tool execution panic")
+				}
+			}()
 			resultCh <- et.Execute(ctx, parameters, toolCtx)
 		}()
 
@@ -633,6 +741,9 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		TimeoutSec:     jobTimeoutSec,
 		ArtifactPolicy: localArtifactPolicyForManifest(manifest),
 		IdempotencyKey: idempotencyKey,
+		TraceID:        event.TraceID,
+		SpanID:         event.SpanID,
+		ParentSpanID:   event.ParentSpanID,
 	}
 	if localrunner.NormalizeCommand(command) == localrunner.CommandLocalMCPToolCall && firstString(parameters, nil, "targetRunnerId") != "" {
 		dispatchRequest.TargetRunnerID = firstString(parameters, nil, "targetRunnerId")
@@ -701,10 +812,13 @@ func (ne *NodeExecutor) resolveLocalProjectID(ctx context.Context, event eventbu
 	if ne.projectResolver != nil && event.TaskID != "" {
 		resolved, err := ne.projectResolver.ResolveProjectID(ctx, event.TaskID)
 		if err != nil {
+			diagnostic := observability.NormalizeError("TOOL.EXECUTION.FAILED", nil, "worker-tool-executor", "")
 			zap.L().Warn("local dispatch: cannot resolve project ID from task",
 				zap.String("taskId", event.TaskID),
 				zap.String("nodeId", event.NodeID),
-				zap.Error(err),
+				zap.String("errorCode", diagnostic.Code),
+				zap.String("errorClass", string(diagnostic.Class)),
+				zap.String("errorFingerprint", diagnostic.Fingerprint),
 			)
 			return ""
 		}
@@ -772,7 +886,7 @@ func firstString(primary map[string]interface{}, secondary map[string]interface{
 	return ""
 }
 
-func (ne *NodeExecutor) publishSuccess(taskID, nodeID, traceID string, data map[string]interface{}, idempotencyKey string) {
+func (ne *NodeExecutor) publishSuccess(ctx context.Context, taskID, nodeID, traceID string, data map[string]interface{}, idempotencyKey string) {
 	sanitizedData := repository.SanitizeOutputForPersistence(data)
 	result := model.NodeResultEvent{
 		TaskID:         taskID,
@@ -792,11 +906,11 @@ func (ne *NodeExecutor) publishSuccess(taskID, nodeID, traceID string, data map[
 		IdempotencyKey: result.IdempotencyKey,
 	}
 
-	ne.publishEvent(eventbus.TopicNodeResult, idempotencyKey, event)
+	ne.publishEvent(ctx, eventbus.TopicNodeResult, idempotencyKey, event)
 	zap.L().Info("Node execution succeeded", zap.String("nodeId", nodeID))
 }
 
-func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey string, data map[string]interface{}) {
+func (ne *NodeExecutor) publishFailure(ctx context.Context, taskID, nodeID, traceID, errMsg, idempotencyKey string, data map[string]interface{}) {
 	sanitizedData := repository.SanitizeOutputForPersistence(data)
 	result := model.NodeResultEvent{
 		TaskID:         taskID,
@@ -817,17 +931,20 @@ func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempote
 		IdempotencyKey: result.IdempotencyKey,
 	}
 
-	ne.publishEvent(eventbus.TopicNodeResult, idempotencyKey, event)
+	ne.publishEvent(ctx, eventbus.TopicNodeResult, idempotencyKey, event)
+	diagnostic := observability.NormalizeError("TOOL.EXECUTION.FAILED", nil, "worker-tool-executor", "")
 	zap.L().Info("Node execution failed",
 		zap.String("nodeId", nodeID),
-		zap.String("error", errMsg),
+		zap.String("errorCode", diagnostic.Code),
+		zap.String("errorClass", string(diagnostic.Class)),
+		zap.String("errorFingerprint", diagnostic.Fingerprint),
 	)
 }
 
 // ── Long-running task helpers ──
 
 // publishHeartbeat sends a heartbeat event for a long-running node.
-func (ne *NodeExecutor) publishHeartbeat(taskID, nodeID, idempotencyKey string) {
+func (ne *NodeExecutor) publishHeartbeat(ctx context.Context, taskID, nodeID, idempotencyKey string) {
 	hbKey := idempotencyKey + "-hb"
 	event := eventbus.Event{
 		TaskID:         taskID,
@@ -835,11 +952,11 @@ func (ne *NodeExecutor) publishHeartbeat(taskID, nodeID, idempotencyKey string) 
 		Status:         "HEARTBEAT",
 		IdempotencyKey: hbKey,
 	}
-	ne.publishEvent(eventbus.TopicProgress, hbKey, event)
+	ne.publishEvent(ctx, eventbus.TopicProgress, hbKey, event)
 }
 
 // publishProgress sends a progress update event for a long-running node.
-func (ne *NodeExecutor) publishProgress(taskID, nodeID string, progress float64, step string) {
+func (ne *NodeExecutor) publishProgress(ctx context.Context, taskID, nodeID string, progress float64, step string) {
 	event := eventbus.Event{
 		TaskID: taskID,
 		NodeID: nodeID,
@@ -849,11 +966,11 @@ func (ne *NodeExecutor) publishProgress(taskID, nodeID string, progress float64,
 			"step":     step,
 		},
 	}
-	ne.publishEvent(eventbus.TopicProgress, taskID+"-"+nodeID+"-progress", event)
+	ne.publishEvent(ctx, eventbus.TopicProgress, taskID+"-"+nodeID+"-progress", event)
 }
 
 // publishCheckpoint sends a checkpoint event for a long-running node.
-func (ne *NodeExecutor) publishCheckpoint(taskID, nodeID string, progress float64, step string, checkpoint map[string]interface{}) {
+func (ne *NodeExecutor) publishCheckpoint(ctx context.Context, taskID, nodeID string, progress float64, step string, checkpoint map[string]interface{}) {
 	event := eventbus.Event{
 		TaskID: taskID,
 		NodeID: nodeID,
@@ -864,18 +981,18 @@ func (ne *NodeExecutor) publishCheckpoint(taskID, nodeID string, progress float6
 			"checkpoint": checkpoint,
 		},
 	}
-	ne.publishEvent(eventbus.TopicProgress, taskID+"-"+nodeID+"-checkpoint", event)
+	ne.publishEvent(ctx, eventbus.TopicProgress, taskID+"-"+nodeID+"-checkpoint", event)
 	zap.L().Info("Checkpoint saved",
 		zap.String("nodeId", nodeID),
 		zap.Float64("progress", progress),
 	)
 }
 
-func (ne *NodeExecutor) publishEvent(topic, key string, event eventbus.Event) {
+func (ne *NodeExecutor) publishEvent(ctx context.Context, topic, key string, event eventbus.Event) {
 	if ne == nil || ne.producer == nil {
 		return
 	}
-	_ = ne.producer.Publish(topic, key, event)
+	_ = eventbus.PublishWithContext(ctx, ne.producer, topic, key, event)
 }
 
 // resolveNodeReferences scans parameters for {{node_id.output.field}} references,

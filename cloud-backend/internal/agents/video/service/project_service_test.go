@@ -37,6 +37,44 @@ func TestProjectServiceMarksSuccessfulAgentRunCompleted(t *testing.T) {
 	}
 }
 
+func TestProjectServiceTerminalCallbackReplayIsIdempotentForSameRun(t *testing.T) {
+	tests := []struct {
+		name   string
+		status model.ProjectStatus
+		apply  func(*ProjectService) error
+	}{
+		{
+			name: "completed", status: model.StatusCompleted,
+			apply: func(service *ProjectService) error {
+				return service.MarkAgentRunCompleted(context.Background(), "u-1", "vp-1", "run-1")
+			},
+		},
+		{
+			name: "stopped", status: model.StatusPaused,
+			apply: func(service *ProjectService) error {
+				return service.MarkAgentRunStopped(context.Background(), "u-1", "vp-1", "run-1")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeProjectCASStore{project: &model.VideoProject{
+				ID: "vp-1", UserID: "u-1", Status: model.StatusRunning, CurrentRunID: "run-1", ConfigRevision: 4,
+			}}
+			service := NewProjectService(store)
+			if err := test.apply(service); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.apply(service); err != nil {
+				t.Fatal(err)
+			}
+			if store.casCalls != 1 || store.project.Status != test.status || store.project.CurrentRunID != "run-1" {
+				t.Fatalf("CAS calls=%d project=%+v", store.casCalls, store.project)
+			}
+		})
+	}
+}
+
 func TestProjectServiceReturnsRevisionConflictWithoutBlindRetry(t *testing.T) {
 	store := &fakeProjectCASStore{
 		project: &model.VideoProject{ID: "vp-1", UserID: "u-1", ConfigRevision: 7},

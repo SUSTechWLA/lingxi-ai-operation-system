@@ -22,6 +22,14 @@ parameters:
     type: array
     required: true
     description: 已确认的分镜列表
+  timeWindows:
+    type: array
+    required: false
+    description: 由 Audio Master 派生的毫秒级 Shot 时间窗，旁白和时间字段具有最高优先级
+  shotGenerationPlans:
+    type: array
+    required: false
+    description: 按 shotId 合并的渲染与三层画面计划，不得覆盖时间窗旁白
   brief:
     type: string
     required: false
@@ -46,7 +54,7 @@ parameters:
 output:
   videoPrompts:
     type: array
-    description: 视频提示词列表
+    description: 保留 canonical timing、visualAnchor 与三层时间计划的视频提示词列表
   shotAssetPackages:
     type: array
     description: 每个 shot 的独立素材包，包含 referenceImages、prompts、voiceover、aigcVideo、subtitle 和 concatPlan

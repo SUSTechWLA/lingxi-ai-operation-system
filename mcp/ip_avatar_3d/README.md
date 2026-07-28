@@ -15,6 +15,7 @@ Tangying core should not know the implementation details. It calls this provider
 |---|---|---|
 | `ip_avatar_3d.check_status` | `check_status` | Check Blender / FFmpeg / FFprobe availability. |
 | `ip_avatar_3d.check_gpt_sovits_voice` | `check_gpt_sovits_voice` | Validate a pinned local GPT-SoVITS voice bundle and hashes without synthesis or network I/O. |
+| `ip_avatar_3d.synthesize_reference_voice` | `synthesize_reference_voice` | Create a verified 48 kHz mono production narration master from the approved IP voice or an authorized reference recording. |
 | `ip_avatar_3d.generate_voice_auditions` | `generate_voice_auditions` | Generate atomic, content-addressed HeyGen A/B/C auditions for blind selection. |
 | `ip_avatar_3d.prepare_character_master` | `prepare_character_master` | Build a versioned character master; refined profiles stop at a QA-rendered staging asset. |
 | `ip_avatar_3d.record_character_master_visual_inspection` | `record_character_master_visual_inspection` | Record an explicit reviewer decision bound to the staged SHA and generated QA sheets. |
@@ -234,6 +235,16 @@ English canonical asset path; generated speech remains local and untracked.
 `check_gpt_sovits_voice` reports `bundleReady=true`
 when those local files match; preflight metadata keeps `productionReady=false`
 because no generated output WAV exists yet.
+
+`synthesize_reference_voice` is the production synthesis boundary. In
+`default_ip` mode it resolves the reference, transcript, model checkpoints,
+voice ID, seed, and hashes from the approved character profile. In
+`reference_clone` mode it accepts only a project-resolved local recording with
+its expected SHA-256, an exact verified transcript, and explicit usage-rights
+confirmation. No reference transcript, model path, or audio bytes are returned.
+Successful calls atomically publish `narration_master.wav` beside
+`narration_master.provenance.json`; the sidecar binds the source mode, hashes,
+consent, mastering format, loudness measurement, and production-ready status.
 
 For A-roll, explicit local synthesis is mastered to a separate 48 kHz mono
 PCM16 WAV with restrained 55 Hz high-pass and 18 kHz low-pass filters, gentle

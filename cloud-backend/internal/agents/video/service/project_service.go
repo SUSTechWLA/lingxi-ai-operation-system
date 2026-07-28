@@ -227,6 +227,9 @@ func (s *ProjectService) MarkAgentRunStopped(ctx context.Context, userID, projec
 	if err != nil {
 		return err
 	}
+	if project.Status == model.StatusPaused && project.CurrentRunID == runID {
+		return nil
+	}
 	project.Status = model.StatusPaused
 	project.CurrentRunID = runID
 	return s.saveExpectedRevision(ctx, userID, project)
@@ -244,6 +247,9 @@ func (s *ProjectService) MarkAgentRunCompleted(ctx context.Context, userID, proj
 	project, err := s.repo.FindByIDForUser(ctx, userID, projectID)
 	if err != nil {
 		return err
+	}
+	if project.Status == model.StatusCompleted && project.CurrentRunID == runID {
+		return nil
 	}
 	project.Status = model.StatusCompleted
 	project.CurrentRunID = runID

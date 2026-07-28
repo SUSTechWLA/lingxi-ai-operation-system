@@ -66,6 +66,26 @@ func TestBuildShotGenerationPlanMotionSceneUsesAIGCVideo(t *testing.T) {
 	}
 }
 
+func TestBuildShotGenerationPlanPreservesCanonicalContext(t *testing.T) {
+	shot := model.ShotUnit{
+		ID:               "SHOT_02",
+		DurationSec:      4,
+		StartMs:          6_000,
+		EndMs:            10_000,
+		DurationMs:       4_000,
+		TimelineRevision: "audio-master-1",
+		Narration:        "这是第二镜的旁白。",
+	}
+
+	plan := BuildShotGenerationPlan(shot, model.VisualPlan{}, model.DefaultRenderPreference(), RenderCapabilities{HTMLAvailable: true})
+	if plan.StartMs != 6_000 || plan.EndMs != 10_000 || plan.DurationMs != 4_000 {
+		t.Fatalf("generation plan timing = [%d,%d) duration=%d", plan.StartMs, plan.EndMs, plan.DurationMs)
+	}
+	if plan.TimelineRevision != "audio-master-1" || plan.NarrationText != "这是第二镜的旁白。" {
+		t.Fatalf("generation plan canonical context = %#v", plan)
+	}
+}
+
 func TestBuildShotGenerationPlanAlwaysDescribesThreeVisualLayers(t *testing.T) {
 	shot := model.ShotUnit{
 		ID:           "SHOT_THREE_LAYERS",

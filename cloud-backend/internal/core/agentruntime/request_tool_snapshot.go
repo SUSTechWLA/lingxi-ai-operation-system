@@ -56,16 +56,13 @@ func newRequestToolSnapshot(manifests []*tool.ToolManifest, runners []RequestMCP
 		if cloned == nil || strings.TrimSpace(cloned.Name) == "" {
 			continue
 		}
-		snapshot.manifests[cloned.Name] = cloned
+		cloned.Name = strings.TrimSpace(cloned.Name)
+		if _, exists := snapshot.manifests[cloned.Name]; !exists {
+			snapshot.manifests[cloned.Name] = cloned
+		}
+		snapshot.ordered = append(snapshot.ordered, cloned)
 	}
-	names := make([]string, 0, len(snapshot.manifests))
-	for name := range snapshot.manifests {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		snapshot.ordered = append(snapshot.ordered, snapshot.manifests[name])
-	}
+	sort.SliceStable(snapshot.ordered, func(i, j int) bool { return snapshot.ordered[i].Name < snapshot.ordered[j].Name })
 	sort.Slice(snapshot.runners, func(i, j int) bool { return snapshot.runners[i].RunnerID < snapshot.runners[j].RunnerID })
 	return snapshot
 }
@@ -74,14 +71,18 @@ func (s *RequestToolSnapshot) GetManifest(name string) *tool.ToolManifest {
 	if s == nil {
 		return nil
 	}
-	return s.manifests[name]
+	return cloneToolManifest(s.manifests[name])
 }
 
 func (s *RequestToolSnapshot) ListManifests() []*tool.ToolManifest {
 	if s == nil {
 		return nil
 	}
-	return append([]*tool.ToolManifest(nil), s.ordered...)
+	manifests := make([]*tool.ToolManifest, 0, len(s.ordered))
+	for _, manifest := range s.ordered {
+		manifests = append(manifests, cloneToolManifest(manifest))
+	}
+	return manifests
 }
 
 func (s *RequestToolSnapshot) RunnerRevisions() []RequestMCPRunnerRevision {
@@ -212,7 +213,7 @@ func cloneToolManifest(manifest *tool.ToolManifest) *tool.ToolManifest {
 		return nil
 	}
 	var cloned tool.ToolManifest
-	if err := json.Unmarshal(wire, &cloned); err != nil {
+	if err := decodeSnapshotJSON(wire, &cloned); err != nil {
 		return nil
 	}
 	return &cloned
@@ -227,7 +228,7 @@ func cloneSnapshotJSONMap(value map[string]interface{}) map[string]interface{} {
 		return nil
 	}
 	var cloned map[string]interface{}
-	if err := json.Unmarshal(wire, &cloned); err != nil {
+	if err := decodeSnapshotJSON(wire, &cloned); err != nil {
 		return nil
 	}
 	return cloned

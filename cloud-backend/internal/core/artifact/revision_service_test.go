@@ -2,7 +2,10 @@ package artifact
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -148,6 +151,400 @@ func TestRevisionServiceInstructionUsesGeneratorAndForwardsTextProvider(t *testi
 	}
 }
 
+func TestRevisionServiceSelectedInstructionStoresOnlyScopedReplacement(t *testing.T) {
+	base := revisionTestArtifact()
+	base.InlineJSON = "开头正文结尾"
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	var systemPrompt, userPrompt string
+	revisions.SetConfig("", func(_ context.Context, system, user string, _ ReviseLLMOptions) (string, error) {
+		systemPrompt, userPrompt = system, user
+		return "新文", nil
+	})
+
+	_, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID,
+		Message:    "改得更简洁",
+		Provenance: map[string]interface{}{
+			"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Revise error: %v", err)
+	}
+	if got := string(repo.lastCreate.Data); got != "开头新文结尾" {
+		t.Fatalf("scoped revision data = %q, want %q", got, "开头新文结尾")
+	}
+	if strings.Contains(systemPrompt, base.InlineJSON) || strings.Contains(systemPrompt, "正文") {
+		t.Fatalf("stable system prompt contains request-specific source or selection: %q", systemPrompt)
+	}
+	wantSystemPrompt := `你是一个专业的内容返工助手，正在帮助用户修改「script」阶段的产物。
+
+重要规则：
+- 严格根据用户的修改意见，在原始内容的基础上进行修改
+- 保持原始内容的整体结构和格式风格
+- 只修改用户明确要求修改的部分，不要擅自改动其他内容
+- 如果原始内容是 Markdown 格式，输出 Markdown
+- 如果原始内容是 JSON 格式，输出严格符合相同结构的 JSON
+- 不要引入原始内容中没有的新字段、新章节或额外内容
+- 如果用户消息包含「所选文字」并要求只返回替换文字，只输出该选中片段的替换文字，不得输出完整文档
+- 其他情况输出完整内容，不要省略或截断`
+	if systemPrompt != wantSystemPrompt {
+		t.Fatalf("selected revision changed the pre-task system prompt:\n got %q\nwant %q", systemPrompt, wantSystemPrompt)
+	}
+	if !strings.Contains(userPrompt, "只返回替换文字") || strings.Contains(userPrompt, "重新生成完整内容") {
+		t.Fatalf("selected revision user prompt did not request replacement-only output: %q", userPrompt)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRejectsObviousFullDocumentResponse(t *testing.T) {
+	base := revisionTestArtifact()
+	base.InlineJSON = "开头正文结尾"
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		return "开头新文结尾", nil
+	})
+
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite",
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+	})
+	if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+		t.Fatalf("full-document generator response must fail before splice/persist: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRejectsFullDocumentAtSelectionBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		selection map[string]interface{}
+		generated string
+	}{
+		{name: "proper prefix", selection: map[string]interface{}{"kind": "text", "start": 0, "end": 2, "text": "开头"}, generated: "新稿正文结尾"},
+		{name: "middle", selection: map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}, generated: "开头新稿结尾"},
+		{name: "proper suffix", selection: map[string]interface{}{"kind": "text", "start": 4, "end": 6, "text": "结尾"}, generated: "开头正文新稿"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.InlineJSON = "开头正文结尾"
+			repo := newRevisionServiceFake(t, base)
+			revisions := NewRevisionService(repo)
+			revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) { return test.generated, nil })
+			result, err := revisions.Revise(context.Background(), ReviseRequest{
+				ArtifactID: base.ID, Message: "rewrite", Provenance: map[string]interface{}{"selection": test.selection},
+			})
+			if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+				t.Fatalf("boundary full-document response must fail: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+			}
+		})
+	}
+}
+
+func TestRevisionServiceSelectedInstructionAllowsFragmentsAndTrueWholeDocumentSelection(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		selection map[string]interface{}
+		generated string
+		want      string
+	}{
+		{name: "prefix fragment", selection: map[string]interface{}{"kind": "text", "start": 0, "end": 2, "text": "开头"}, generated: "新稿", want: "新稿正文结尾"},
+		{name: "suffix fragment", selection: map[string]interface{}{"kind": "text", "start": 4, "end": 6, "text": "结尾"}, generated: "新稿", want: "开头正文新稿"},
+		{name: "whole document selection", selection: map[string]interface{}{"kind": "text", "start": 0, "end": 6, "text": "开头正文结尾"}, generated: "全新完整文档", want: "全新完整文档"},
+		{name: "whole document selection unchanged", selection: map[string]interface{}{"kind": "text", "start": 0, "end": 6, "text": "开头正文结尾"}, generated: "开头正文结尾", want: "开头正文结尾"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.InlineJSON = "开头正文结尾"
+			repo := newRevisionServiceFake(t, base)
+			revisions := NewRevisionService(repo)
+			revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) { return test.generated, nil })
+			if _, err := revisions.Revise(context.Background(), ReviseRequest{
+				ArtifactID: base.ID, Message: "rewrite", Provenance: map[string]interface{}{"selection": test.selection},
+			}); err != nil || string(repo.lastCreate.Data) != test.want {
+				t.Fatalf("legitimate scoped response error=%v data=%q want=%q", err, repo.lastCreate.Data, test.want)
+			}
+		})
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRejectsChangedSourceHashWithoutMutation(t *testing.T) {
+	base := revisionTestArtifact()
+	base.InlineJSON = "开头已变更结尾"
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	called := false
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		called = true
+		return "新文", nil
+	})
+	originalHash := sha256.Sum256([]byte("开头正文结尾"))
+
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite", ExpectedSourceHash: fmt.Sprintf("sha256:%x", originalHash),
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+	})
+	if !errors.Is(err, ErrRevisionSourceConflict) || result != nil || called || repo.lastCreate != nil {
+		t.Fatalf("changed source hash must fail before generation/mutation: result=%+v err=%v called=%v create=%+v", result, err, called, repo.lastCreate)
+	}
+}
+
+func TestRevisionServiceDirectContentRejectsTextSelectionProvenance(t *testing.T) {
+	repo := newRevisionServiceFake(t, revisionTestArtifact())
+	result, err := NewRevisionService(repo).Revise(context.Background(), ReviseRequest{
+		ArtifactID: "artifact-v1", DirectContent: []byte("full replacement"),
+		Provenance: map[string]interface{}{
+			"selection": map[string]interface{}{"kind": "text", "start": 0, "end": 8, "text": "original"},
+		},
+	})
+	if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+		t.Fatalf("direct content with text selection must fail closed: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionNormalizesReplacementOnlyOutput(t *testing.T) {
+	for _, test := range []struct {
+		name, generated, want string
+	}{
+		{name: "fenced", generated: "```text\n新文\n```", want: "开头新文结尾"},
+		{name: "standalone labeled", generated: "替换文字：\n新文", want: "开头新文结尾"},
+		{name: "standalone explanation label", generated: "Explanation:\n新文", want: "开头新文结尾"},
+		{name: "fenced Chinese standalone label", generated: "```text\n说明：\n新文\n```", want: "开头新文结尾"},
+		{name: "fenced English standalone label", generated: "```text\nExplanation:\n新文\n```", want: "开头新文结尾"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.InlineJSON = "开头正文结尾"
+			repo := newRevisionServiceFake(t, base)
+			revisions := NewRevisionService(repo)
+			revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) { return test.generated, nil })
+			_, err := revisions.Revise(context.Background(), ReviseRequest{
+				ArtifactID: base.ID, Message: "rewrite",
+				Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+			})
+			if err != nil || string(repo.lastCreate.Data) != test.want {
+				t.Fatalf("normalized revision error=%v data=%q want=%q", err, repo.lastCreate.Data, test.want)
+			}
+		})
+	}
+}
+
+func TestRevisionServiceSelectedInstructionPreservesLiteralPrefixes(t *testing.T) {
+	for _, generated := range []string{
+		"替换文字：这是正文",
+		"Replacement: literal content",
+		"说明：这是正文",
+		"Explanation: literal content",
+	} {
+		t.Run(generated, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.InlineJSON = "开头正文结尾"
+			repo := newRevisionServiceFake(t, base)
+			revisions := NewRevisionService(repo)
+			revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) { return generated, nil })
+			_, err := revisions.Revise(context.Background(), ReviseRequest{
+				ArtifactID: base.ID, Message: "rewrite",
+				Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+			})
+			var data []byte
+			if repo.lastCreate != nil {
+				data = repo.lastCreate.Data
+			}
+			if err != nil || string(data) != "开头"+generated+"结尾" {
+				t.Fatalf("literal prefix error=%v data=%q", err, data)
+			}
+		})
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRejectsInlineExplanatoryPhrases(t *testing.T) {
+	for _, generated := range []string{
+		"修改后的文字如下：新文",
+		"Here is the revised text: new text",
+	} {
+		t.Run(generated, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.InlineJSON = "开头正文结尾"
+			repo := newRevisionServiceFake(t, base)
+			revisions := NewRevisionService(repo)
+			revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) { return generated, nil })
+			result, err := revisions.Revise(context.Background(), ReviseRequest{
+				ArtifactID: base.ID, Message: "rewrite",
+				Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+			})
+			if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+				t.Fatalf("inline explanation must fail closed: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+			}
+		})
+	}
+}
+
+func TestRevisionServiceSelectedInstructionEscapesJSONSensitiveReplacement(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindJSON
+	base.MimeType = "application/json"
+	base.InlineJSON = `{"script":"开头正文结尾"}`
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		return "新\"文\\下一行\n结束", nil
+	})
+	_, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite",
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 13, "end": 15, "text": "正文"}},
+	})
+	if err != nil {
+		t.Fatalf("Revise error: %v", err)
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal(repo.lastCreate.Data, &decoded); err != nil {
+		t.Fatalf("spliced JSON is invalid: %v data=%q", err, repo.lastCreate.Data)
+	}
+	if got, want := decoded["script"], "开头新\"文\\下一行\n结束结尾"; got != want {
+		t.Fatalf("decoded script=%q want=%q", got, want)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRejectsInvalidJSONFragment(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindJSON
+	base.MimeType = "application/json"
+	base.InlineJSON = `{"count":12}`
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		return "not-json", nil
+	})
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite",
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 9, "end": 11, "text": "12"}},
+	})
+	if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+		t.Fatalf("invalid JSON fragment must fail closed: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionPreservesNestedJSONEnvelope(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindJSON
+	base.MimeType = "application/json"
+	base.InlineJSON = `{"content":"{\"script\":\"开头\\n正文结尾\"}"}`
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		return "\n新\"文", nil
+	})
+	_, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite",
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 28, "end": 33, "text": `\\n正文`}},
+	})
+	if err != nil {
+		t.Fatalf("Revise error: %v", err)
+	}
+	var outer map[string]string
+	if err := json.Unmarshal(repo.lastCreate.Data, &outer); err != nil {
+		t.Fatalf("outer JSON invalid: %v data=%q", err, repo.lastCreate.Data)
+	}
+	var inner map[string]string
+	if err := json.Unmarshal([]byte(outer["content"]), &inner); err != nil {
+		t.Fatalf("nested JSON invalid: %v content=%q", err, outer["content"])
+	}
+	if got, want := inner["script"], "开头\n新\"文结尾"; got != want {
+		t.Fatalf("nested script=%q want=%q", got, want)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRejectsExplanatoryOutput(t *testing.T) {
+	base := revisionTestArtifact()
+	base.InlineJSON = "开头正文结尾"
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		return "以下是修改后的文字：新文", nil
+	})
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: base.ID, Message: "rewrite",
+		Provenance: map[string]interface{}{"selection": map[string]interface{}{"kind": "text", "start": 2, "end": 4, "text": "正文"}},
+	})
+	if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || repo.lastCreate != nil {
+		t.Fatalf("explanatory output must fail closed: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+	}
+}
+
+func TestBuildSelectedRevisionUserPromptClampsEmojiContextBoundaries(t *testing.T) {
+	source := "🙂" + strings.Repeat("前", 319) + "正文" + strings.Repeat("后", 319) + "🙂"
+	selection := revisionTextSelection{Start: 321, End: 323, Text: "正文"}
+	prompt, err := buildSelectedRevisionUserPrompt(source, selection, "rewrite")
+	if err != nil || strings.Contains(prompt, "�") {
+		t.Fatalf("emoji context boundary prompt error=%v prompt=%q", err, prompt)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionKeepsStablePromptAndBoundsContext(t *testing.T) {
+	source := strings.Repeat("前", 400) + "正文" + strings.Repeat("后", 400)
+	selection := map[string]interface{}{"kind": "text", "start": 400, "end": 402, "text": "正文"}
+	var systemPrompts, userPrompts []string
+	for index, message := range []string{"第一次修改", "第二次修改"} {
+		base := revisionTestArtifact()
+		base.ID = fmt.Sprintf("artifact-v%d", index+1)
+		base.InlineJSON = source
+		repo := newRevisionServiceFake(t, base)
+		revisions := NewRevisionService(repo)
+		revisions.SetConfig("", func(_ context.Context, system, user string, _ ReviseLLMOptions) (string, error) {
+			systemPrompts = append(systemPrompts, system)
+			userPrompts = append(userPrompts, user)
+			return "新文", nil
+		})
+		if _, err := revisions.Revise(context.Background(), ReviseRequest{
+			ArtifactID: base.ID, Message: message, Provenance: map[string]interface{}{"selection": selection},
+		}); err != nil {
+			t.Fatalf("Revise %d error: %v", index+1, err)
+		}
+	}
+	if len(systemPrompts) != 2 || systemPrompts[0] != systemPrompts[1] {
+		t.Fatalf("selected revisions changed stable system prompt: %#v", systemPrompts)
+	}
+	if len(userPrompts) != 2 || userPrompts[0] == userPrompts[1] {
+		t.Fatalf("selected revisions must vary only in user delta: %#v", userPrompts)
+	}
+	if strings.Contains(userPrompts[0], strings.Repeat("前", 321)) || strings.Contains(userPrompts[0], strings.Repeat("后", 321)) {
+		t.Fatalf("selected revision context exceeded 320 UTF-16 units: %q", userPrompts[0])
+	}
+}
+
+func TestRevisionServiceMalformedTextSelectionDoesNotFallBackToFullRevision(t *testing.T) {
+	repo := newRevisionServiceFake(t, revisionTestArtifact())
+	revisions := NewRevisionService(repo)
+	called := false
+	revisions.SetConfig("", func(_ context.Context, _, _ string, _ ReviseLLMOptions) (string, error) {
+		called = true
+		return "replacement", nil
+	})
+
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: "artifact-v1", Message: "rewrite",
+		Provenance: map[string]interface{}{
+			"selection": map[string]interface{}{"kind": "text", "start": "1", "end": 3, "text": "ri"},
+		},
+	})
+	if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil || called || repo.lastCreate != nil {
+		t.Fatalf("malformed selection must fail closed: result=%+v err=%v called=%v create=%+v", result, err, called, repo.lastCreate)
+	}
+}
+
+func TestRevisionServiceSelectedInstructionRequiresScopedGenerator(t *testing.T) {
+	repo := newRevisionServiceFake(t, revisionTestArtifact())
+	result, err := NewRevisionService(repo).Revise(context.Background(), ReviseRequest{
+		ArtifactID: "artifact-v1", Message: "rewrite",
+		Provenance: map[string]interface{}{
+			"selection": map[string]interface{}{"kind": "text", "start": 0, "end": 8, "text": "original"},
+		},
+	})
+	if !errors.Is(err, ErrRevisionGeneration) || result != nil || repo.lastCreate != nil {
+		t.Fatalf("selected instruction without generator must not create a full local revision: result=%+v err=%v create=%+v", result, err, repo.lastCreate)
+	}
+}
+
 func TestRevisionServiceIdenticalGeneratedContentForcesNewVersion(t *testing.T) {
 	repo := newRevisionServiceFake(t, revisionTestArtifact())
 	revisions := NewRevisionService(repo)
@@ -180,6 +577,199 @@ func TestRevisionServiceFailedCreateDoesNotMarkDownstreamStale(t *testing.T) {
 	}
 	if repo.stale != 0 {
 		t.Fatalf("failed revision stale calls = %d, want 0", repo.stale)
+	}
+}
+
+func TestRevisionServiceReplaceImageUsesCanonicalLocalIdentityWithoutGenerator(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindImage
+	base.Name = "shot-02.png"
+	base.MimeType = "image/png"
+	base.StorageType = StorageLocal
+	base.StorageRef = "local://projects/project-1/artifacts/shot-02/original.png"
+	base.SizeBytes = 12
+	base.ContentHash = "sha256:original"
+	base.WorkflowRunID = "run-current"
+	base.TaskID = "task-current"
+	base.RoleAgentID = "role-current"
+	base.ProducedByNode = "node-current"
+	base.ProducedByTool = "tool-current"
+	base.ProducedByRole = "role-current"
+	base.Metadata = map[string]interface{}{
+		"producedByNode": "node-current",
+		"producedByTool": "tool-current",
+		"producedByRole": "role-current",
+		"nested":         map[string]interface{}{"kept": true},
+		"localPath":      "/stale/original.png",
+		"storageRef":     base.StorageRef,
+		"contentHash":    base.ContentHash,
+		"mimeType":       base.MimeType,
+		"sizeBytes":      base.SizeBytes,
+	}
+	repo := newRevisionServiceFake(t, base)
+	revisions := NewRevisionService(repo)
+	generatorCalled := false
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		generatorCalled = true
+		return "must not run", nil
+	})
+	replacement := ReplacementMaterialIdentity{
+		ContentHash: "sha256:replacement",
+		StorageRef:  "local://projects/project-1/materials/replacement",
+		MimeType:    "image/webp",
+		SizeBytes:   4096,
+	}
+	selection := map[string]interface{}{"kind": "rect", "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}
+
+	result, err := revisions.Replace(context.Background(), ReplaceRequest{
+		ArtifactID: "artifact-v1", BaseVersion: base.Version, NewArtifactID: "artifact-replacement",
+		Material: replacement,
+		Provenance: map[string]interface{}{
+			"mode": "replace", "replacementMaterial": replacement, "selection": selection,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Replace() error = %v", err)
+	}
+	if generatorCalled {
+		t.Fatal("typed image replacement must never invoke the revision generator")
+	}
+	if result.Artifact.Version != 2 || result.Artifact.ParentID != base.ID || result.Artifact.Kind != KindImage {
+		t.Fatalf("replacement artifact = %+v", result.Artifact)
+	}
+	got := repo.lastCreate
+	if got.ID != "artifact-replacement" || got.ProjectID != base.ProjectID || got.StageName != base.StageName ||
+		got.UnitID != base.UnitID || got.Name != base.Name || got.Kind != KindImage || !got.ForceNewVersion {
+		t.Fatalf("replacement request lost immutable identity: %+v", got)
+	}
+	if got.ExpectedParentID != base.ID || got.ExpectedParentVersion != base.Version {
+		t.Fatalf("replacement request lost authorized base lineage: %+v", got)
+	}
+	if got.StorageType != StorageLocal || got.StorageRef != replacement.StorageRef || got.MimeType != replacement.MimeType ||
+		got.SizeBytes != replacement.SizeBytes || got.ContentHash != replacement.ContentHash || len(got.Data) != 0 {
+		t.Fatalf("replacement request did not use canonical local identity: %+v", got)
+	}
+	if got.WorkflowRunID != "run-current" || got.TaskID != "task-current" || got.RoleAgentID != "role-current" ||
+		got.Metadata["producedByNode"] != "node-current" || got.Metadata["producedByTool"] != "tool-current" ||
+		got.Metadata["producedByRole"] != "role-current" {
+		t.Fatalf("replacement request lost current producer identity: %+v metadata=%+v", got, got.Metadata)
+	}
+	if !reflect.DeepEqual(got.Metadata["replacementMaterial"], replacement) ||
+		!reflect.DeepEqual(got.Metadata["selection"], selection) {
+		t.Fatalf("replacement provenance = %+v", got.Metadata)
+	}
+	for _, staleIdentity := range []string{"localPath", "storageRef", "contentHash", "mimeType", "sizeBytes", "mediaUrl", "mediaUrls"} {
+		if _, exists := got.Metadata[staleIdentity]; exists {
+			t.Fatalf("replacement resurrected stale %s metadata: %+v", staleIdentity, got.Metadata)
+		}
+	}
+	if repo.stale != 1 {
+		t.Fatalf("replacement stale calls = %d, want 1", repo.stale)
+	}
+}
+
+func TestRevisionServiceReplaceRejectsInvalidTargetOrMaterialBeforeCreate(t *testing.T) {
+	valid := ReplacementMaterialIdentity{
+		ContentHash: "sha256:replacement",
+		StorageRef:  "local://projects/project-1/materials/replacement",
+		MimeType:    "image/png",
+		SizeBytes:   1,
+	}
+	tests := []struct {
+		name     string
+		kind     ArtifactKind
+		material ReplacementMaterialIdentity
+	}{
+		{name: "non image target", kind: KindMarkdown, material: valid},
+		{name: "non local ref", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: valid.ContentHash, StorageRef: "https://example.test/replacement.png", MimeType: valid.MimeType, SizeBytes: valid.SizeBytes}},
+		{name: "empty local ref", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: valid.ContentHash, StorageRef: "local://", MimeType: valid.MimeType, SizeBytes: valid.SizeBytes}},
+		{name: "non image mime", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: valid.ContentHash, StorageRef: valid.StorageRef, MimeType: "video/mp4", SizeBytes: valid.SizeBytes}},
+		{name: "empty image subtype", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: valid.ContentHash, StorageRef: valid.StorageRef, MimeType: "image/", SizeBytes: valid.SizeBytes}},
+		{name: "negative size", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: valid.ContentHash, StorageRef: valid.StorageRef, MimeType: valid.MimeType, SizeBytes: -1}},
+		{name: "invalid hash", kind: KindImage, material: ReplacementMaterialIdentity{ContentHash: "md5:bad", StorageRef: valid.StorageRef, MimeType: valid.MimeType, SizeBytes: valid.SizeBytes}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := revisionTestArtifact()
+			base.Kind = test.kind
+			repo := newRevisionServiceFake(t, base)
+			result, err := NewRevisionService(repo).Replace(context.Background(), ReplaceRequest{
+				ArtifactID:  base.ID,
+				BaseVersion: base.Version,
+				Material:    test.material,
+			})
+			if !errors.Is(err, ErrRevisionInvalidReplacement) || result != nil {
+				t.Fatalf("Replace() result=%+v error=%v", result, err)
+			}
+			if repo.lastCreate != nil || repo.stale != 0 || !base.IsCurrent {
+				t.Fatalf("invalid replacement mutated state: create=%+v stale=%d current=%v", repo.lastCreate, repo.stale, base.IsCurrent)
+			}
+		})
+	}
+}
+
+func TestRevisionServiceReplaceCreateFailureLeavesCurrentImageAndInvalidationUntouched(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindImage
+	repo := newRevisionServiceFake(t, base)
+	repo.createErr = errRevisionTestCreate
+	result, err := NewRevisionService(repo).Replace(context.Background(), ReplaceRequest{
+		ArtifactID:  base.ID,
+		BaseVersion: base.Version,
+		Material: ReplacementMaterialIdentity{
+			ContentHash: "sha256:replacement",
+			StorageRef:  "local://projects/project-1/materials/replacement",
+			MimeType:    "image/png",
+			SizeBytes:   5,
+		},
+	})
+	if err != errRevisionTestCreate || result != nil {
+		t.Fatalf("Replace() result=%+v error=%v", result, err)
+	}
+	if repo.stale != 0 || !base.IsCurrent {
+		t.Fatalf("failed replacement mutated current image: stale=%d current=%v", repo.stale, base.IsCurrent)
+	}
+}
+
+func TestRevisionServiceReplaceConflictAfterBaseLoadKeepsCompetingCurrent(t *testing.T) {
+	base := revisionTestArtifact()
+	base.Kind = KindImage
+	base.MimeType = "image/png"
+	base.StorageRef = "local://projects/project-1/artifacts/original"
+	base.ContentHash = "sha256:original"
+	repo := newRevisionServiceFake(t, base)
+	competing := cloneArtifactForRevisionTest(base)
+	competing.ID = "artifact-v2"
+	competing.Version = 2
+	competing.ParentID = base.ID
+	competing.ContentHash = "sha256:competing"
+	competing.StorageRef = "local://projects/project-1/artifacts/competing"
+	repo.beforeCreate = func(_ *CreateArtifactRequest) {
+		base.IsCurrent = false
+		competing.IsCurrent = true
+		repo.byID[competing.ID] = competing
+	}
+
+	result, err := NewRevisionService(repo).Replace(context.Background(), ReplaceRequest{
+		ArtifactID:    base.ID,
+		BaseVersion:   base.Version,
+		NewArtifactID: "artifact-replacement",
+		Material: ReplacementMaterialIdentity{
+			ContentHash: "sha256:replacement",
+			StorageRef:  "local://projects/project-1/materials/replacement",
+			MimeType:    "image/webp",
+			SizeBytes:   42,
+		},
+	})
+	if !errors.Is(err, ErrArtifactVersionConflict) || result != nil {
+		t.Fatalf("Replace() result=%+v error=%v, want atomic version conflict", result, err)
+	}
+	current, currentErr := repo.GetCurrent(context.Background(), base.ProjectID, base.StageName, base.UnitID)
+	if currentErr != nil || current.ID != competing.ID || !competing.IsCurrent {
+		t.Fatalf("current artifact after conflict = %+v error=%v, want competing revision", current, currentErr)
+	}
+	if repo.stale != 0 || len(repo.byID) != 2 {
+		t.Fatalf("conflict mutated replacement lineage: stale=%d artifacts=%d", repo.stale, len(repo.byID))
 	}
 }
 
@@ -397,11 +987,12 @@ func TestRestoreUsesHistoricalBytesButCurrentExecutionIdentity(t *testing.T) {
 }
 
 type revisionServiceFake struct {
-	t          *testing.T
-	byID       map[string]*Artifact
-	stale      int
-	lastCreate *CreateArtifactRequest
-	createErr  error
+	t            *testing.T
+	byID         map[string]*Artifact
+	stale        int
+	lastCreate   *CreateArtifactRequest
+	createErr    error
+	beforeCreate func(*CreateArtifactRequest)
 }
 
 func newRevisionServiceFake(t *testing.T, artifacts ...*Artifact) *revisionServiceFake {
@@ -432,6 +1023,9 @@ func (f *revisionServiceFake) GetCurrent(_ context.Context, projectID, stageName
 
 func (f *revisionServiceFake) CreateArtifact(_ context.Context, req *CreateArtifactRequest) (*Artifact, error) {
 	f.lastCreate = cloneCreateRequestForRevisionTest(req)
+	if f.beforeCreate != nil {
+		f.beforeCreate(req)
+	}
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
@@ -439,12 +1033,15 @@ func (f *revisionServiceFake) CreateArtifact(_ context.Context, req *CreateArtif
 	for _, artifact := range f.byID {
 		if artifact.ProjectID == req.ProjectID && artifact.StageName == req.StageName && artifact.UnitID == req.UnitID && artifact.IsCurrent {
 			current = artifact
-			artifact.IsCurrent = false
 		}
+	}
+	if req.ExpectedParentID != "" && (current == nil || current.ID != req.ExpectedParentID || current.Version != req.ExpectedParentVersion) {
+		return nil, ErrArtifactVersionConflict
 	}
 	if current == nil {
 		f.t.Fatal("CreateArtifact must use an existing current artifact")
 	}
+	current.IsCurrent = false
 	created := &Artifact{
 		ID: "artifact-v4", ProjectID: req.ProjectID, WorkflowRunID: req.WorkflowRunID, TaskID: req.TaskID,
 		StageName: req.StageName, RoleAgentID: req.RoleAgentID, UnitID: req.UnitID, Kind: req.Kind, Name: req.Name,

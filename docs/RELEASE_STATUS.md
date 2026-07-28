@@ -12,6 +12,8 @@ The `release` branch is the initial closed beta launch baseline for controlled t
 
 The release branch now also includes the Shot workspace refresh: each Shot opens as a linear 1-6 creator review flow, automatically switching between voice/knowledge video and cinematic/AIGC Shot video. Every Shot visibly distinguishes IP A-roll, HyperFrames/HyperKeyframes text and effects, AIGC enrichment, and the final composition plan, including whether a layer executes now or remains designed for later. The workspace shows readable scripts, reference images, prompts, subtitle timelines, upload slots, and playable final media instead of exposing raw `local://` storage references or success-only artifact status messages.
 
+Narration timing now has one canonical source: the audio master produces ordered, gap-free Shot windows with millisecond bounds and a timeline revision. Every downstream plan and request keeps each Shot's own narration, and concatenating the Shot segments must reproduce the complete narration exactly once. The three visual layers share one visual anchor, primary reference, composition, camera/lighting intent, and opening/development/settle progression. Completed historical projects recover those canonical records first and present long details in a stable accessible drawer without reflowing or duplicating the review layout.
+
 The production Creator shell exposes one settings page from the user-avatar menu. It keeps text, image, and video generation providers separate, persists their credentials only in the local agent, and supports persisted system, light, and dark appearances. A generation request transmits only the runtime credentials required for that authenticated cloud orchestration request; project configuration and cloud persistence are sanitized. The settings page can explicitly clear each locally saved key. The start-creation page uses creator-facing labels only; the canonical three-layer Shot design continues in backend orchestration without exposing implementation terminology at project intake.
 
 The release candidate also includes the canonical sloth A-roll path. It loads the approved Blender master into the warm studio, drives body, wrist, independent three-segment digits, visemes and facial controls from the script timeline, uses the pinned GPT-SoVITS voice, and composes a final MP4 locally with FFmpeg. This layer is deterministic local rendering; the same talking-head Shot may independently add AIGC background/B-roll enrichment when its policy and provider allow it.
@@ -47,6 +49,7 @@ decision: GO
 - `bash scripts/beta-smoke-check.sh` passes.
 - Local agent is running and can export `beta-diagnostics.zip`.
 - HyperFrames Render Service is healthy.
+- HyperFrames Render Service production dependencies pass `npm audit --omit=dev --audit-level=high`; unresolved upstream findings must stay below the release-blocking severity threshold and be recorded in the changelog.
 - FFmpeg is available.
 - Video QA MCP produces structured shot reports.
 - Each shot QA report includes a machine-readable `repairPlan`.
@@ -54,7 +57,10 @@ decision: GO
 - Shot candidates are versioned by `attemptIndex`; failed candidates are retained for diagnostics and must not overwrite accepted candidates.
 - Final assembly consumes only accepted candidate artifacts, normalizes clips with FFmpeg, then handles global voiceover, BGM ducking, subtitle timeline, loudness, final transcode, and final QA.
 - Shot material packages expose `aigcPlan`, `hyperframesPlan`, and `ffmpegFusionPlan` so users can generate text-free AIGC backgrounds or partial videos, keep exact Chinese text in HyperFrames, and merge layers with FFmpeg.
+- Shot narration windows are ordered, gap-free, non-overlapping, revisioned, and preserved through generation plans and render requests; their concatenated text equals the audio-master narration exactly once.
+- IP A-roll, HyperFrames, and AIGC plans reference the same visual anchor and timed progression. HyperKeyframes carry exact text/style/position/time, while the AIGC prompt stays literary and excludes delivery mechanics.
 - Shot pages let users inspect the actual generated media: reference/storyboard images can be enlarged, video artifacts can be played in a large modal, subtitles are displayed as a readable timeline, and only actionable status messages are shown.
+- Completed historical Shot pages prefer canonical narration records and open long content in one accessible drawer rather than expanding duplicate text inside the grid.
 - External AIGC video calls use the AIGC layer prompt (`aigcPrompt`, `aigcVideoPrompt`, or `aigcPlan.prompt`) before falling back to legacy prompt fields, so JiMeng/Dreamina is not sent HyperFrames text-layer copy.
 - Local IP A-roll rendering can generate a 1080p CFR 30fps video, motion and viseme plans, rig/render reports, and media QA evidence from the canonical sloth master without AIGC video calls.
 - At least one AIGC video MCP provider is healthy when real creator trials are planned.

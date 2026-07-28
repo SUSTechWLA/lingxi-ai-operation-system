@@ -4,6 +4,9 @@ import type {
   ArtifactSelection,
   CreationView,
   CreatorAction,
+  CreatorArtifactDescriptor,
+  CreatorProject,
+  CreatorVoiceSelection,
   CreatorStep,
   CreatorStepId,
   StepImpact,
@@ -17,9 +20,31 @@ export const CREATOR_CONFLICT_COPY = '内容已更新，请刷新后重试'
 export const SHOT_QUEUE_CONFLICT_COPY = '这个 Shot 已有更新，请基于最新版本重试'
 export const SHOT_QUEUE_ROW_HEIGHT = 64
 export const DEFAULT_SHOT_QUEUE_FILTER: Readonly<{ status: ShotQueueStatus }> = { status: 'needs_attention' }
+
+export function initialShotFilters(projectStatus: string): Readonly<{ status: ShotQueueStatus }> {
+  const normalizedStatus = projectStatus.trim().toLocaleUpperCase()
+  return { status: normalizedStatus === 'COMPLETED' || normalizedStatus === 'ARCHIVED' ? 'all' : 'needs_attention' }
+}
+
+export function isUnfilteredShotPageReset(filters: ShotListFilters, reset: boolean): boolean {
+  return reset && filters.status === 'all' && !filters.query?.trim() && !filters.chapter?.trim()
+}
+
+export function canApplyShotListRequestState(requestToken: number, latestRequestToken: number, aborted: boolean): boolean {
+  return !aborted && isLatestWorkspaceRequest(requestToken, latestRequestToken)
+}
+
 export const CREATOR_WORKSPACE_STEP_IDS: readonly CreatorStepId[] = [
   'requirements', 'direction', 'script', 'shots', 'preview', 'delivery',
 ]
+
+export function creatorProgressSteps(steps: readonly CreatorStep[]): CreatorStep[] {
+  const stepById = new Map(steps.map(step => [step.id, step]))
+  return CREATOR_WORKSPACE_STEP_IDS.flatMap(stepId => {
+    const step = stepById.get(stepId)
+    return step ? [step] : []
+  })
+}
 
 export function creatorProjectProgress(
   projectStatus: string,
@@ -33,6 +58,119 @@ export function creatorProjectProgress(
     label: `已完成 ${complete}/${total} 个步骤`,
     percent: Math.round((complete / total) * 100),
   }
+}
+
+export function creatorProjectEntryStep(projectStatus: string, activeStep?: CreatorStepId): CreatorStepId {
+  if (projectStatus === 'COMPLETED' || projectStatus === 'ARCHIVED') return 'preview'
+  return activeStep ?? 'requirements'
+}
+
+export interface CompletedTaskView {
+  project: Pick<CreatorProject, 'status'>
+  activeStep?: CreatorStepId
+}
+
+export interface CompletedTaskMediaAvailability {
+  preview?: CreatorMediaState
+  delivery?: CreatorMediaState
+}
+
+export interface CompletedTaskRepairScope {
+  stepId: 'delivery'
+  preserveUpstream: true
+}
+
+export type CreatorArtifactLoadState = 'empty' | 'loading' | 'ready' | 'error'
+
+export interface CompletedRepairContext {
+  artifactLoadState: CreatorArtifactLoadState
+  viewingHistorical: boolean
+  currentArtifactId?: string
+  selectedArtifactId?: string
+  currentArtifactVersion?: number
+  selectedArtifactVersion?: number
+}
+
+export function completedTaskLandingStep(
+  view: CompletedTaskView,
+  availability: CompletedTaskMediaAvailability,
+): CreatorStepId {
+  // A completed task always opens its delivery workspace, including when the
+  // media probe reports a recoverable delivery failure.
+  void availability
+  if (view.project.status === 'COMPLETED' || view.project.status === 'ARCHIVED') return 'delivery'
+  return creatorProjectEntryStep(view.project.status, view.activeStep)
+}
+
+export function completedRepairScope(
+  view: CompletedTaskView,
+  availability: CompletedTaskMediaAvailability,
+  context?: CompletedRepairContext,
+): CompletedTaskRepairScope | undefined {
+  const completed = view.project.status === 'COMPLETED' || view.project.status === 'ARCHIVED'
+  if (!completed || (availability.delivery !== 'missing' && availability.delivery !== 'unsupported')) return undefined
+  if (context) {
+    const missingAuthoritativeArtifact = context.artifactLoadState === 'empty' &&
+      !context.viewingHistorical &&
+      !context.currentArtifactId &&
+      !context.selectedArtifactId &&
+      context.currentArtifactVersion === undefined &&
+      context.selectedArtifactVersion === undefined
+    const loadedAuthoritativeArtifact = context.artifactLoadState === 'ready' &&
+      !context.viewingHistorical &&
+      Boolean(context.currentArtifactId) &&
+      context.selectedArtifactId === context.currentArtifactId &&
+      context.currentArtifactVersion === context.selectedArtifactVersion
+    if (!missingAuthoritativeArtifact && !loadedAuthoritativeArtifact) return undefined
+  }
+  return { stepId: 'delivery', preserveUpstream: true }
+}
+
+export function shouldProbeCreatorDeliveryMedia(input: {
+  artifactLoadState: CreatorArtifactLoadState
+  presentation?: string
+  mediaUrl?: string
+  finalReviewPassed: boolean
+}): boolean {
+  // Final review gates delivery, not diagnosis. The browser probe must still
+  // classify an available selected video when older artifacts omit QA metadata.
+  void input.finalReviewPassed
+  return input.artifactLoadState === 'ready' && input.presentation === 'video' && Boolean(input.mediaUrl)
+}
+
+export function canDeliverCreatorFinalVideo(input: {
+  finalReviewPassed: boolean
+  mediaUrl?: string
+  mediaState: CreatorMediaState
+}): boolean {
+  return input.finalReviewPassed && Boolean(input.mediaUrl) && input.mediaState === 'playable'
+}
+
+export function completedDeliveryRepairSuccess(
+  view: Pick<CreationView, 'activeTasks'>,
+): { notice: string; refreshAfterMutation: true } {
+  return {
+    notice: view.activeTasks.length > 0
+      ? '已开始重新生成成片，需求、创意、脚本和分镜会保留。'
+      : '成片正在更新，请稍后查看。',
+    refreshAfterMutation: true,
+  }
+}
+
+export function withCreatorProjectRecord(
+  steps: readonly CreatorStep[],
+  project: Pick<CreatorProject, 'name' | 'description'>,
+): CreatorStep[] {
+  const hasProjectRecord = Boolean(project.name.trim() || project.description?.trim())
+  if (!hasProjectRecord) return [...steps]
+  return steps.map(step => step.id === 'requirements'
+    ? {
+        ...step,
+        hasHistory: true,
+        attemptCount: Math.max(1, step.attemptCount),
+        artifactCount: Math.max(1, step.artifactCount),
+      }
+    : step)
 }
 
 const STEP_LABELS: Record<CreatorStepId, string> = {
@@ -53,10 +191,23 @@ export interface CreationRequestInput {
   productionRoute?: CreatorProductionRoute
   aigcPolicy?: CreatorAIGCPolicy
   modelProviders?: Partial<Record<ModelCapability, ModelProviderConfig>>
+  voiceSelection?: CreatorVoiceSelection
 }
 
 export type CreatorProductionRoute = 'talking_head' | 'cinematic_story'
 export type CreatorAIGCPolicy = 'auto' | 'disabled'
+
+export function validateCreatorVoiceSelection(selection: CreatorVoiceSelection): string | undefined {
+  if (selection.mode === 'default_ip') return undefined
+  if (selection.mode === 'reference_clone') {
+    if (!selection.referenceText?.trim()) return '请填写录音中实际说出的完整录音原文。'
+    if (!selection.referenceTextVerified) return '请确认录音原文与音频完全一致。'
+    if (!selection.usageRightsConfirmed) return '请确认你拥有该录音及声音的使用授权。'
+    return undefined
+  }
+  if (!selection.usageRightsConfirmed) return '请确认你拥有该口播录音的使用授权。'
+  return undefined
+}
 
 export interface CreationRequest {
   project: CreateVideoProjectPayload
@@ -96,15 +247,151 @@ export function resolveCreatorArtifactMediaUrl(
 	content: ArtifactContentResponse | null | undefined,
 	localAgentBaseUrl: string,
 ): string | undefined {
-	const direct = content?.mediaUrl || content?.mediaUrls?.[0]
-	if (direct) return direct
 	if (!content || content.artifact.projectId !== projectId || !isSafeStorageSegment(projectId)) return undefined
+	const direct = content?.mediaUrl || content?.mediaUrls?.[0]
+	const baseUrl = localAgentBaseUrl.replace(/\/+$/, '')
+	if (direct) {
+		const normalized = normalizeCreatorDirectMediaUrl(direct, baseUrl)
+		const rootRelativeLocal = isRootRelativeCreatorLocalMediaUrl(direct)
+		if (isEncodedRootRelativeCreatorLocalMediaUrl(direct)) return undefined
+		if (rootRelativeLocal && !baseUrl) return undefined
+		if (!rootRelativeLocal && !isCreatorLocalAgentOriginUrl(normalized, baseUrl)) return normalized
+		if (!isCreatorLocalMediaUrl(normalized, baseUrl)) return undefined
+		return creatorLocalMediaBelongsToProject(normalized, projectId) ? normalized : undefined
+	}
 	const metadata = content.artifact.metadata
 	const localPath = typeof metadata?.localPath === 'string' ? metadata.localPath.trim() : ''
-	if (!localPath || metadata?.localOnly !== true) return undefined
-	const baseUrl = localAgentBaseUrl.replace(/\/+$/, '')
-	if (!baseUrl) return undefined
-	return `${baseUrl}/api/local/media?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(localPath)}`
+	if (!baseUrl || metadata?.localOnly !== true) return undefined
+	if (localPath) {
+		return `${baseUrl}/api/local/media?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(localPath)}`
+	}
+	const storageRef = typeof content.artifact.storageRef === 'string' ? content.artifact.storageRef.trim() : ''
+	const projectStoragePrefix = `local://projects/${projectId}/`
+	if (!storageRef.startsWith(projectStoragePrefix)) return undefined
+	return `${baseUrl}/api/local/media?projectId=${encodeURIComponent(projectId)}&storageRef=${encodeURIComponent(storageRef)}`
+}
+
+function isRootRelativeCreatorLocalMediaUrl(src: string): boolean {
+	if (!src.startsWith('/')) return false
+	try {
+		return new URL(src, 'http://creator.local').pathname === '/api/local/media'
+	} catch {
+		return false
+	}
+}
+
+function isEncodedRootRelativeCreatorLocalMediaUrl(src: string): boolean {
+	if (!src.startsWith('/') || isRootRelativeCreatorLocalMediaUrl(src)) return false
+	try {
+		let pathname = new URL(src, 'http://creator.local').pathname
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			const decoded = decodeURIComponent(pathname)
+			if (decoded === '/api/local/media') return true
+			if (decoded === pathname) return false
+			pathname = decoded
+		}
+		return false
+	} catch {
+		return true
+	}
+}
+
+function creatorLocalMediaBelongsToProject(src: string, projectId: string): boolean {
+	try {
+		const url = new URL(src)
+		return url.searchParams.get('projectId') === projectId &&
+			(url.searchParams.get('storageRef') ?? '').startsWith(`local://projects/${projectId}/`)
+	} catch {
+		return false
+	}
+}
+
+function normalizeCreatorDirectMediaUrl(direct: string, localAgentBaseUrl: string): string {
+	if (!direct.startsWith('/') || !localAgentBaseUrl) return direct
+	try {
+		const localAgent = new URL(localAgentBaseUrl)
+		if (localAgent.protocol !== 'http:' && localAgent.protocol !== 'https:') return direct
+		const normalized = new URL(direct, localAgent)
+		if (normalized.origin !== localAgent.origin || normalized.pathname !== '/api/local/media') return direct
+		return normalized.toString()
+	} catch {
+		return direct
+	}
+}
+
+export type CreatorMediaState = 'loading' | 'playable' | 'missing' | 'unsupported' | 'service_unavailable' | 'unavailable'
+
+export function creatorMediaStateAfterHttpProbe(status: number | undefined): CreatorMediaState {
+	if (status === 404) return 'missing'
+	if (status !== undefined && status >= 200 && status < 300) return 'loading'
+	return 'service_unavailable'
+}
+
+export function creatorMediaStateAfterLoadedMetadata(): CreatorMediaState {
+	return 'playable'
+}
+
+export function creatorMediaStateAfterMediaError(
+	mediaErrorCode: number | undefined,
+	deliveryStatus: number | undefined,
+	localSource: boolean,
+): CreatorMediaState {
+	if (!localSource) return mediaErrorCode === 3 || mediaErrorCode === 4 ? 'unsupported' : 'unavailable'
+	if (deliveryStatus === 404) return 'missing'
+	if (deliveryStatus === undefined || deliveryStatus < 200 || deliveryStatus >= 300) return 'service_unavailable'
+	return mediaErrorCode === 3 || mediaErrorCode === 4 ? 'unsupported' : 'service_unavailable'
+}
+
+export function isCreatorLocalMediaUrl(src: string, localAgentBaseUrl: string): boolean {
+	try {
+		const localAgent = new URL(localAgentBaseUrl)
+		const source = new URL(src)
+		return (source.protocol === 'http:' || source.protocol === 'https:') &&
+			source.origin === localAgent.origin &&
+			source.username === '' &&
+			source.password === '' &&
+			source.pathname === '/api/local/media'
+	} catch {
+		return false
+	}
+}
+
+function isCreatorLocalAgentOriginUrl(src: string, localAgentBaseUrl: string): boolean {
+	try {
+		const localAgent = new URL(localAgentBaseUrl)
+		const source = new URL(src)
+		return (source.protocol === 'http:' || source.protocol === 'https:') &&
+			source.origin === localAgent.origin
+	} catch {
+		return false
+	}
+}
+
+export function canApplyCreatorMediaProbe(
+	probeToken: number,
+	latestProbeToken: number,
+	probeSrc: string,
+	currentSrc: string,
+	aborted: boolean,
+): boolean {
+	return !aborted && probeToken === latestProbeToken && probeSrc === currentSrc
+}
+
+export function canonicalCreatorMediaElementSrc(src: string, documentBase: string): string {
+	try {
+		return new URL(src, documentBase).toString()
+	} catch {
+		return src
+	}
+}
+
+export function canApplyCreatorMediaElementEvent(
+	eventCurrentSrc: string,
+	expectedSrc: string,
+	eventToken: number,
+	latestToken: number,
+): boolean {
+	return eventToken === latestToken && (eventCurrentSrc === '' || eventCurrentSrc === expectedSrc)
 }
 
 export function creatorStartIdempotencyKey(projectId: string): string {
@@ -133,7 +420,14 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
   const aigcPolicy = input.aigcPolicy ?? 'auto'
   const projectMode = productionRoute === 'talking_head' ? 'voice_visual' : 'aigc_shot'
   const aigcEnabled = aigcPolicy !== 'disabled'
-  const ipRenderMode = productionRoute === 'talking_head' ? 'preview' : undefined
+  const ipRenderMode = productionRoute === 'talking_head' ? 'production' : undefined
+  const voiceSelection = productionRoute === 'talking_head'
+    ? input.voiceSelection ?? {
+        mode: 'default_ip' as const,
+        provider: 'gpt_sovits_local' as const,
+        voiceId: 'main_ip_warm_knowledge_host_v1',
+      }
+    : undefined
   const requiredLayers = productionRoute === 'talking_head'
     ? ['ip_aroll', 'hyperframes_text']
     : ['aigc_main', 'hyperframes_text']
@@ -163,6 +457,7 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
     layerExecutionPolicy,
     requiredLayers,
     ...(ipRenderMode ? { ipRenderMode } : {}),
+    ...(voiceSelection ? { voiceSelection } : {}),
     ...(modelProviders && Object.keys(modelProviders).length > 0
       ? { modelProviders }
       : {}),
@@ -204,6 +499,7 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
         layerExecutionPolicy,
         requiredLayers,
         ...(ipRenderMode ? { ipRenderMode } : {}),
+        ...(voiceSelection ? { voiceSelection } : {}),
         ...(Object.keys(modelProviderRefs).length > 0 ? { modelProviderRefs } : {}),
       },
     },
@@ -257,6 +553,95 @@ export function nextCreatorAction(view: Pick<CreationView, 'steps'>): CreatorAct
 
 export function nextPendingCreatorReview(reviews: readonly AgentReviewItem[]): AgentReviewItem | undefined {
   return reviews.find(review => review.status === 'PENDING')
+}
+
+export function creatorAgentReviewContent(review: AgentReviewItem): string {
+  const qualityReport = creatorAgentReviewQualityReport(review)
+  if (review.reviewPhase === 'quality_gate' && qualityReport) {
+    const score = finiteNumber(qualityReport.score)
+    const passed = qualityReport.passed === true
+    const lines = [
+      score === undefined ? '质量检查结果' : `质量评分：${score}/100`,
+      `状态：${passed ? '通过' : '未通过'}`,
+    ]
+    const summary = stringValue(qualityReport.analysisSummary)
+    if (summary) lines.push('', summary)
+    const issues = recordList(qualityReport.issues)
+    if (issues.length > 0) {
+      lines.push('', '发现的问题：')
+      for (const issue of issues) {
+        const label = stringValue(issue.field)
+        const message = stringValue(issue.message)
+        if (label || message) lines.push(`- ${label ? `${label}：` : ''}${message}`)
+      }
+    }
+    const suggestions = stringList(qualityReport.repairSuggestions)
+    if (suggestions.length > 0) {
+      lines.push('', '建议修改：', ...suggestions.map(suggestion => `- ${suggestion}`))
+    }
+    return lines.join('\n')
+  }
+  const content = review.reviewContent?.trim()
+  if (content) return content
+  return reviewOutputText(review.reviewOutput)
+}
+
+export function creatorAgentReviewCanRegenerate(review: AgentReviewItem): boolean {
+  return review.status === 'PENDING'
+}
+
+export function creatorAgentReviewApprovalBlocked(review: AgentReviewItem): boolean {
+  if (review.reviewPhase !== 'quality_gate') return false
+  const qualityReport = creatorAgentReviewQualityReport(review)
+  if (!qualityReport) return false
+  const score = finiteNumber(qualityReport.score)
+  return qualityReport.passed === false || (score !== undefined && score < 85)
+}
+
+export function creatorAgentReviewRegenerationHint(review: AgentReviewItem): string {
+  const qualityReport = creatorAgentReviewQualityReport(review)
+  const suggestions = stringList(qualityReport?.repairSuggestions)
+  if (suggestions.length > 0) return suggestions.join('\n')
+  return ''
+}
+
+function creatorAgentReviewQualityReport(review: AgentReviewItem): Record<string, unknown> | undefined {
+  const report = review.reviewOutput?.qualityReport
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return undefined
+  const record = report as Record<string, unknown>
+  const packaged = record.package
+  return packaged && typeof packaged === 'object' && !Array.isArray(packaged)
+    ? packaged as Record<string, unknown>
+    : record
+}
+
+function reviewOutputText(output: Record<string, unknown> | undefined): string {
+  if (!output || Object.keys(output).length === 0) return ''
+  const preferred = output.script ?? output.summary ?? output.content ?? output.result
+  if (typeof preferred === 'string') return preferred
+  try {
+    return JSON.stringify(output, null, 2)
+  } catch {
+    return ''
+  }
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(stringValue).filter(Boolean) : []
+}
+
+function recordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter(item => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) as Record<string, unknown>[]
+    : []
 }
 
 export function creatorStepForAgentReview(
@@ -360,8 +745,29 @@ export function creatorStepLabel(stepId: CreatorStepId): string {
   return STEP_LABELS[stepId]
 }
 
-export function isCreatorStepReadable(step: Pick<CreatorStep, 'state'>): boolean {
-  return step.state !== 'not_started'
+export function isCreatorStepReadable(step: Pick<CreatorStep, 'state'> & Partial<Pick<CreatorStep, 'hasHistory'>>): boolean {
+  return step.state !== 'not_started' || step.hasHistory === true
+}
+
+export function creatorStepRegenerationIdempotencyKey(projectId: string, stepId: CreatorStepId, nonce: string): string {
+  return `creator-regeneration:${projectId}:${stepId}:${nonce}`
+}
+
+export function selectCreatorStepArtifact<T extends Pick<CreatorArtifactDescriptor, 'artifactId' | 'isCurrent'> & Partial<Pick<CreatorArtifactDescriptor, 'kind' | 'isStale'>>>(
+  artifacts: readonly T[],
+  preferredArtifactId?: string,
+  currentArtifactId?: string,
+  preferredKind?: string,
+): T | undefined {
+  const normalizedKind = preferredKind?.trim().toLowerCase()
+  const matchesKind = (item: T) => normalizedKind && item.kind?.trim().toLowerCase() === normalizedKind
+  return artifacts.find(item => item.artifactId === preferredArtifactId) ??
+    artifacts.find(item => matchesKind(item) && item.isCurrent && item.isStale !== true) ??
+    artifacts.find(item => matchesKind(item) && item.isStale !== true) ??
+    artifacts.find(item => matchesKind(item)) ??
+    artifacts.find(item => item.artifactId === currentArtifactId) ??
+    artifacts.find(item => item.isCurrent) ??
+    artifacts[0]
 }
 
 export function canConfirmCreatorStep(step: Pick<CreatorStep, 'state' | 'allowedActions'>): boolean {
@@ -411,6 +817,16 @@ export function creatorPollDelay(attempt: number): number {
   return Math.min(5000, 500 * (2 ** Math.max(0, Math.floor(attempt))))
 }
 
+export function creatorPollingSignature(
+  view: Pick<CreationView, 'activeTasks' | 'steps'> | null | undefined,
+): string {
+  const activeTasks = (view?.activeTasks ?? [])
+    .map(task => `${task.id}:${task.shotId ?? ''}:${task.status}`)
+    .sort()
+    .join('|')
+  return activeTasks || (view?.steps.some(step => step.state === 'generating') ? 'creator-step-generating' : '')
+}
+
 export function isCreatorConflict(error: unknown): boolean {
   if (!error || typeof error !== 'object' || !('response' in error)) return false
   const response = error.response
@@ -437,6 +853,16 @@ export function isCurrentWorkspaceArtifact<T>(
   selection: WorkspaceArtifactSelection | null | undefined,
 ): boolean {
   return Boolean(result && selection && result.key === workspaceArtifactKey(selection))
+}
+
+export function creatorArtifactLoadState<T>(
+  selection: WorkspaceArtifactSelection | null | undefined,
+  result: KeyedWorkspaceArtifact<T> | null | undefined,
+  loadError: string,
+): CreatorArtifactLoadState {
+  if (!selection) return 'empty'
+  if (isCurrentWorkspaceArtifact(result, selection)) return 'ready'
+  return loadError ? 'error' : 'loading'
 }
 
 export function isLatestWorkspaceRequest(requestToken: number, latestToken: number): boolean {

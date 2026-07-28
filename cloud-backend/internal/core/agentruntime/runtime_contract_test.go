@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -574,6 +575,14 @@ func (p *repairingContractPlanner) GeneratePlan(context.Context, StartRunRequest
 }
 
 func (p *repairingContractPlanner) RepairPlan(context.Context, *AgentPlan, string) (*AgentPlan, error) {
+	p.repairCalls++
+	return p.repaired, nil
+}
+
+func (p *repairingContractPlanner) RepairPlanForRequest(_ context.Context, req StartRunRequest, _ *AgentPlan, _ string) (*AgentPlan, error) {
+	if req.requestToolSnapshot == nil {
+		return nil, fmt.Errorf("request snapshot missing during repair")
+	}
 	p.repairCalls++
 	return p.repaired, nil
 }

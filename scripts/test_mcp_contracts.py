@@ -73,6 +73,7 @@ SERVER_CONTRACTS = (
             {
                 "check_status",
                 "check_gpt_sovits_voice",
+                "synthesize_reference_voice",
                 "generate_voice_auditions",
                 "validate_character_asset",
                 "prepare_character_master",

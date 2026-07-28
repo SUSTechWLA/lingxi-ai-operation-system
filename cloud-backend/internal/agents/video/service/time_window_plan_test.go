@@ -56,6 +56,83 @@ func TestBuildTimeWindowPlanKeepsTalkingHeadScriptTiming(t *testing.T) {
 	}
 }
 
+func TestValidateCanonicalTimeWindowPlanAcceptsExactNarrationCoverage(t *testing.T) {
+	master := model.AudioMasterTimeline{
+		Revision:   "audio-master-1",
+		DurationMs: 6_000,
+		Sentences: []model.TimedTextCue{
+			{ID: "cue-1", Text: "第一句。", StartMs: 0, EndMs: 3_000, DurationMs: 3_000, TimelineRevision: "audio-master-1"},
+			{ID: "cue-2", Text: "第二句。", StartMs: 3_000, EndMs: 6_000, DurationMs: 3_000, TimelineRevision: "audio-master-1"},
+		},
+	}
+	plan := model.TimeWindowPlan{
+		TimelineRevision: "audio-master-1",
+		Windows: []model.TimeWindowUnit{
+			{ID: "TW_01", ShotID: "SHOT_01", StartMs: 0, EndMs: 3_000, DurationMs: 3_000, TimelineRevision: "audio-master-1", ScriptText: "第一句。"},
+			{ID: "TW_02", ShotID: "SHOT_02", StartMs: 3_000, EndMs: 6_000, DurationMs: 3_000, TimelineRevision: "audio-master-1", ScriptText: "第二句。"},
+		},
+	}
+
+	if issues := ValidateCanonicalTimeWindowPlan(master, plan); len(issues) != 0 {
+		t.Fatalf("valid canonical plan issues = %#v, want none", issues)
+	}
+	if got := NormalizeNarrationForComparison(" 第一 句。\n第二句。 "); got != "第一句。第二句。" {
+		t.Fatalf("normalized narration = %q", got)
+	}
+}
+
+func TestValidateCanonicalTimeWindowPlanRejectsGapOverlapAndRepeatedFullNarration(t *testing.T) {
+	master := model.AudioMasterTimeline{
+		Revision:   "audio-master-1",
+		DurationMs: 6_000,
+		Sentences: []model.TimedTextCue{
+			{ID: "cue-1", Text: "第一句。", StartMs: 0, EndMs: 3_000, DurationMs: 3_000, TimelineRevision: "audio-master-1"},
+			{ID: "cue-2", Text: "第二句。", StartMs: 3_000, EndMs: 6_000, DurationMs: 3_000, TimelineRevision: "audio-master-1"},
+		},
+	}
+	tests := []struct {
+		name     string
+		windows  []model.TimeWindowUnit
+		wantCode string
+	}{
+		{
+			name: "gap",
+			windows: []model.TimeWindowUnit{
+				{ID: "TW_01", ShotID: "SHOT_01", StartMs: 0, EndMs: 2_500, DurationMs: 2_500, ScriptText: "第一句。"},
+				{ID: "TW_02", ShotID: "SHOT_02", StartMs: 3_000, EndMs: 6_000, DurationMs: 3_000, ScriptText: "第二句。"},
+			},
+			wantCode: "shot_timeline_gap",
+		},
+		{
+			name: "overlap",
+			windows: []model.TimeWindowUnit{
+				{ID: "TW_01", ShotID: "SHOT_01", StartMs: 0, EndMs: 3_500, DurationMs: 3_500, ScriptText: "第一句。"},
+				{ID: "TW_02", ShotID: "SHOT_02", StartMs: 3_000, EndMs: 6_000, DurationMs: 3_000, ScriptText: "第二句。"},
+			},
+			wantCode: "shot_timeline_overlap",
+		},
+		{
+			name: "repeated full narration",
+			windows: []model.TimeWindowUnit{
+				{ID: "TW_01", ShotID: "SHOT_01", StartMs: 0, EndMs: 3_000, DurationMs: 3_000, ScriptText: "第一句。第二句。"},
+				{ID: "TW_02", ShotID: "SHOT_02", StartMs: 3_000, EndMs: 6_000, DurationMs: 3_000, ScriptText: "第一句。第二句。"},
+			},
+			wantCode: "shot_narration_coverage_mismatch",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			issues := ValidateCanonicalTimeWindowPlan(master, model.TimeWindowPlan{TimelineRevision: master.Revision, Windows: tc.windows})
+			for _, issue := range issues {
+				if issue.Code == tc.wantCode {
+					return
+				}
+			}
+			t.Fatalf("issues = %#v, want code %q", issues, tc.wantCode)
+		})
+	}
+}
+
 func TestBuildTimeWindowPlanDefaultsUnknownProfileInvalidScriptSpan(t *testing.T) {
 	plan := BuildTimeWindowPlan(TimeWindowRequest{
 		Profile: model.VideoCreationProfile{ProfileID: "unknown"},

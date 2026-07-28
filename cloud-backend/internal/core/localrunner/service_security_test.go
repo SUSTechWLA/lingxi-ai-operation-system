@@ -129,11 +129,11 @@ func TestStaleMCPRetirementSQLAtomicallyScopesRunnerAndCatalogBinding(t *testing
 	}
 }
 
-func TestPendingStaleMCPCallbackSQLIsTenantAndSessionScoped(t *testing.T) {
+func TestPendingTerminalCallbackRecoverySQLIsTenantAndSessionScoped(t *testing.T) {
 	query := strings.ToLower(strings.ReplaceAll(pendingStaleMCPCallbacksSQL, " ", ""))
 	for _, required := range []string{
-		"lj.status='failed'", "coalesce(lj.user_id,'')=$1", "coalesce(lj.runner_id,'')=$3",
-		"coalesce(lj.target_runner_id,'')=$3", "lj.error_json->>'code'='mcp_catalog_stale'",
+		"lj.statusin('completed','failed')", "coalesce(lj.user_id,'')=$1", "coalesce(lj.runner_id,'')=$3",
+		"coalesce(lj.target_runner_id,'')=''orcoalesce(lj.target_runner_id,'')=$3",
 		"result_callback_state='pending'", "followup_callback_state='pending'",
 		"result_callback_state='processing'", "result_callback_lease_untilisnull", "result_callback_lease_until<now()",
 		"followup_callback_state='processing'", "followup_callback_lease_untilisnull", "followup_callback_lease_until<now()",
@@ -141,7 +141,7 @@ func TestPendingStaleMCPCallbackSQLIsTenantAndSessionScoped(t *testing.T) {
 		"lr.status='online'", "lr.last_heartbeat",
 	} {
 		if !strings.Contains(query, strings.ReplaceAll(required, " ", "")) {
-			t.Fatalf("stale MCP callback SQL missing %q: %s", required, pendingStaleMCPCallbacksSQL)
+			t.Fatalf("terminal callback recovery SQL missing %q: %s", required, pendingStaleMCPCallbacksSQL)
 		}
 	}
 }

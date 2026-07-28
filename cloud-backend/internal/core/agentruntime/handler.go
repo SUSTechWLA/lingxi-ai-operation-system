@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -522,6 +523,22 @@ func (h *Handler) reviewsForRun(ctx context.Context, runID string) (*Run, []Revi
 	if err != nil {
 		return nil, nil, err
 	}
+	auditsByNodeID := make(map[string]*ArtifactReview)
+	if h.artifactReview != nil {
+		if audits, auditErr := h.artifactReview.FindByTaskID(ctx, run.TaskID); auditErr == nil {
+			for _, audit := range audits {
+				if audit == nil {
+					continue
+				}
+				if audit.NodeID != "" {
+					auditsByNodeID[audit.NodeID] = audit
+				}
+				if audit.ID != "" {
+					auditsByNodeID[audit.ID] = audit
+				}
+			}
+		}
+	}
 	nodesByID := make(map[string]*model.Node, len(nodes))
 	nodesByOriginalID := make(map[string]*model.Node, len(nodes))
 	for _, node := range nodes {
@@ -543,6 +560,7 @@ func (h *Handler) reviewsForRun(ctx context.Context, runID string) (*Run, []Revi
 		}
 		h.ensureReviewNodeArtifactID(ctx, run, node)
 		review := reviewFromNode(node)
+		enrichReviewFromAudit(&review, auditsByNodeID[node.ID])
 		enrichReviewFromSourceNode(&review, node, nodesByID, nodesByOriginalID)
 		if !reviewReadyForDecision(review, node) {
 			continue
@@ -550,6 +568,19 @@ func (h *Handler) reviewsForRun(ctx context.Context, runID string) (*Run, []Revi
 		reviews = append(reviews, review)
 	}
 	return run, reviews, nil
+}
+
+func enrichReviewFromAudit(review *Review, audit *ArtifactReview) {
+	if review == nil || audit == nil {
+		return
+	}
+	review.ReviewerID = audit.ReviewerID
+	review.ReviewComment = audit.ReviewComment
+	if !audit.CreatedAt.IsZero() {
+		createdAt := audit.CreatedAt
+		review.CreatedAt = &createdAt
+	}
+	review.ReviewedAt = audit.ReviewedAt
 }
 
 func visibleReviewNodeStatus(status model.NodeStatus) bool {
@@ -672,6 +703,10 @@ type Review struct {
 	ReviewContent       string                   `json:"reviewContent,omitempty"`
 	ReviewArtifacts     []map[string]interface{} `json:"reviewArtifacts,omitempty"`
 	ReviewOutput        map[string]interface{}   `json:"reviewOutput,omitempty"`
+	ReviewerID          string                   `json:"reviewerId,omitempty"`
+	ReviewComment       string                   `json:"reviewComment,omitempty"`
+	CreatedAt           *time.Time               `json:"createdAt,omitempty"`
+	ReviewedAt          *time.Time               `json:"reviewedAt,omitempty"`
 }
 
 func reviewFromNode(node *model.Node) Review {

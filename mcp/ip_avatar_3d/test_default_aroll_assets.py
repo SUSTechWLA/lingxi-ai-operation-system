@@ -176,6 +176,18 @@ class BundledDefaultArollAssetsTests(unittest.TestCase):
         self.assertEqual(profile["render"]["cameraPreset"], "front_talking")
         self.assertEqual(profile["render"]["presentationMode"], "standing")
 
+    def test_bundled_profile_pins_the_approved_production_voice(self) -> None:
+        profile = json.loads(self.profile_path.read_text(encoding="utf-8"))
+        voice = profile["voice"]
+        local = voice["gptSovitsLocal"]
+        reference = self.profile_root / "voice/reference/main_ip_voice_ref_v1.wav"
+
+        self.assertEqual(voice["renderMode"], "production")
+        self.assertEqual(voice["provider"], "gpt_sovits_local")
+        self.assertEqual(voice["voiceId"], "main_ip_warm_knowledge_host_v1")
+        self.assertEqual(local["referenceAudioPath"], "voice/reference/main_ip_voice_ref_v1.wav")
+        self.assertEqual(_sha256(reference), local["expectedReferenceAudioSha256"])
+
     def test_bundled_manifest_hashes_are_current(self) -> None:
         result = validate_manifest(self.manifest_path, repo_root=self.profile_root)
 

@@ -2,7 +2,9 @@ package database
 
 import (
 	"context"
+	"crypto/md5"
 	"fmt"
+	"regexp"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -10,6 +12,100 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
 )
+
+const (
+	// Run-manifest limits bound durable metadata independently of prompt/tool
+	// payload size. Agent and workflow builders share this persistence contract.
+	RunManifestLimitExceededCode = "RUN_MANIFEST_LIMIT_EXCEEDED"
+	RunManifestMaxBytes          = 32 * 1024
+	RunManifestMaxRunnerCatalogs = 128
+
+	// RunManifestMaxIdentifierBytes bounds identifiers inside run_manifest
+	// JSON. Persisted top-level columns use their exact DDL widths below.
+	RunManifestMaxIdentifierBytes = 256
+	RunManifestMaxRunnerIDBytes   = 128
+	RunManifestMaxVersionBytes    = 128
+	RunManifestMaxHashBytes       = 128
+
+	RunTraceIDMaxBytes                = 128
+	RunToolRegistrySnapshotIDMaxBytes = 160
+	RunParentRunIDMaxBytes            = 64
+	RunReplayFromStageIDMaxBytes      = 128
+	AgentTerminalEventIDMaxBytes      = 96
+)
+
+const agentTerminalLegacyEventIDPrefix = "evt_agent_terminal_legacy_"
+
+var (
+	agentTerminalEventIDPattern = regexp.MustCompile(`^evt_[A-Za-z0-9_-]+$`)
+	agentRunIDPattern           = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+)
+
+// ValidAgentTerminalEventID matches the durable database constraint exactly.
+// It is exported so repositories can fail closed before claiming malformed
+// outbox identities left behind by manual or pre-migration writes.
+func ValidAgentTerminalEventID(eventID string) bool {
+	return len(eventID) <= AgentTerminalEventIDMaxBytes && agentTerminalEventIDPattern.MatchString(eventID)
+}
+
+func normalizeAgentTerminalEventID(runID, sqlEventID, jsonEventID string) string {
+	if ValidAgentTerminalEventID(sqlEventID) {
+		return sqlEventID
+	}
+	if ValidAgentTerminalEventID(jsonEventID) {
+		return jsonEventID
+	}
+	legacy := agentTerminalLegacyEventIDPrefix + runID
+	if agentRunIDPattern.MatchString(runID) && len(legacy) <= AgentTerminalEventIDMaxBytes {
+		return legacy
+	}
+	digest := md5.Sum([]byte(runID)) // PostgreSQL migration compatibility; not used for security.
+	return fmt.Sprintf("%s%x", agentTerminalLegacyEventIDPrefix, digest)
+}
+
+// ValidateRunIdentityColumnBounds enforces the exact VARCHAR widths shared by
+// agent_runs and workflow_runs before either repository reaches PostgreSQL.
+func ValidateRunIdentityColumnBounds(
+	traceID string,
+	toolRegistrySnapshotID string,
+	parentRunID *string,
+	replayFromStageID *string,
+) error {
+	if err := validateRunIdentityColumn("trace ID", traceID, RunTraceIDMaxBytes); err != nil {
+		return err
+	}
+	if err := validateRunIdentityColumn(
+		"tool snapshot ID",
+		toolRegistrySnapshotID,
+		RunToolRegistrySnapshotIDMaxBytes,
+	); err != nil {
+		return err
+	}
+	if parentRunID != nil {
+		if err := validateRunIdentityColumn("parent run ID", *parentRunID, RunParentRunIDMaxBytes); err != nil {
+			return err
+		}
+	}
+	if replayFromStageID != nil {
+		if err := validateRunIdentityColumn("replay stage ID", *replayFromStageID, RunReplayFromStageIDMaxBytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRunIdentityColumn(field, value string, maximum int) error {
+	if len(value) > maximum {
+		return fmt.Errorf(
+			"%s: %s bytes %d exceeds %d",
+			RunManifestLimitExceededCode,
+			field,
+			len(value),
+			maximum,
+		)
+	}
+	return nil
+}
 
 const localMCPReplanMigrationSQL = `UPDATE local_jobs
 SET status='FAILED',
@@ -78,8 +174,44 @@ const agentTerminalOutboxMigration = `
 	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_attempts INT NOT NULL DEFAULT 0;
 	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_lease_until TIMESTAMPTZ;
 	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_claim_token VARCHAR(96);
-	UPDATE agent_runs SET terminal_event_id='legacy_terminal_' || id || '_' || COALESCE(terminal_event_attempts, 0)::text
-		WHERE terminal_event_json IS NOT NULL AND terminal_event_id IS NULL;
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_callback_delivered_at TIMESTAMPTZ;
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_observability_delivered_at TIMESTAMPTZ;
+	UPDATE agent_runs
+	SET terminal_event_id=CASE
+		WHEN COALESCE(terminal_event_json->>'eventId','') ~ '^evt_[A-Za-z0-9_-]+$'
+		 AND OCTET_LENGTH(terminal_event_json->>'eventId') <= 96
+		THEN terminal_event_json->>'eventId'
+		WHEN id ~ '^[A-Za-z0-9_-]+$'
+		 AND OCTET_LENGTH('evt_agent_terminal_legacy_' || id) <= 96
+		THEN 'evt_agent_terminal_legacy_' || id
+		ELSE 'evt_agent_terminal_legacy_' || MD5(id)
+	END
+	WHERE terminal_event_json IS NOT NULL
+	  AND (
+		terminal_event_id IS NULL
+		OR terminal_event_id <> BTRIM(terminal_event_id)
+		OR terminal_event_id !~ '^evt_[A-Za-z0-9_-]+$'
+		OR OCTET_LENGTH(terminal_event_id) > 96
+	  );
+	UPDATE agent_runs
+	SET terminal_event_callback_delivered_at=COALESCE(terminal_event_callback_delivered_at, terminal_event_delivered_at),
+	    terminal_event_observability_delivered_at=COALESCE(terminal_event_observability_delivered_at, terminal_event_delivered_at)
+	WHERE terminal_event_delivered_at IS NOT NULL;
+	ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS agent_terminal_event_identity_required;
+	ALTER TABLE agent_runs ADD CONSTRAINT agent_terminal_event_identity_required
+		CHECK (
+			terminal_event_json IS NULL OR (
+				terminal_event_id IS NOT NULL
+				AND terminal_event_id = BTRIM(terminal_event_id)
+				AND terminal_event_id ~ '^evt_[A-Za-z0-9_-]+$'
+				AND OCTET_LENGTH(terminal_event_id) <= 96
+			)
+		);
+	ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS agent_terminal_event_phase_order;
+	ALTER TABLE agent_runs ADD CONSTRAINT agent_terminal_event_phase_order CHECK (
+		(terminal_event_observability_delivered_at IS NULL OR terminal_event_callback_delivered_at IS NOT NULL)
+		AND (terminal_event_delivered_at IS NULL OR terminal_event_observability_delivered_at IS NOT NULL)
+	);
 	CREATE INDEX IF NOT EXISTS idx_agent_runs_terminal_pending
 		ON agent_runs(updated_at) WHERE terminal_event_json IS NOT NULL AND terminal_event_delivered_at IS NULL;
 `
@@ -91,6 +223,80 @@ const localJobCallbackOutboxMigration = `
 	ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS followup_callback_lease_until TIMESTAMPTZ;
 `
 
+const runManifestMigration = `
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS trace_id VARCHAR(128);
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS tool_registry_snapshot_id VARCHAR(160);
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS run_manifest JSONB;
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS parent_run_id VARCHAR(64);
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS replay_from_stage_id VARCHAR(128);
+	ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS trace_id VARCHAR(128);
+	ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS tool_registry_snapshot_id VARCHAR(160);
+	ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS run_manifest JSONB;
+	ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS parent_run_id VARCHAR(64);
+	ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS replay_from_stage_id VARCHAR(128);
+`
+
+const observabilityRelayMigration = `
+	CREATE TABLE IF NOT EXISTS observability_event_outbox (
+		event_id VARCHAR(128) PRIMARY KEY,
+		user_id VARCHAR(64) NOT NULL,
+		run_id VARCHAR(128) NOT NULL,
+		trace_id VARCHAR(128) NOT NULL,
+		occurred_at TIMESTAMPTZ NOT NULL,
+		redacted_payload JSONB NOT NULL,
+		ingested_at TIMESTAMPTZ NOT NULL,
+		delivered_at TIMESTAMPTZ,
+		expires_at TIMESTAMPTZ NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_observability_event_outbox_user
+		ON observability_event_outbox(user_id, occurred_at, event_id)
+		WHERE delivered_at IS NULL;
+	CREATE INDEX IF NOT EXISTS idx_observability_event_outbox_correlation
+		ON observability_event_outbox(user_id, run_id, trace_id);
+	CREATE INDEX IF NOT EXISTS idx_observability_event_outbox_expiry
+		ON observability_event_outbox(expires_at);
+
+	CREATE TABLE IF NOT EXISTS observability_run_summaries (
+		user_id VARCHAR(64) NOT NULL,
+		run_id VARCHAR(128) NOT NULL,
+		status VARCHAR(32) NOT NULL,
+		duration_ms BIGINT,
+		error_fingerprints TEXT[] NOT NULL DEFAULT '{}',
+		correlation JSONB NOT NULL,
+		versions JSONB NOT NULL,
+		updated_at TIMESTAMPTZ NOT NULL,
+		last_event_id VARCHAR(128) NOT NULL,
+		CONSTRAINT observability_run_summary_fingerprint_limit
+			CHECK (cardinality(error_fingerprints) <= 128),
+		PRIMARY KEY (user_id, run_id)
+	);
+	ALTER TABLE observability_run_summaries
+		ADD COLUMN IF NOT EXISTS last_event_id VARCHAR(128) NOT NULL DEFAULT '';
+	UPDATE observability_run_summaries AS summaries
+	SET error_fingerprints=ARRAY(
+		SELECT DISTINCT fingerprint
+		FROM unnest(COALESCE(summaries.error_fingerprints, ARRAY[]::TEXT[])) AS fingerprint
+		WHERE fingerprint ~ '^[a-f0-9]{64}$'
+		ORDER BY fingerprint
+		LIMIT 128
+	);
+	DO $$ BEGIN
+		IF NOT EXISTS (
+			SELECT 1 FROM pg_constraint
+			WHERE conname='observability_run_summary_fingerprint_limit'
+			  AND conrelid = 'observability_run_summaries'::regclass
+		) THEN
+			ALTER TABLE observability_run_summaries
+				ADD CONSTRAINT observability_run_summary_fingerprint_limit
+				CHECK (cardinality(error_fingerprints) <= 128) NOT VALID;
+		END IF;
+	END $$;
+	ALTER TABLE observability_run_summaries
+		VALIDATE CONSTRAINT observability_run_summary_fingerprint_limit;
+	CREATE INDEX IF NOT EXISTS idx_observability_run_summaries_user_updated
+		ON observability_run_summaries(user_id, updated_at DESC);
+`
+
 type migrationExecer interface {
 	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
 }
@@ -98,6 +304,27 @@ type migrationExecer interface {
 func ensureVideoProjectConfigRevision(ctx context.Context, execer migrationExecer) error {
 	if _, err := execer.Exec(ctx, videoProjectConfigRevisionMigration); err != nil {
 		return fmt.Errorf("required video project config revision schema: %w", err)
+	}
+	return nil
+}
+
+func ensureAgentTerminalOutbox(ctx context.Context, execer migrationExecer) error {
+	if _, err := execer.Exec(ctx, agentTerminalOutboxMigration); err != nil {
+		return fmt.Errorf("required agent terminal outbox schema: %w", err)
+	}
+	return nil
+}
+
+func ensureRunManifestSchema(ctx context.Context, execer migrationExecer) error {
+	if _, err := execer.Exec(ctx, runManifestMigration); err != nil {
+		return fmt.Errorf("required run manifest schema: %w", err)
+	}
+	return nil
+}
+
+func ensureObservabilityRelaySchema(ctx context.Context, execer migrationExecer) error {
+	if _, err := execer.Exec(ctx, observabilityRelayMigration); err != nil {
+		return fmt.Errorf("required observability relay schema: %w", err)
 	}
 	return nil
 }
@@ -447,7 +674,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	if err := ensureVideoProjectConfigRevision(ctx, pool); err != nil {
 		zap.L().Fatal("Failed to install required video project config revision schema", zap.Error(err))
 	}
-	if _, err := pool.Exec(ctx, agentTerminalOutboxMigration); err != nil {
+	if err := ensureAgentTerminalOutbox(ctx, pool); err != nil {
 		zap.L().Fatal("Failed to install required agent terminal outbox schema", zap.Error(err))
 	}
 
@@ -512,6 +739,12 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	`
 	if _, err := pool.Exec(ctx, workflowRunSchema); err != nil {
 		zap.L().Warn("Failed to run workflow run migrations (non-fatal)", zap.Error(err))
+	}
+	if err := ensureRunManifestSchema(ctx, pool); err != nil {
+		zap.L().Fatal("Failed to install required run manifest schema", zap.Error(err))
+	}
+	if err := ensureObservabilityRelaySchema(ctx, pool); err != nil {
+		zap.L().Fatal("Failed to install required observability relay schema", zap.Error(err))
 	}
 
 	// Local Runner tables (video creation upgrade P7)
@@ -578,8 +811,14 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    artifact_policy JSONB DEFAULT '{}',
 		    idempotency_key VARCHAR(128),
 		    attempt INT DEFAULT 1,
+		    trace_id VARCHAR(64),
+		    span_id VARCHAR(32),
+		    parent_span_id VARCHAR(32),
 		    result_callback_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
 		    followup_callback_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+		    observability_callback_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+		    observability_callback_claim_token VARCHAR(96),
+		    observability_callback_lease_until TIMESTAMPTZ,
 		    claimed_at TIMESTAMPTZ,
 		    lease_expires_at TIMESTAMPTZ,
 		    completed_at TIMESTAMPTZ,
@@ -603,10 +842,17 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS artifact_policy JSONB DEFAULT '{}';
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS attempt INT DEFAULT 1;
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS trace_id VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS span_id VARCHAR(32);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS parent_span_id VARCHAR(32);
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS result_callback_state VARCHAR(20) NOT NULL DEFAULT 'DELIVERED';
 		ALTER TABLE local_jobs ALTER COLUMN result_callback_state SET DEFAULT 'PENDING';
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS followup_callback_state VARCHAR(20) NOT NULL DEFAULT 'DELIVERED';
 		ALTER TABLE local_jobs ALTER COLUMN followup_callback_state SET DEFAULT 'PENDING';
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS observability_callback_state VARCHAR(20) NOT NULL DEFAULT 'DELIVERED';
+		ALTER TABLE local_jobs ALTER COLUMN observability_callback_state SET DEFAULT 'PENDING';
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS observability_callback_claim_token VARCHAR(96);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS observability_callback_lease_until TIMESTAMPTZ;
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
 		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
 		UPDATE local_jobs lj
@@ -710,6 +956,8 @@ func DropAll(ctx context.Context, pool *pgxpool.Pool) {
 	DROP TABLE IF EXISTS local_job_logs;
 	DROP TABLE IF EXISTS local_jobs;
 	DROP TABLE IF EXISTS local_runners;
+	DROP TABLE IF EXISTS observability_run_summaries;
+	DROP TABLE IF EXISTS observability_event_outbox;
 	DROP TABLE IF EXISTS outbox_dlq;
 	DROP TABLE IF EXISTS outbox;
 	DROP TABLE IF EXISTS ai_context;

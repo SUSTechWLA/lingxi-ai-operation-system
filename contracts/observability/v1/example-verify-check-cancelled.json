@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "1.0",
+  "eventId": "evt_01j99zverifycancelled",
+  "occurredAt": "2026-07-27T12:00:00.000Z",
+  "ingestedAt": "2026-07-27T12:00:00.040Z",
+  "producerSequence": 1844,
+  "severity": "WARN",
+  "eventType": "verify.check.cancelled",
+  "messageKey": "verify.check.cancelled",
+  "source": {
+    "service": "cloud-backend",
+    "component": "agent-runtime",
+    "environment": "test"
+  },
+  "correlation": {
+    "traceId": "trc_01j99zagent",
+    "spanId": "spn_01j99zjudge",
+    "agentRunId": "agr_01j99zrun",
+    "stageId": "agent-plan-judge"
+  },
+  "execution": {
+    "status": "CANCELLED",
+    "attempt": 1,
+    "durationMs": 12
+  },
+  "runtime": {},
+  "evidence": {},
+  "error": null,
+  "privacy": {
+    "classification": "INTERNAL",
+    "redactedFields": ["request.message", "request.context", "plan.arguments"]
+  }
+}

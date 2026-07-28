@@ -19,6 +19,7 @@ import (
 type mcpToolCallExecutor struct {
 	loadProviders MCPProviderLoader
 	dataDir       string
+	voiceRunner   voiceCommandRunner
 }
 
 var mcpTimedSegmentPattern = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)\s*[-~—到至]\s*(\d+(?:\.\d+)?)\s*(秒|s)`)
@@ -79,7 +80,13 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 	if requests := slicePayload(job.Payload, "externalGenerationRequests"); len(requests) > 0 {
 		return e.executeExternalGenerationBatch(operationCtx, client, provider.ID, toolName, job, requests)
 	}
-	args := mapPayload(job.Payload, "arguments")
+	args := copyMap(mapPayload(job.Payload, "arguments"))
+	if isIPArollRenderTool(provider.ID, toolName) {
+		args, err = e.prepareIPArollRenderArguments(operationCtx, client, job, args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	callResult, err := client.CallTool(operationCtx, toolName, args)
 	if err != nil {
 		return nil, err
@@ -170,6 +177,14 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 			break
 		}
 		requestCtx, cancelRequest := context.WithTimeout(ctx, requestTimeout)
+		if isIPArollRenderTool(providerID, requestToolName) {
+			preparedArgs, prepareErr := e.prepareIPArollRenderArguments(requestCtx, client, job, args)
+			if prepareErr != nil {
+				cancelRequest()
+				return nil, prepareErr
+			}
+			args = preparedArgs
+		}
 		callResult, err := client.CallTool(requestCtx, requestToolName, args)
 		if err != nil {
 			cancelRequest()

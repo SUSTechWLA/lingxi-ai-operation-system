@@ -10,12 +10,215 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/tangying-ai/aios-core/internal/core/auth"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
+
+type localJobEventSink struct {
+	mu     sync.Mutex
+	events []observability.Event
+}
+
+type terminalPhaseSink struct {
+	calls      int
+	err        error
+	bestEffort bool
+}
+
+func (s *terminalPhaseSink) Write(context.Context, observability.Event) error {
+	s.calls++
+	return s.err
+}
+func (*terminalPhaseSink) Close(context.Context) error { return nil }
+func (s *terminalPhaseSink) BestEffort() bool          { return s.bestEffort }
+
+func TestDurableTerminalAcknowledgesRepositoryWhenLoggerPermanentlyFails(t *testing.T) {
+	completed := time.Now().UTC()
+	job := &LocalJob{ID: "local_job_best_effort", UserID: "user-1", TaskID: "task-1", NodeID: "node-1", Status: JobFailed, Attempt: 1, CreatedAt: completed.Add(-time.Second), UpdatedAt: completed, CompletedAt: &completed, ObservabilityCallbackState: CallbackPending}
+	service := &fakeRunnerService{job: job}
+	loggerSink := &terminalPhaseSink{err: errors.New("logger permanently unavailable"), bestEffort: true}
+	repositorySink := &terminalPhaseSink{}
+	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "local-runner", Environment: "test"}, observability.Runtime{}, observability.NewCompositeSink(loggerSink, repositorySink), 8)
+	handler := NewHandler(service, &fakeNodeResultSink{}).WithObservability(emitter)
+	identity := JobMutationIdentity{UserID: "user-1", RunnerID: "runner-1"}
+	handler.deliverTerminalObservability(context.Background(), identity, job)
+	handler.deliverTerminalObservability(context.Background(), identity, job)
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if job.ObservabilityCallbackState != CallbackDelivered || loggerSink.calls != 1 || repositorySink.calls != 1 {
+		t.Fatalf("state=%s loggerCalls=%d repositoryCalls=%d", job.ObservabilityCallbackState, loggerSink.calls, repositorySink.calls)
+	}
+}
+
+func TestDurableTerminalRetriesRepositoryFailureDespiteBestEffortLogger(t *testing.T) {
+	completed := time.Now().UTC()
+	job := &LocalJob{ID: "local_job_repo_retry", UserID: "user-1", TaskID: "task-1", NodeID: "node-1", Status: JobFailed, Attempt: 1, CreatedAt: completed.Add(-time.Second), UpdatedAt: completed, CompletedAt: &completed, ObservabilityCallbackState: CallbackPending}
+	service := &fakeRunnerService{job: job}
+	loggerSink := &terminalPhaseSink{err: errors.New("logger permanently unavailable"), bestEffort: true}
+	repositoryErr := errors.New("repository unavailable")
+	repositorySink := &terminalPhaseSink{err: repositoryErr}
+	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "local-runner", Environment: "test"}, observability.Runtime{}, observability.NewCompositeSink(loggerSink, repositorySink), 8)
+	handler := NewHandler(service, &fakeNodeResultSink{}).WithObservability(emitter)
+	identity := JobMutationIdentity{UserID: "user-1", RunnerID: "runner-1"}
+	handler.deliverTerminalObservability(context.Background(), identity, job)
+	if job.ObservabilityCallbackState != CallbackPending {
+		t.Fatalf("repository failure state=%s", job.ObservabilityCallbackState)
+	}
+	repositorySink.err = nil
+	handler.deliverTerminalObservability(context.Background(), identity, job)
+	if err := emitter.Close(context.Background()); !errors.Is(err, repositoryErr) {
+		t.Fatalf("close error=%v, want recorded repository failure", err)
+	}
+	if job.ObservabilityCallbackState != CallbackDelivered || loggerSink.calls != 2 || repositorySink.calls != 2 {
+		t.Fatalf("state=%s loggerCalls=%d repositoryCalls=%d", job.ObservabilityCallbackState, loggerSink.calls, repositorySink.calls)
+	}
+}
+
+type rejectOnceLocalEmitter struct {
+	calls  int
+	events []observability.Event
+}
+
+func (e *rejectOnceLocalEmitter) Emit(_ context.Context, event observability.Event) error {
+	e.calls++
+	if e.calls == 1 {
+		return observability.ErrQueueFull
+	}
+	e.events = append(e.events, event)
+	return nil
+}
+
+func TestQueueRejectedTerminalIsRecoveredBeforeCallbacks(t *testing.T) {
+	completed := time.Now().UTC()
+	service := &fakeRunnerService{job: &LocalJob{ID: "local_job_queue", UserID: "user-1", TaskID: "task-1", NodeID: "node-1", Status: JobRunning, CreatedAt: completed.Add(-time.Second), UpdatedAt: completed, CompletedAt: &completed, ObservabilityCallbackState: CallbackPending}}
+	emitter := &rejectOnceLocalEmitter{}
+	results := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, results).WithObservability(emitter).RegisterRoutes(router)
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_queue/complete", bytes.NewBufferString(`{"success":true,"output":{}}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+	if res := request(); res.Code != http.StatusOK || results.successCalls != 1 || service.job.ObservabilityCallbackState != CallbackPending {
+		t.Fatalf("first status=%d callbacks=%d job=%+v", res.Code, results.successCalls, service.job)
+	}
+	service.staleJobs = []*LocalJob{service.job}
+	if res := request(); res.Code != http.StatusOK || results.successCalls != 1 || len(emitter.events) != 1 || service.job.ObservabilityCallbackState != CallbackDelivered {
+		t.Fatalf("recovery status=%d callbacks=%d events=%+v", res.Code, results.successCalls, emitter.events)
+	}
+	want := localJobTerminalEvent(service.job)
+	if emitter.events[0].EventID != want.EventID || !emitter.events[0].OccurredAt.Equal(want.OccurredAt) {
+		t.Fatalf("event=%+v want=%+v", emitter.events[0], want)
+	}
+}
+
+func (s *localJobEventSink) Write(_ context.Context, event observability.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (*localJobEventSink) Close(context.Context) error { return nil }
+
+func (s *localJobEventSink) snapshot() []observability.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]observability.Event(nil), s.events...)
+}
+
+func TestCompleteJobEmitsPairedLifecycleWithoutPayload(t *testing.T) {
+	const privatePayload = "PRIVATE_LOCAL_JOB_PAYLOAD_SENTINEL"
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_private", NodeID: "node_private", TaskID: "task_private",
+		Status: JobRunning, Payload: map[string]interface{}{"secretInput": privatePayload},
+	}}
+	sink := &localJobEventSink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud-backend", Component: "local-runner", Environment: "test"},
+		observability.Runtime{},
+		sink,
+		16,
+	)
+	router := gin.New()
+	NewHandler(service, nil).WithObservability(emitter).RegisterRoutes(router)
+	claimReq := httptest.NewRequest(http.MethodGet, "/api/local-runners/runner_001/jobs/claim", nil)
+	claimReq.Header.Set("X-Runner-ID", "runner_001")
+	claimRec := httptest.NewRecorder()
+	router.ServeHTTP(claimRec, claimReq)
+	if claimRec.Code != http.StatusOK {
+		t.Fatalf("claim status=%d body=%s", claimRec.Code, claimRec.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_private/complete",
+		bytes.NewBufferString(`{"success":true,"output":{"private":"`+privatePayload+`"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events := sink.snapshot()
+	var started, completed int
+	for _, event := range events {
+		switch event.EventType {
+		case observability.EventTypeLocalJobStarted:
+			started++
+		case observability.EventTypeLocalJobCompleted:
+			completed++
+		}
+	}
+	if started != 1 || completed != 1 {
+		t.Fatalf("local-job pairing started=%d completed=%d events=%+v", started, completed, events)
+	}
+	wire, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), privatePayload) {
+		t.Fatalf("private local-job payload leaked into events: %s", wire)
+	}
+}
+
+func TestClaimJobEmitsActualLocalJobStart(t *testing.T) {
+	service := &fakeRunnerService{job: &LocalJob{
+		ID: "local_job_claim", NodeID: "node_claim", TaskID: "task_claim", Status: JobClaimed,
+	}}
+	sink := &localJobEventSink{}
+	emitter := observability.NewEmitter(
+		observability.Source{Service: "cloud-backend", Component: "local-runner", Environment: "test"},
+		observability.Runtime{}, sink, 8,
+	)
+	router := gin.New()
+	NewHandler(service, nil).WithObservability(emitter).RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/local-runners/runner_001/jobs/claim", nil)
+	req.Header.Set("X-Runner-ID", "runner_001")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events := sink.snapshot()
+	if len(events) != 1 || events[0].EventType != observability.EventTypeLocalJobStarted {
+		t.Fatalf("claim lifecycle=%+v", events)
+	}
+}
 
 func TestDeliverTerminalCallbacksClaimsEachPhaseExactlyOnceConcurrently(t *testing.T) {
 	service := &fakeRunnerService{job: &LocalJob{
@@ -476,6 +679,52 @@ func TestHandlerLateCompletionReplaysPendingFailureWithoutFlippingStatus(t *test
 	}
 }
 
+func TestLocalJobTerminalEventIsDeterministicFromDurableRow(t *testing.T) {
+	completed := time.Date(2026, 7, 27, 8, 0, 0, 123000000, time.UTC)
+	job := &LocalJob{ID: "local_job_abc", UserID: "user-1", TaskID: "task-1", NodeID: "node-1", Status: JobFailed, Attempt: 2, CreatedAt: completed.Add(-5 * time.Second), UpdatedAt: completed, CompletedAt: &completed, TraceID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SpanID: "1111111111111111"}
+	first := localJobTerminalEvent(job)
+	second := localJobTerminalEvent(job)
+	if first.EventID == "" || first.EventID != second.EventID || !first.OccurredAt.Equal(completed) || first.Execution.DurationMs == nil || *first.Execution.DurationMs != 5000 {
+		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+	if first.EventType != observability.EventTypeLocalJobFailed || first.Error == nil || first.Severity != observability.SeverityError {
+		t.Fatalf("failure semantics=%+v", first)
+	}
+	sink := &localJobEventSink{}
+	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "local-runner", Environment: "test"}, observability.Runtime{}, sink, 2)
+	if err := emitter.Emit(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.snapshot()[0].Validate(); err != nil {
+		t.Fatalf("invalid terminal event: %v", err)
+	}
+}
+
+func TestTerminalCallbackReplayDoesNotDuplicateAcknowledgedEvent(t *testing.T) {
+	completed := time.Now().UTC().Add(-time.Second)
+	service := &fakeRunnerService{job: &LocalJob{ID: "local_job_reemit", UserID: "user-1", TaskID: "task-1", NodeID: "node-1", Status: JobFailed, ErrorMessage: "durable", CompletedAt: &completed, CreatedAt: completed.Add(-time.Second), UpdatedAt: completed, ResultCallbackState: CallbackPending, FollowupCallbackState: CallbackPending}}
+	sink := &localJobEventSink{}
+	emitter := observability.NewEmitter(observability.Source{Service: "cloud", Component: "local-runner", Environment: "test"}, observability.Runtime{}, sink, 8)
+	router := gin.New()
+	NewHandler(service, &fakeNodeResultSink{}).WithObservability(emitter).RegisterRoutes(router)
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_reemit/complete", bytes.NewBufferString(`{"success":true,"output":{}}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
+		router.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	if err := emitter.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events := sink.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("events=%+v", events)
+	}
+}
+
 func TestHandlerReplaysPendingCompletedCallbackAndDeliveredRetryIsNoOp(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := &fakeRunnerService{job: &LocalJob{ID: "local_job_replay", NodeID: "node_replay", Status: JobRunning}}
@@ -789,7 +1038,7 @@ func (f *fakeRunnerService) RetireStaleMCPJobs(_ context.Context, _ JobMutationI
 	}
 	jobs := make([]*LocalJob, 0, len(f.staleJobs))
 	for _, job := range f.staleJobs {
-		if job != nil && (job.ResultCallbackState != CallbackDelivered || job.FollowupCallbackState != CallbackDelivered) {
+		if job != nil && (job.ResultCallbackState != CallbackDelivered || job.FollowupCallbackState != CallbackDelivered || job.ObservabilityCallbackState != CallbackDelivered) {
 			jobs = append(jobs, job)
 		}
 	}
@@ -816,6 +1065,7 @@ func (f *fakeRunnerService) CompleteJob(_ context.Context, _ JobMutationIdentity
 		f.job.Output = req.Output
 		f.job.ResultCallbackState = CallbackPending
 		f.job.FollowupCallbackState = CallbackPending
+		f.job.ObservabilityCallbackState = CallbackPending
 	}
 	return f.job, f.mutationErr
 }
@@ -832,6 +1082,7 @@ func (f *fakeRunnerService) FailJob(_ context.Context, _ JobMutationIdentity, jo
 		f.job.ErrorMessage = errorMessageFromMap(req.Error)
 		f.job.ResultCallbackState = CallbackPending
 		f.job.FollowupCallbackState = CallbackPending
+		f.job.ObservabilityCallbackState = CallbackPending
 	}
 	return f.job, f.mutationErr
 }
@@ -884,6 +1135,43 @@ func (f *fakeRunnerService) ReleaseTerminalCallback(_ context.Context, jobID str
 		job.ResultCallbackState = CallbackPending
 	} else {
 		job.FollowupCallbackState = CallbackPending
+	}
+	return nil
+}
+
+func (f *fakeRunnerService) ClaimTerminalObservability(_ context.Context, _ JobMutationIdentity, jobID string) (*TerminalCallbackClaim, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	job := f.jobByIDLocked(jobID)
+	if job == nil {
+		return nil, ErrJobAccessDenied
+	}
+	switch job.ObservabilityCallbackState {
+	case CallbackDelivered:
+		return &TerminalCallbackClaim{Delivered: true}, nil
+	case CallbackProcessing:
+		return nil, ErrCallbackBusy
+	default:
+		job.ObservabilityCallbackState = CallbackProcessing
+		return &TerminalCallbackClaim{Token: "observability-token"}, nil
+	}
+}
+func (f *fakeRunnerService) AcknowledgeTerminalObservability(_ context.Context, jobID, token string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	job := f.jobByIDLocked(jobID)
+	if job == nil {
+		return ErrJobAccessDenied
+	}
+	job.ObservabilityCallbackState = CallbackDelivered
+	return nil
+}
+func (f *fakeRunnerService) ReleaseTerminalObservability(_ context.Context, jobID, token string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	job := f.jobByIDLocked(jobID)
+	if job != nil {
+		job.ObservabilityCallbackState = CallbackPending
 	}
 	return nil
 }

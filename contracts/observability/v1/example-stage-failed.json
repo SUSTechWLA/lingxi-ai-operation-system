@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "1.0",
+  "eventId": "evt_01j99zstagefailed",
+  "occurredAt": "2026-07-27T12:00:00.000Z",
+  "ingestedAt": "2026-07-27T12:00:00.040Z",
+  "producerSequence": 1842,
+  "severity": "ERROR",
+  "eventType": "workflow.stage.failed",
+  "messageKey": "workflow.stage.failed",
+  "source": {
+    "service": "cloud-backend",
+    "component": "workflow-runner",
+    "environment": "test"
+  },
+  "correlation": {
+    "traceId": "trc_01j99zworkflow",
+    "spanId": "spn_01j99zstage",
+    "workflowRunId": "wfr_01j99zrun",
+    "stageId": "render"
+  },
+  "execution": {
+    "status": "FAILED",
+    "attempt": 1,
+    "durationMs": 1240
+  },
+  "runtime": {
+    "appVersion": "0.2.1",
+    "workflowVersion": "v1",
+    "toolRegistrySnapshotId": "trs_01j99zsnapshot",
+    "provider": "local-renderer"
+  },
+  "evidence": {
+    "inputRefs": ["artifact://art_01j99zinput"],
+    "outputRefs": [],
+    "inputHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "sizeBytes": 2048
+  },
+  "error": {
+    "code": "RENDER.FFMPEG.CODEC_UNSUPPORTED",
+    "class": "RENDER",
+    "fingerprint": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    "retryable": false,
+    "userMessageKey": "error.render.ffmpeg.codec.unsupported",
+    "developerDetail": "diagnostic.render.ffmpeg.codec.unsupported",
+    "suggestedActionKey": "action.render.select.codec"
+  },
+  "privacy": {
+    "classification": "INTERNAL",
+    "redactedFields": []
+  }
+}

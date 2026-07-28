@@ -25,10 +25,14 @@ export default function CreationStrip({ steps, currentStepId, onSelect }: Creati
   return (
     <nav className="creation-strip" aria-label="创作步骤">
       {CREATOR_WORKSPACE_STEP_IDS.map((stepId, index) => {
-        const step = stepById.get(stepId) ?? {
+        const step: CreatorStep = stepById.get(stepId) ?? {
           id: stepId,
           label: creatorStepLabel(stepId),
           state: 'not_started' as const,
+          hasHistory: false,
+          attemptCount: 0,
+          artifactCount: 0,
+          isStale: false,
           allowedActions: [],
         }
         const status = statusCopy[step.state]
@@ -38,15 +42,16 @@ export default function CreationStrip({ steps, currentStepId, onSelect }: Creati
           <button
             key={stepId}
             type="button"
-            className={`creation-strip-step is-${step.state}${isCurrent ? ' is-current' : ''}`}
+            className={`creation-strip-step is-${step.state}${step.isStale ? ' is-stale' : ''}${isCurrent ? ' is-current' : ''}`}
             aria-current={isCurrent ? 'step' : undefined}
-            aria-label={`第 ${index + 1} 步，${creatorStepLabel(stepId)}，${status.text}`}
+            aria-label={`第 ${index + 1} 步，${creatorStepLabel(stepId)}，${step.isStale ? '需要更新，' : ''}${status.text}${step.hasHistory ? '，已有内容' : ''}`}
             disabled={!canSelect}
             onClick={() => onSelect(stepId)}
           >
             <span className="creation-strip-number">{index + 1}</span>
             <span className="creation-strip-name">{creatorStepLabel(stepId)}</span>
             <span className="creation-strip-status" aria-hidden="true">{status.icon} {status.text}</span>
+            {step.hasHistory && <span className="creation-strip-meta">已有内容{step.isStale ? ' · 待更新' : ''}</span>}
           </button>
         )
       })}

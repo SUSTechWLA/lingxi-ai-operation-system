@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -14,6 +16,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/common/jsonx"
 	"github.com/tangying-ai/aios-core/internal/core/config"
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/observability"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -63,6 +66,7 @@ type NlToDagService struct {
 	orchestratorURL string
 	httpClient      *http.Client
 	toolManifestSvc *tool.ToolManifestService
+	events          observability.EventEmitter
 }
 
 func NewNlToDagService(cfg config.OpenAIConfig, orchestratorURL string, toolManifestSvc *tool.ToolManifestService) *NlToDagService {
@@ -74,10 +78,67 @@ func NewNlToDagService(cfg config.OpenAIConfig, orchestratorURL string, toolMani
 	}
 }
 
+func (s *NlToDagService) WithObservability(emitter observability.EventEmitter) *NlToDagService {
+	s.events = emitter
+	return s
+}
+
 // TranslateToDag translates natural language to a DAG.
 // Routes through the DAG pipeline (Orchestrator -> Worker -> llm_api) for full traceability.
-func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (*model.DAGRequest, error) {
-	zap.L().Info("Translating natural language to DAG via pipeline", zap.String("prompt", prompt))
+func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (result *model.DAGRequest, retErr error) {
+	ctx = observability.EnsureCorrelation(ctx)
+	correlation := observability.CorrelationFromContext(ctx)
+	correlation.StageID = "translator-llm-dag"
+	startedAt := time.Now()
+	evidence := observability.Evidence{
+		InputHash: observability.HashText(prompt),
+		SizeBytes: observability.ByteSize(prompt),
+	}
+	s.emitLifecycle(ctx, observability.EventTypeLLMCallStarted, "llm.call.started",
+		observability.ExecutionStatusStarted, observability.SeverityInfo, correlation, nil, nil, evidence)
+	s.emitLifecycle(ctx, observability.EventTypeWorkflowStageStarted, "translator.dag.started",
+		observability.ExecutionStatusStarted, observability.SeverityInfo, correlation, nil, nil, observability.Evidence{})
+	defer func() {
+		durationMs := time.Since(startedAt).Milliseconds()
+		llmType := observability.EventTypeLLMCallCompleted
+		stageType := observability.EventTypeWorkflowStageCompleted
+		status := observability.ExecutionStatusCompleted
+		severity := observability.SeverityInfo
+		var eventErr *observability.EventError
+		if recovered := recover(); recovered != nil {
+			llmType = observability.EventTypeLLMCallFailed
+			stageType = observability.EventTypeWorkflowStageFailed
+			status = observability.ExecutionStatusFailed
+			severity = observability.SeverityError
+			eventErr = observability.NormalizeError("LLM.CALL.INTERNAL_FAILURE", errors.New("translator panic"), "translator", "")
+			s.emitLifecycle(ctx, llmType, string(llmType), status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
+			s.emitLifecycle(ctx, stageType, "translator.dag.failed", status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
+			panic(recovered)
+		}
+		if retErr != nil {
+			llmType = observability.EventTypeLLMCallFailed
+			stageType = observability.EventTypeWorkflowStageFailed
+			severity = observability.SeverityError
+			status = observability.ExecutionStatusFailed
+			if errors.Is(retErr, context.Canceled) {
+				severity = observability.SeverityWarn
+				status = observability.ExecutionStatusCancelled
+				llmType = observability.EventTypeLLMCallCancelled
+				stageType = observability.EventTypeWorkflowStageCancelled
+			} else if errors.Is(retErr, context.DeadlineExceeded) {
+				eventErr = observability.NormalizeError("LLM.CALL.TIMEOUT", retErr, "translator", "")
+			} else if translatorResponseError(retErr) {
+				eventErr = observability.NormalizeError("LLM.RESPONSE.SCHEMA_INVALID", retErr, "translator", "")
+			} else {
+				eventErr = observability.NormalizeError("LLM.TRANSPORT.UNAVAILABLE", retErr, "translator", "")
+			}
+		}
+		s.emitLifecycle(ctx, llmType, string(llmType), status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
+		s.emitLifecycle(ctx, stageType, "translator.dag."+strings.ToLower(string(status)), status, severity, correlation, &durationMs, eventErr, observability.Evidence{})
+	}()
+	zap.L().Info("Translating natural language to DAG via pipeline",
+		zap.Int64("promptBytes", int64(len([]byte(prompt)))),
+		zap.String("promptSha256", observability.HashText(prompt)))
 
 	// Query available tools for the LLM prompt
 	var toolsDesc string
@@ -85,11 +146,22 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (*mo
 		var err error
 		toolsDesc, err = s.toolManifestSvc.FormatForPrompt(ctx)
 		if err != nil {
-			zap.L().Warn("Failed to query tool manifests for translator, using fallback", zap.Error(err))
+			diagnostic := observability.NormalizeError("LLM.TRANSPORT.UNAVAILABLE", nil, "translator", "")
+			zap.L().Warn("Failed to query tool manifests for translator, using fallback",
+				zap.String("errorCode", diagnostic.Code),
+				zap.String("errorClass", string(diagnostic.Class)),
+				zap.String("errorFingerprint", diagnostic.Fingerprint),
+			)
 		}
 	}
 	if toolsDesc == "" {
+		fallbackStartedAt := time.Now()
+		s.emitLifecycle(ctx, observability.EventTypeRecoveryFallbackStarted, "recovery.fallback.started",
+			observability.ExecutionStatusStarted, observability.SeverityWarn, correlation, nil, nil, observability.Evidence{})
 		toolsDesc = "llm_api: 视频创作大模型调用，可执行任意文本生成任务"
+		fallbackDurationMs := time.Since(fallbackStartedAt).Milliseconds()
+		s.emitLifecycle(ctx, observability.EventTypeRecoveryFallbackCompleted, "recovery.fallback.completed",
+			observability.ExecutionStatusCompleted, observability.SeverityWarn, correlation, &fallbackDurationMs, nil, observability.Evidence{})
 	}
 
 	nodeID := fmt.Sprintf("nl-translate-%d", time.Now().UnixMilli())
@@ -121,6 +193,7 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (*mo
 		return nil, fmt.Errorf("failed to create DAG submit request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq = observability.WithOutboundTraceparent(httpReq)
 
 	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
@@ -160,6 +233,7 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (*mo
 			time.Sleep(pollInterval)
 			continue
 		}
+		httpReq = observability.WithOutboundTraceparent(httpReq)
 
 		httpResp, err := s.httpClient.Do(httpReq)
 		if err != nil {
@@ -240,9 +314,44 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (*mo
 	return nil, fmt.Errorf("polling timed out for translation task %s", taskID)
 }
 
+func translatorResponseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{"parse", "stdout is empty", "content is empty", "no output", "invalid character", "invalid dag"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *NlToDagService) emitLifecycle(ctx context.Context, eventType observability.EventType, messageKey string, status observability.ExecutionStatus, severity observability.Severity, correlation observability.Correlation, durationMs *int64, eventErr *observability.EventError, evidence observability.Evidence) {
+	if s == nil {
+		return
+	}
+	observability.EmitSafely(ctx, s.events, "translator", observability.Event{
+		EventType:   eventType,
+		MessageKey:  messageKey,
+		Severity:    severity,
+		Correlation: correlation,
+		Execution: observability.Execution{
+			Status: status, Attempt: 1, DurationMs: durationMs,
+		},
+		Evidence: evidence,
+		Error:    eventErr,
+		Privacy: observability.Privacy{
+			Classification: observability.PrivacyInternal,
+			RedactedFields: []string{"translator.prompt", "translator.fullPrompt", "translator.response"},
+		},
+	})
+}
+
 // TranslateAndSubmit translates natural language to DAG and submits the resulting DAG to the orchestrator.
 // The translation itself goes through the DAG pipeline, and the result is submitted as a new task.
 func (s *NlToDagService) TranslateAndSubmit(ctx context.Context, prompt string) (map[string]interface{}, error) {
+	ctx = observability.EnsureCorrelation(ctx)
 	dag, err := s.TranslateToDag(ctx, prompt)
 	if err != nil {
 		return nil, err
@@ -254,6 +363,7 @@ func (s *NlToDagService) TranslateAndSubmit(ctx context.Context, prompt string) 
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req = observability.WithOutboundTraceparent(req)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -273,12 +383,14 @@ func (s *NlToDagService) TranslateAndSubmit(ctx context.Context, prompt string) 
 }
 
 func (s *NlToDagService) GetTaskStatus(ctx context.Context, taskID string) (map[string]interface{}, error) {
+	ctx = observability.EnsureCorrelation(ctx)
 	url := s.orchestratorURL + "/api/task/" + taskID
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
+	req = observability.WithOutboundTraceparent(req)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {

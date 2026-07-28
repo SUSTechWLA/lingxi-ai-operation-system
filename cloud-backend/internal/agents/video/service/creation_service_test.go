@@ -94,6 +94,28 @@ func TestCreationServiceGenerateShotsFor60SecProduces8To12ValidShots(t *testing.
 	}
 }
 
+func TestCreationServiceGenerateShotsDoesNotDuplicateTopicNarration(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = &model.VideoProject{ID: "vp-1", UserID: "u-1", TargetDuration: 30}
+	svc := NewCreationService(store)
+	_, err := svc.GenerateSpec(context.Background(), "u-1", "vp-1", GenerateSpecRequest{
+		SourceMessage: "做一个30秒口播视频，主题是：这是完整主题，不是任何单个 Shot 的旁白。",
+	})
+	if err != nil {
+		t.Fatalf("GenerateSpec error: %v", err)
+	}
+
+	shots, err := svc.GenerateShots(context.Background(), "u-1", "vp-1")
+	if err != nil {
+		t.Fatalf("GenerateShots error: %v", err)
+	}
+	for _, shot := range shots {
+		if shot.Narration != "" {
+			t.Fatalf("shot %s narration = %q, want empty until canonical timeline assignment", shot.ID, shot.Narration)
+		}
+	}
+}
+
 func TestCreationServiceRejectsShotAtFifteenSeconds(t *testing.T) {
 	store := newFakeCreationProjectStore()
 	store.project = &model.VideoProject{ID: "vp-1", UserID: "u-1"}

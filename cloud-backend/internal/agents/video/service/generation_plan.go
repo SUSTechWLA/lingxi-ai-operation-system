@@ -31,6 +31,20 @@ func BuildShotGenerationPlan(
 	caps RenderCapabilities,
 ) model.ShotGenerationPlan {
 	plan := buildShotGenerationPlan(shot, visual, pref, caps)
+	plan.StartMs = shot.StartMs
+	plan.EndMs = shot.EndMs
+	plan.DurationMs = shot.DurationMs
+	if plan.DurationMs <= 0 && plan.EndMs > plan.StartMs {
+		plan.DurationMs = plan.EndMs - plan.StartMs
+	}
+	if plan.DurationMs <= 0 && shot.DurationSec > 0 {
+		plan.DurationMs = int64(shot.DurationSec) * 1000
+	}
+	if plan.EndMs <= plan.StartMs && plan.DurationMs > 0 {
+		plan.EndMs = plan.StartMs + plan.DurationMs
+	}
+	plan.TimelineRevision = shot.TimelineRevision
+	plan.NarrationText = strings.TrimSpace(shot.Narration)
 	plan.VisualLayers = buildShotVisualLayerContract(shot, visual, plan, pref, caps)
 	return plan
 }

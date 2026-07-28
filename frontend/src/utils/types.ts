@@ -219,9 +219,18 @@ export interface Artifact {
   promptHash?: string
   provider?: string
   model?: string
+  status?: string
+  humanApproved?: boolean
+  dependsOn?: string[]
+  producedByNode?: string
+  producedByRole?: string
+  producedByTool?: string
+  roleAgentId?: string
+  taskId?: string
   isCurrent: boolean
   metadata?: Record<string, unknown>
   createdAt: string
+  updatedAt?: string
 }
 
 export interface ArtifactListResponse {
@@ -233,6 +242,8 @@ export interface ArtifactContentResponse {
   content: unknown
   mediaUrl?: string
   mediaUrls?: string[]
+  reviewText?: string
+  reviewTextSourceHash?: string
 }
 
 export interface ArtifactHistoryResponse {
@@ -344,6 +355,10 @@ export interface AgentReviewItem {
   reviewContent?: string
   reviewArtifacts?: Array<Record<string, unknown>>
   reviewOutput?: Record<string, unknown>
+  reviewerId?: string
+  reviewComment?: string
+  createdAt?: string
+  reviewedAt?: string
 }
 
 export interface AgentReviewListResponse {

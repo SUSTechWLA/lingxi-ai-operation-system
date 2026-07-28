@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -48,6 +50,56 @@ func TestCreatorViewMapsCurrentArtifactsAndShotSummaryIntoSixSteps(t *testing.T)
 	}
 	if view.ActiveStep != model.CreatorStepShots {
 		t.Fatalf("active step = %q, want %q", view.ActiveStep, model.CreatorStepShots)
+	}
+}
+
+func TestCreatorViewReconcilesNodeArtifactsBeforeBuildingTheView(t *testing.T) {
+	artifacts := &mutableCreatorArtifactReader{}
+	reconciler := &recordingCreatorArtifactReconciler{
+		reconcile: func(projectID string) {
+			artifacts.artifacts = []*artifact.Artifact{{
+				ID: "script-from-node", ProjectID: "vp-1", StageName: "script_generation", UnitID: "video_script_generator",
+				Kind: artifact.KindJSON, Name: "video_script.json", Version: 1, Status: "valid",
+			}}
+		},
+	}
+
+	view, err := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "user-1"}},
+		fakeCreatorShotReader{},
+		artifacts,
+	).WithArtifactReconciler(reconciler).GetCreationView(context.Background(), "user-1", "vp-1")
+	if err != nil {
+		t.Fatalf("GetCreationView() error = %v", err)
+	}
+	if reconciler.calls != 1 || reconciler.projectID != "vp-1" {
+		t.Fatalf("reconciler calls=%d project=%q, want one call for vp-1", reconciler.calls, reconciler.projectID)
+	}
+	if got := view.Steps[2].CurrentArtifactID; got != "script-from-node" {
+		t.Fatalf("script artifact = %q, want reconciled node artifact", got)
+	}
+	if got := len(view.StepArtifacts[model.CreatorStepScript]); got != 1 {
+		t.Fatalf("script descriptors = %d, want 1 reconciled descriptor", got)
+	}
+}
+
+func TestCreatorViewUsesArtifactUnitIDForDynamicRoleStageNames(t *testing.T) {
+	view, err := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "user-1"}},
+		fakeCreatorShotReader{},
+		fakeCreatorArtifactReader{artifacts: []*artifact.Artifact{{
+			ID: "proposal-from-role", ProjectID: "vp-1", StageName: "tde3bdcfc15-proposal_generator",
+			UnitID: "proposal_generator", Kind: artifact.KindJSON, Version: 1, Status: "valid",
+		}}},
+	).GetCreationView(context.Background(), "user-1", "vp-1")
+	if err != nil {
+		t.Fatalf("GetCreationView() error = %v", err)
+	}
+	if got := view.Steps[1].CurrentArtifactID; got != "proposal-from-role" {
+		t.Fatalf("direction artifact = %q, want dynamic role artifact", got)
+	}
+	if got := len(view.StepArtifacts[model.CreatorStepDirection]); got != 1 {
+		t.Fatalf("direction descriptors = %d, want 1", got)
 	}
 }
 
@@ -151,7 +203,10 @@ func TestCreatorViewMapsMixedArtifactStatesWithFixedPriority(t *testing.T) {
 			{ID: "direction-review", StageName: "proposal", Status: "pending"},
 			{ID: "script-generating", StageName: "script", Status: "generating"},
 			{ID: "preview-failed", StageName: "preview", Status: "failed"},
-			{ID: "package-approved", StageName: "package", Status: "valid", HumanApproved: true},
+			{
+				ID: "delivery-approved", ProjectID: "vp-1", StageName: "delivery", UnitID: "final_video",
+				Kind: artifact.KindVideo, Name: "final.mp4", Status: "valid", HumanApproved: true, IsCurrent: true,
+			},
 		}},
 	).GetCreationView(context.Background(), "user-1", "vp-1")
 	if err != nil {
@@ -434,6 +489,284 @@ func TestStepRevisionRejectsNonExactModeBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestStepImageReplacementAuthorizesCanonicalRegisteredMaterialAndPreservesReceipt(t *testing.T) {
+	base := &artifact.Artifact{
+		ID: "image-v3", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1",
+		StageName: "storyboard", UnitID: "shot-02", Kind: artifact.KindImage, Name: "shot-02.png",
+		Version: 3, IsCurrent: true, Status: "valid", HumanApproved: true,
+	}
+	material := model.ReplacementMaterial{
+		ContentHash: "sha256:replacement",
+		StorageRef:  "local://projects/vp-1/materials/replacement",
+		MimeType:    "image/webp",
+		SizeBytes:   4096,
+	}
+	manifest := creatorMaterialManifestArtifact("vp-1", []map[string]interface{}{{
+		"name": "replacement.webp", "kind": "image", "contentHash": material.ContentHash,
+		"storageRef": material.StorageRef, "mimeType": material.MimeType, "sizeBytes": material.SizeBytes,
+	}})
+	artifacts := &fakeCreatorMutationArtifacts{
+		current: []*artifact.Artifact{base, manifest},
+		history: []*artifact.Artifact{base, manifest},
+	}
+	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+	reviews := &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "image-review"}
+	svc := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1"}},
+		fakeCreatorShotReader{},
+		artifacts,
+	).WithStepMutations(revisions, reviews)
+	x, y, width, height := 0.1, 0.2, 0.3, 0.4
+	request := model.StepRevisionRequest{
+		IdempotencyKey: "replace-image-1", ArtifactID: base.ID, BaseVersion: 3, Mode: "replace",
+		ReplacementMaterial:      &material,
+		Selection:                &model.ArtifactSelection{Kind: "rect", X: &x, Y: &y, Width: &width, Height: &height},
+		ConfirmedAffectedShotIDs: []string{},
+	}
+
+	result, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepShots, request)
+	if err != nil {
+		t.Fatalf("ReviseStep(replace) error = %v", err)
+	}
+	if revisions.replaceCalls != 1 || revisions.calls != 0 {
+		t.Fatalf("replacement calls=%d ordinary revision calls=%d", revisions.replaceCalls, revisions.calls)
+	}
+	wantIdentity := artifact.ReplacementMaterialIdentity{
+		ContentHash: material.ContentHash, StorageRef: material.StorageRef,
+		MimeType: material.MimeType, SizeBytes: material.SizeBytes,
+	}
+	if !reflect.DeepEqual(revisions.replaceRequest.Material, wantIdentity) {
+		t.Fatalf("canonical replacement = %+v, want %+v", revisions.replaceRequest.Material, wantIdentity)
+	}
+	if revisions.replaceRequest.ArtifactID != base.ID || revisions.replaceRequest.BaseVersion != base.Version {
+		t.Fatalf("authorized replacement base = %s@%d, want %s@%d",
+			revisions.replaceRequest.ArtifactID, revisions.replaceRequest.BaseVersion, base.ID, base.Version)
+	}
+	receipt, ok := creatorReceiptFromArtifact(result.Artifact)
+	if !ok || !reflect.DeepEqual(receipt.ReplacementMaterial, &wantIdentity) {
+		t.Fatalf("replacement receipt=%+v valid=%v", receipt, ok)
+	}
+	wantSelection := map[string]interface{}{"kind": "rect", "x": x, "y": y, "width": width, "height": height}
+	if !reflect.DeepEqual(receipt.Selection, wantSelection) ||
+		!reflect.DeepEqual(result.Artifact.Metadata["replacementMaterial"], wantIdentity) ||
+		!reflect.DeepEqual(result.Artifact.Metadata["selection"], wantSelection) {
+		t.Fatalf("replacement provenance receipt=%+v metadata=%+v", receipt, result.Artifact.Metadata)
+	}
+	if reviews.reopenedArtifactID != result.Artifact.ID {
+		t.Fatalf("replacement did not reopen the existing review: %+v", reviews)
+	}
+}
+
+func TestStepImageReplacementRejectsUnauthorizedIdentityAndInvalidShapeWithoutMutation(t *testing.T) {
+	base := &artifact.Artifact{
+		ID: "image-v3", ProjectID: "vp-1", StageName: "storyboard", UnitID: "shot-02",
+		Kind: artifact.KindImage, Name: "shot-02.png", Version: 3, IsCurrent: true,
+	}
+	valid := model.ReplacementMaterial{
+		ContentHash: "sha256:replacement",
+		StorageRef:  "local://projects/vp-1/materials/replacement",
+		MimeType:    "image/png",
+		SizeBytes:   8,
+	}
+	tests := []struct {
+		name      string
+		target    *artifact.Artifact
+		materials []map[string]interface{}
+		request   model.StepRevisionRequest
+	}{
+		{
+			name: "target is not image",
+			target: func() *artifact.Artifact {
+				copy := *base
+				copy.Kind = artifact.KindMarkdown
+				return &copy
+			}(),
+			materials: []map[string]interface{}{creatorMaterialMap(valid, "image")},
+			request:   creatorReplacementRequest(valid),
+		},
+		{name: "material absent", target: base, materials: nil, request: creatorReplacementRequest(valid)},
+		{
+			name:   "material is not image",
+			target: base,
+			materials: []map[string]interface{}{{
+				"name": "replacement.mp4", "kind": "video", "contentHash": valid.ContentHash,
+				"storageRef": valid.StorageRef, "mimeType": "video/mp4", "sizeBytes": valid.SizeBytes,
+			}},
+			request: creatorReplacementRequest(valid),
+		},
+		{
+			name:      "identity mismatch",
+			target:    base,
+			materials: []map[string]interface{}{creatorMaterialMap(valid, "image")},
+			request: func() model.StepRevisionRequest {
+				request := creatorReplacementRequest(valid)
+				request.ReplacementMaterial.StorageRef = "local://projects/vp-1/materials/other"
+				return request
+			}(),
+		},
+		{
+			name:      "mime identity mismatch",
+			target:    base,
+			materials: []map[string]interface{}{creatorMaterialMap(valid, "image")},
+			request: func() model.StepRevisionRequest {
+				request := creatorReplacementRequest(valid)
+				request.ReplacementMaterial.MimeType = "image/webp"
+				return request
+			}(),
+		},
+		{
+			name:      "size identity mismatch",
+			target:    base,
+			materials: []map[string]interface{}{creatorMaterialMap(valid, "image")},
+			request: func() model.StepRevisionRequest {
+				request := creatorReplacementRequest(valid)
+				request.ReplacementMaterial.SizeBytes++
+				return request
+			}(),
+		},
+		{
+			name:      "non rectangle selection",
+			target:    base,
+			materials: []map[string]interface{}{creatorMaterialMap(valid, "image")},
+			request: func() model.StepRevisionRequest {
+				request := creatorReplacementRequest(valid)
+				request.Selection = &model.ArtifactSelection{Kind: "time", StartMs: creatorInt64Pointer(0), EndMs: creatorInt64Pointer(1000)}
+				return request
+			}(),
+		},
+		{
+			name:      "instruction fields are closed",
+			target:    base,
+			materials: []map[string]interface{}{creatorMaterialMap(valid, "image")},
+			request: func() model.StepRevisionRequest {
+				request := creatorReplacementRequest(valid)
+				request.Instruction = "pretend to replace"
+				request.ModelProviders = map[string]interface{}{"text_to_text": map[string]interface{}{"apiKey": "secret"}}
+				return request
+			}(),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := creatorMaterialManifestArtifact("vp-1", test.materials)
+			artifacts := &fakeCreatorMutationArtifacts{
+				current: []*artifact.Artifact{test.target, manifest},
+				history: []*artifact.Artifact{test.target, manifest},
+			}
+			revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+			svc := NewCreatorViewService(
+				fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1"}},
+				fakeCreatorShotReader{},
+				artifacts,
+			).WithStepMutations(revisions, &fakeCreatorReviewMutations{})
+			request := test.request
+			request.ArtifactID = test.target.ID
+			_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepShots, request)
+			if !errors.Is(err, ErrCreatorInvalidRequest) && !errors.Is(err, ErrCreatorArtifactNotFound) {
+				t.Fatalf("ReviseStep(replace) error = %v", err)
+			}
+			if revisions.replaceCalls != 0 || revisions.calls != 0 || artifacts.current[0] != test.target {
+				t.Fatalf("invalid replacement mutated state: replace=%d revise=%d current=%+v", revisions.replaceCalls, revisions.calls, artifacts.current[0])
+			}
+		})
+	}
+}
+
+func TestStepImageReplacementJSONBranchRejectsForbiddenSiblingFieldsEvenWhenEmpty(t *testing.T) {
+	base := `{"artifactId":"image-v3","baseVersion":3,"mode":"replace","replacementMaterial":{"contentHash":"sha256:replacement","storageRef":"local://projects/vp-1/materials/replacement","mimeType":"image/png","sizeBytes":8},"confirmedAffectedShotIds":[]`
+	for _, forbidden := range []string{
+		`,"instruction":""`,
+		`,"directContent":""`,
+		`,"modelProviders":{}`,
+	} {
+		var request model.StepRevisionRequest
+		if err := json.Unmarshal([]byte(base+forbidden+"}"), &request); err == nil {
+			t.Fatalf("replace branch accepted forbidden sibling field in %s", forbidden)
+		}
+	}
+}
+
+func TestStepImageReplacementRetryReusesReceiptAndDifferentIdentityConflicts(t *testing.T) {
+	base := &artifact.Artifact{
+		ID: "image-v3", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1",
+		StageName: "storyboard", UnitID: "shot-02", Kind: artifact.KindImage, Version: 3, IsCurrent: true,
+	}
+	first := model.ReplacementMaterial{
+		ContentHash: "sha256:first", StorageRef: "local://projects/vp-1/materials/first",
+		MimeType: "image/png", SizeBytes: 10,
+	}
+	second := model.ReplacementMaterial{
+		ContentHash: "sha256:second", StorageRef: "local://projects/vp-1/materials/second",
+		MimeType: "image/webp", SizeBytes: 11,
+	}
+	manifest := creatorMaterialManifestArtifact("vp-1", []map[string]interface{}{
+		creatorMaterialMap(first, "image"),
+		creatorMaterialMap(second, "image"),
+	})
+	artifacts := &fakeCreatorMutationArtifacts{
+		current: []*artifact.Artifact{base, manifest},
+		history: []*artifact.Artifact{base, manifest},
+	}
+	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+	reviews := &fakeCreatorReviewMutations{
+		resolvedRunID: "run-1", resolvedReviewID: "image-review",
+		reopenErr: errors.New("temporary reopen failure"),
+	}
+	svc := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1"}},
+		fakeCreatorShotReader{},
+		artifacts,
+	).WithStepMutations(revisions, reviews)
+	request := creatorReplacementRequest(first)
+
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepShots, request); err == nil {
+		t.Fatal("expected first review reopen to fail after replacement creation")
+	}
+	createdID := revisions.artifacts.current[0].ID
+	reviews.reopenErr = nil
+	result, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepShots, request)
+	if err != nil {
+		t.Fatalf("identical replacement retry error = %v", err)
+	}
+	if revisions.replaceCalls != 1 || result.Artifact.ID != createdID || reviews.reopenCalls != 2 {
+		t.Fatalf("retry replace calls=%d artifact=%q/%q reopen=%d", revisions.replaceCalls, result.Artifact.ID, createdID, reviews.reopenCalls)
+	}
+	different := request
+	different.ReplacementMaterial = &second
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepShots, different); !errors.Is(err, ErrCreatorIdempotencyConflict) {
+		t.Fatalf("different registered replacement with same key error = %v", err)
+	}
+}
+
+func creatorReplacementRequest(material model.ReplacementMaterial) model.StepRevisionRequest {
+	return model.StepRevisionRequest{
+		IdempotencyKey: "replace-image", ArtifactID: "image-v3", BaseVersion: 3, Mode: "replace",
+		ReplacementMaterial: &material, ConfirmedAffectedShotIDs: []string{},
+	}
+}
+
+func creatorMaterialMap(material model.ReplacementMaterial, kind string) map[string]interface{} {
+	return map[string]interface{}{
+		"name": "replacement.png", "kind": kind, "contentHash": material.ContentHash,
+		"storageRef": material.StorageRef, "mimeType": material.MimeType, "sizeBytes": material.SizeBytes,
+	}
+}
+
+func creatorMaterialManifestArtifact(projectID string, materials []map[string]interface{}) *artifact.Artifact {
+	return &artifact.Artifact{
+		ID: "materials-v1", ProjectID: projectID, StageName: "requirements", UnitID: "source-materials",
+		Kind: artifact.KindBundle, Version: 1, IsCurrent: true,
+		Metadata: map[string]interface{}{
+			"artifactType": "project_source_material_manifest",
+			"materials":    materials,
+		},
+	}
+}
+
+func creatorInt64Pointer(value int64) *int64 {
+	return &value
+}
+
 func TestStepRestoreCreatesNewCurrentVersionAndReopensReview(t *testing.T) {
 	historical := &artifact.Artifact{ID: "script-v1", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1", StageName: "script", Version: 1}
 	current := &artifact.Artifact{ID: "script-v4", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1", StageName: "script", Version: 4, IsCurrent: true}
@@ -645,6 +978,7 @@ func TestArtifactSelectionValidationCoversRectAndTimeBounds(t *testing.T) {
 		"negative time": {Kind: "time", StartMs: i64(-1), EndMs: i64(2)},
 		"empty time":    {Kind: "time", StartMs: i64(2), EndMs: i64(2)},
 		"mixed fields":  {Kind: "time", StartMs: i64(0), EndMs: i64(2), X: f64(.1)},
+		"mixed hash":    {Kind: "time", StartMs: i64(0), EndMs: i64(2), SourceHash: creatorSelectionSourceHash("unused")},
 		"unknown":       {Kind: "pixels", X: f64(.1), Y: f64(.1), Width: f64(.2), Height: f64(.2)},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -653,6 +987,297 @@ func TestArtifactSelectionValidationCoversRectAndTimeBounds(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestArtifactSelectionTextRequiresCanonicalSourceHash(t *testing.T) {
+	selection := decodeArtifactSelection(t, `{"kind":"text","start":0,"end":1,"text":"a"}`)
+	if _, err := normalizeArtifactSelection(selection); !errors.Is(err, ErrCreatorInvalidRequest) {
+		t.Fatalf("text selection without sourceHash error = %v, want invalid request", err)
+	}
+}
+
+func TestArtifactSelectionTextSupportsBrowserUTF16OffsetsAndExactProvenance(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		source    string
+		selection string
+		wantStart int
+		wantEnd   int
+	}{
+		{name: "emoji before Chinese", source: "🙂中文结尾", selection: `{"kind":"text","start":2,"end":4,"text":"中文"}`, wantStart: 2, wantEnd: 4},
+		{name: "emoji inside Chinese", source: "A你🙂好B", selection: `{"kind":"text","start":1,"end":5,"text":"你🙂好"}`, wantStart: 1, wantEnd: 5},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := &artifact.Artifact{
+				ID: "script-v3", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1",
+				StageName: "script", Version: 3, IsCurrent: true,
+			}
+			artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
+			revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+			resolver := &fakeCreatorArtifactTextResolver{text: test.source}
+			svc := NewCreatorViewService(
+				fakeCreatorProjectReader{project: &model.VideoProject{
+					ID: "vp-1", Config: json.RawMessage(`{"modelProviderRefs":{"text_to_text":{"source":"local_agent","baseUrl":"https://model.test","model":"writer"}}}`),
+				}},
+				fakeCreatorShotReader{},
+				artifacts,
+			).WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review"}).
+				WithArtifactReconciler(resolver)
+
+			textSelection := decodeArtifactSelection(t, test.selection)
+			textSelection.SourceHash = creatorSelectionSourceHash(test.source)
+			_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, model.StepRevisionRequest{
+				IdempotencyKey: "text-" + test.name, ArtifactID: base.ID, BaseVersion: 3,
+				Mode: "instruction", Instruction: "只改选中文字",
+				ModelProviders: map[string]interface{}{"text_to_text": map[string]interface{}{
+					"baseUrl": "https://model.test", "apiKey": "secret", "model": "writer",
+				}},
+				Selection: textSelection,
+			})
+			if err != nil {
+				t.Fatalf("ReviseStep() error = %v", err)
+			}
+			want := map[string]interface{}{"kind": "text", "start": test.wantStart, "end": test.wantEnd, "sourceHash": creatorSelectionSourceHash(test.source)}
+			want["text"] = decodeArtifactSelectionText(t, test.selection)
+			if got := revisions.reviseRequest.Provenance["selection"]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("selection provenance = %#v, want %#v", got, want)
+			}
+			if revisions.reviseRequest.Message != "只改选中文字" || len(revisions.reviseRequest.DirectContent) != 0 {
+				t.Fatalf("selected instruction must reach the scoped generator path: %+v", revisions.reviseRequest)
+			}
+			if resolver.resolveCalls != 1 || resolver.resolvedArtifactID != base.ID || string(revisions.reviseRequest.SourceContent) != test.source {
+				t.Fatalf("resolver calls = %d artifact = %q", resolver.resolveCalls, resolver.resolvedArtifactID)
+			}
+		})
+	}
+}
+
+func TestArtifactSelectionTextRejectsMalformedShapeBeforeMutation(t *testing.T) {
+	for name, raw := range map[string]string{
+		"empty text":     `{"kind":"text","start":0,"end":1,"text":""}`,
+		"negative start": `{"kind":"text","start":-1,"end":1,"text":"a"}`,
+		"empty range":    `{"kind":"text","start":1,"end":1,"text":"a"}`,
+		"mixed rect":     `{"kind":"text","start":0,"end":1,"text":"a","x":0,"y":0,"width":1,"height":1}`,
+		"mixed time":     `{"kind":"text","start":0,"end":1,"text":"a","startMs":0,"endMs":1}`,
+		"over limit":     fmt.Sprintf(`{"kind":"text","start":0,"end":4001,"text":%q}`, strings.Repeat("界", 4001)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, revisions, _ := newTextSelectionService("a" + strings.Repeat("界", 4001))
+			_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, textSelectionRequest(t, "malformed-"+name, raw))
+			if !errors.Is(err, ErrCreatorInvalidRequest) || revisions.calls != 0 {
+				t.Fatalf("error = %v, revision calls = %d", err, revisions.calls)
+			}
+		})
+	}
+}
+
+func TestArtifactSelectionTextConflictsOnStaleMismatchedOrUnavailableContent(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		source     string
+		selection  string
+		resolveErr error
+	}{
+		{name: "stale range", source: "短文本", selection: `{"kind":"text","start":0,"end":9,"text":"短文本"}`},
+		{name: "mismatched text", source: "abcdef", selection: `{"kind":"text","start":1,"end":3,"text":"zz"}`},
+		{name: "split surrogate", source: "A🙂B", selection: `{"kind":"text","start":2,"end":3,"text":"🙂"}`},
+		{name: "unavailable source", selection: `{"kind":"text","start":0,"end":1,"text":"a"}`, resolveErr: artifact.ErrRevisionContentUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc, revisions, resolver := newTextSelectionService(test.source)
+			resolver.err = test.resolveErr
+			req := textSelectionRequest(t, "conflict-"+test.name, test.selection, test.source)
+			_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req)
+			if err == nil || err.Error() != "creator artifact selection conflict" || errors.Is(err, ErrCreatorInvalidRequest) || revisions.calls != 0 {
+				t.Fatalf("error = %v, revision calls = %d", err, revisions.calls)
+			}
+		})
+	}
+}
+
+func TestArtifactSelectionInstructionRetryReusesExistingRevision(t *testing.T) {
+	base := &artifact.Artifact{
+		ID: "script-v3", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1",
+		StageName: "script", Version: 3, IsCurrent: true,
+	}
+	artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
+	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+	resolver := &fakeCreatorArtifactTextResolver{text: "abcdef"}
+	svc := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{
+			ID:     "vp-1",
+			Config: json.RawMessage(`{"modelProviderRefs":{"text_to_text":{"source":"local_agent","baseUrl":"https://model.test","model":"writer"}}}`),
+		}},
+		fakeCreatorShotReader{},
+		artifacts,
+	).WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review"}).
+		WithArtifactReconciler(resolver)
+	req := model.StepRevisionRequest{
+		IdempotencyKey: "same-instruction-text-key", ArtifactID: base.ID, BaseVersion: base.Version,
+		Mode: "instruction", Instruction: "rewrite only the selection",
+		ModelProviders: map[string]interface{}{"text_to_text": map[string]interface{}{
+			"baseUrl": "https://model.test", "apiKey": "secret", "model": "writer",
+		}},
+		Selection: decodeArtifactSelection(t, fmt.Sprintf(`{"kind":"text","start":1,"end":3,"text":"bc","sourceHash":%q}`, creatorSelectionSourceHash("abcdef"))),
+	}
+	reviews := svc.reviews.(*fakeCreatorReviewMutations)
+	reviews.reopenErr = errors.New("temporary reopen failure")
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); err == nil {
+		t.Fatal("expected first reopen failure")
+	}
+	createdID := revisions.artifacts.current[0].ID
+	reviews.reopenErr = nil
+	result, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req)
+	if err != nil {
+		t.Fatalf("identical retry error = %v", err)
+	}
+	if revisions.calls != 1 || result.Artifact.ID != createdID {
+		t.Fatalf("identical instruction retry calls = %d, artifact = %q/%q", revisions.calls, result.Artifact.ID, createdID)
+	}
+	if revisions.reviseRequest.Message != req.Instruction || len(revisions.reviseRequest.DirectContent) != 0 || resolver.resolveCalls != 1 {
+		t.Fatalf("instruction retry request = %+v, resolver calls = %d", revisions.reviseRequest, resolver.resolveCalls)
+	}
+}
+
+func TestArtifactSelectionTextFingerprintAndStaleRequestsMutateNothing(t *testing.T) {
+	base := &artifact.Artifact{ID: "script-v3", ProjectID: "vp-1", StageName: "script", Version: 3}
+	impact := model.StepImpact{AffectedStepIDs: []model.CreatorStepID{model.CreatorStepShots}}
+	fingerprint := func(selection map[string]interface{}) string {
+		return newCreatorMutationReceipt(
+			"revise", "key", "vp-1", model.CreatorStepScript, base, nil, "run-1", "review-1",
+			impact, selection, nil, creatorRequestDigest(map[string]interface{}{"instruction": "rewrite", "selection": selection}),
+		).Fingerprint
+	}
+	original := map[string]interface{}{"kind": "text", "start": 1, "end": 3, "text": "bc"}
+	if fingerprint(original) != fingerprint(map[string]interface{}{"kind": "text", "start": 1, "end": 3, "text": "bc"}) {
+		t.Fatal("identical selection and instruction changed the request fingerprint")
+	}
+	for name, changed := range map[string]map[string]interface{}{
+		"text":  {"kind": "text", "start": 1, "end": 3, "text": "bd"},
+		"start": {"kind": "text", "start": 0, "end": 3, "text": "abc"},
+		"end":   {"kind": "text", "start": 1, "end": 4, "text": "bcd"},
+	} {
+		if fingerprint(original) == fingerprint(changed) {
+			t.Fatalf("changing %s did not change the request fingerprint", name)
+		}
+	}
+
+	staleSvc, staleRevisions, _ := newTextSelectionService("abcdef")
+	staleReq := textSelectionRequest(t, "stale-version", `{"kind":"text","start":1,"end":3,"text":"bc"}`)
+	staleReq.BaseVersion = 2
+	if _, err := staleSvc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, staleReq); !errors.Is(err, ErrCreatorVersionConflict) || staleRevisions.calls != 0 {
+		t.Fatalf("stale version error = %v, revision calls = %d", err, staleRevisions.calls)
+	}
+}
+
+func TestArtifactSelectionResolverIsNotUsedForRectSelection(t *testing.T) {
+	svc, revisions, resolver := newTextSelectionService("unused")
+	x, y, width, height := 0.1, 0.2, 0.3, 0.4
+	req := model.StepRevisionRequest{
+		IdempotencyKey: "rect-no-text-resolve", ArtifactID: "script-v3", BaseVersion: 3,
+		Mode: "direct", DirectContent: "new",
+		Selection: &model.ArtifactSelection{Kind: "rect", X: &x, Y: &y, Width: &width, Height: &height},
+	}
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); err != nil {
+		t.Fatalf("ReviseStep() error = %v", err)
+	}
+	if resolver.resolveCalls != 0 || revisions.calls != 1 {
+		t.Fatalf("resolver calls = %d, revision calls = %d", resolver.resolveCalls, revisions.calls)
+	}
+}
+
+func TestArtifactSelectionTextIsRejectedForDirectModeBeforeMutation(t *testing.T) {
+	svc, revisions, resolver := newTextSelectionService("abcdef")
+	req := model.StepRevisionRequest{
+		IdempotencyKey: "direct-text-selection", ArtifactID: "script-v3", BaseVersion: 3,
+		Mode: "direct", DirectContent: "replacement",
+		Selection: decodeArtifactSelection(t, fmt.Sprintf(`{"kind":"text","start":1,"end":3,"text":"bc","sourceHash":%q}`, creatorSelectionSourceHash("abcdef"))),
+	}
+	_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req)
+	if !errors.Is(err, ErrCreatorInvalidRequest) || revisions.calls != 0 || resolver.resolveCalls != 0 {
+		t.Fatalf("direct text selection error=%v revision calls=%d resolver calls=%d", err, revisions.calls, resolver.resolveCalls)
+	}
+}
+
+func decodeArtifactSelection(t *testing.T, raw string) *model.ArtifactSelection {
+	t.Helper()
+	var selection model.ArtifactSelection
+	if err := json.Unmarshal([]byte(raw), &selection); err != nil {
+		t.Fatalf("decode selection: %v", err)
+	}
+	return &selection
+}
+
+func decodeArtifactSelectionText(t *testing.T, raw string) string {
+	t.Helper()
+	var selection map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &selection); err != nil {
+		t.Fatalf("decode selection text: %v", err)
+	}
+	text, _ := selection["text"].(string)
+	return text
+}
+
+func textSelectionRequest(t *testing.T, key, raw string, source ...string) model.StepRevisionRequest {
+	t.Helper()
+	selection := decodeArtifactSelection(t, raw)
+	if selection.Kind == "text" && selection.SourceHash == "" {
+		canonicalSource := "abcdef"
+		if len(source) > 0 {
+			canonicalSource = source[0]
+		}
+		selection.SourceHash = creatorSelectionSourceHash(canonicalSource)
+	}
+	return model.StepRevisionRequest{
+		IdempotencyKey: key, ArtifactID: "script-v3", BaseVersion: 3,
+		Mode: "instruction", Instruction: "rewrite", Selection: selection,
+		ModelProviders: map[string]interface{}{"text_to_text": map[string]interface{}{
+			"baseUrl": "https://model.test", "apiKey": "secret", "model": "writer",
+		}},
+	}
+}
+
+func creatorSelectionSourceHash(source string) string {
+	digest := sha256.Sum256([]byte(source))
+	return fmt.Sprintf("sha256:%x", digest)
+}
+
+func newTextSelectionService(source string) (*CreatorViewService, *fakeCreatorRevisionService, *fakeCreatorArtifactTextResolver) {
+	base := &artifact.Artifact{
+		ID: "script-v3", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1",
+		StageName: "script", Version: 3, IsCurrent: true,
+	}
+	artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
+	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+	resolver := &fakeCreatorArtifactTextResolver{text: source}
+	svc := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{
+			ID: "vp-1", Config: json.RawMessage(`{"modelProviderRefs":{"text_to_text":{"source":"local_agent","baseUrl":"https://model.test","model":"writer"}}}`),
+		}},
+		fakeCreatorShotReader{},
+		artifacts,
+	).WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review"}).
+		WithArtifactReconciler(resolver)
+	return svc, revisions, resolver
+}
+
+type fakeCreatorArtifactTextResolver struct {
+	text               string
+	err                error
+	resolveCalls       int
+	resolvedArtifactID string
+}
+
+func (f *fakeCreatorArtifactTextResolver) ReconcileProjectArtifacts(context.Context, string) error {
+	return nil
+}
+
+func (f *fakeCreatorArtifactTextResolver) ResolveReviewableText(_ context.Context, item *artifact.Artifact) (string, error) {
+	f.resolveCalls++
+	if item != nil {
+		f.resolvedArtifactID = item.ID
+	}
+	return f.text, f.err
 }
 
 func TestImpactConfirmationIsOrderInsensitiveButRejectsDuplicatesOmissionsAndExtras(t *testing.T) {
@@ -700,6 +1325,29 @@ type fakeCreatorArtifactReader struct {
 
 func (f fakeCreatorArtifactReader) ListCurrentByProject(context.Context, string) ([]*artifact.Artifact, error) {
 	return f.artifacts, f.err
+}
+
+type mutableCreatorArtifactReader struct {
+	artifacts []*artifact.Artifact
+}
+
+func (f *mutableCreatorArtifactReader) ListCurrentByProject(context.Context, string) ([]*artifact.Artifact, error) {
+	return f.artifacts, nil
+}
+
+type recordingCreatorArtifactReconciler struct {
+	calls     int
+	projectID string
+	reconcile func(string)
+}
+
+func (f *recordingCreatorArtifactReconciler) ReconcileProjectArtifacts(_ context.Context, projectID string) error {
+	f.calls++
+	f.projectID = projectID
+	if f.reconcile != nil {
+		f.reconcile(projectID)
+	}
+	return nil
 }
 
 type fakeCreatorShotReader struct {
@@ -963,7 +1611,9 @@ func (f *fakeCreatorMutationArtifacts) GetHistory(_ context.Context, projectID, 
 type fakeCreatorRevisionService struct {
 	artifacts            *fakeCreatorMutationArtifacts
 	reviseRequest        artifact.ReviseRequest
+	replaceRequest       artifact.ReplaceRequest
 	calls                int
+	replaceCalls         int
 	reviseErrAfterCreate error
 }
 
@@ -991,6 +1641,42 @@ func (f *fakeCreatorRevisionService) Revise(_ context.Context, req artifact.Revi
 	return &artifact.RevisionResult{Artifact: &revised}, nil
 }
 
+func (f *fakeCreatorRevisionService) Replace(_ context.Context, req artifact.ReplaceRequest) (*artifact.RevisionResult, error) {
+	f.replaceCalls++
+	f.replaceRequest = req
+	base, _ := f.artifacts.GetByID(context.Background(), req.ArtifactID)
+	replaced := *base
+	replaced.ID = req.NewArtifactID
+	if replaced.ID == "" {
+		replaced.ID = "image-v4"
+	}
+	replaced.Version = base.Version + 1
+	replaced.ParentID = base.ID
+	replaced.HumanApproved = false
+	replaced.StorageType = artifact.StorageLocal
+	replaced.StorageRef = req.Material.StorageRef
+	replaced.MimeType = req.Material.MimeType
+	replaced.SizeBytes = req.Material.SizeBytes
+	replaced.ContentHash = req.Material.ContentHash
+	replaced.Metadata = map[string]interface{}{}
+	for key, value := range req.Provenance {
+		replaced.Metadata[key] = value
+	}
+	base.IsCurrent = false
+	nextCurrent := []*artifact.Artifact{&replaced}
+	for _, current := range f.artifacts.current {
+		if current != base && (current.ProjectID != base.ProjectID || current.StageName != base.StageName || current.UnitID != base.UnitID) {
+			nextCurrent = append(nextCurrent, current)
+		}
+	}
+	f.artifacts.current = nextCurrent
+	f.artifacts.history = append([]*artifact.Artifact{&replaced}, f.artifacts.history...)
+	if f.reviseErrAfterCreate != nil {
+		return nil, f.reviseErrAfterCreate
+	}
+	return &artifact.RevisionResult{Artifact: &replaced}, nil
+}
+
 func (f *fakeCreatorRevisionService) Restore(_ context.Context, req artifact.RestoreRequest) (*artifact.RevisionResult, error) {
 	f.calls++
 	historical, _ := f.artifacts.GetByID(context.Background(), req.ArtifactID)
@@ -1015,20 +1701,24 @@ func (f *fakeCreatorRevisionService) Restore(_ context.Context, req artifact.Res
 }
 
 type fakeCreatorReviewMutations struct {
-	resolvedRunID      string
-	resolvedReviewID   string
-	reopenedRunID      string
-	reopenedReviewID   string
-	reopenedArtifactID string
-	confirmedRunID     string
-	confirmedReviewID  string
-	resolveErr         error
-	reopenErr          error
-	reopenCalls        int
-	regenerateCalls    int
-	regenerationStatus string
-	regenerateKeys     map[string]bool
-	regenerateKeyErr   error
+	resolvedRunID       string
+	resolvedReviewID    string
+	reopenedRunID       string
+	reopenedReviewID    string
+	reopenedArtifactID  string
+	confirmedRunID      string
+	confirmedReviewID   string
+	resolveErr          error
+	reopenErr           error
+	reopenCalls         int
+	regenerateCalls     int
+	regenerationStatus  string
+	regenerateKeys      map[string]bool
+	regenerateKeyErr    error
+	regeneratedRunID    string
+	regeneratedReviewID string
+	regenerationHint    string
+	regenerationKey     string
 }
 
 func (f *fakeCreatorReviewMutations) ResolveReviewGate(context.Context, *artifact.Artifact, string, string) (string, string, error) {
@@ -1055,7 +1745,7 @@ func (f *fakeCreatorReviewMutations) Regenerate(context.Context, string, string,
 	return nil, f.reopenErr
 }
 
-func (f *fakeCreatorReviewMutations) RegenerateIdempotent(_ context.Context, _, _, _, _, key string) ([]string, error) {
+func (f *fakeCreatorReviewMutations) RegenerateIdempotent(_ context.Context, runID, reviewID, _ string, hint, key string) ([]string, error) {
 	if f.regenerateKeys == nil {
 		f.regenerateKeys = map[string]bool{}
 	}
@@ -1067,6 +1757,8 @@ func (f *fakeCreatorReviewMutations) RegenerateIdempotent(_ context.Context, _, 
 	}
 	f.regenerateKeys[key] = true
 	f.regenerateCalls++
+	f.regeneratedRunID, f.regeneratedReviewID = runID, reviewID
+	f.regenerationHint, f.regenerationKey = hint, key
 	return nil, f.reopenErr
 }
 
