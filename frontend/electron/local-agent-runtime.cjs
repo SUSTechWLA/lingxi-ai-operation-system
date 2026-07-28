@@ -41,6 +41,9 @@ function buildLocalAgentLaunchOptions({
 }) {
   const env = {
     ...baseEnv,
+    // Python MCP servers live inside the signed desktop bundle. Writing .pyc
+    // files there after launch invalidates the macOS code signature.
+    PYTHONDONTWRITEBYTECODE: '1',
     TANGYING_LOCAL_DATA_DIR: dataDir,
   }
   delete env.TANGYING_USER_TOKEN

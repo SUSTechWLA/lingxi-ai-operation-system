@@ -33,6 +33,7 @@ test('buildLocalAgentLaunchOptions enables runner with cloud token and device id
   assert.equal(options.env.TANGYING_IP_AVATAR_MCP_SCRIPT, '/opt/Tangying/mcp/ip_avatar_3d/server.py')
   assert.equal(options.env.TANGYING_IP_AVATAR_PROFILE, '/opt/Tangying/ip-assets/main-ip/character-profile.json')
   assert.equal(options.env.VIDEO_QA_MCP_STDIO_SCRIPT, '/opt/Tangying/mcp/video_qa/server.py')
+  assert.equal(options.env.PYTHONDONTWRITEBYTECODE, '1', 'packaged Python MCP servers must not mutate the signed app bundle')
 })
 
 test('desktop package includes both local MCP servers', () => {
