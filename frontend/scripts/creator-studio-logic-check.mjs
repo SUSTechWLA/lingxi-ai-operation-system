@@ -1146,6 +1146,70 @@ try {
     ['video', 'https://media.test/shot-01.mp4'],
     ['image', 'https://media.test/reference-01.png'],
   ], 'historical Shot review exposes registered video and reference-image previews instead of link-only metadata')
+
+  const canonicalNarrationSegments = [
+    '第一镜先提出创作痛点。',
+    '第二镜说明一句话就能开始。',
+    '第三镜展示脚本与分镜审核。',
+    '第四镜说明三层画面协同。',
+    '第五镜收束到完整成片交付。',
+  ]
+  const canonicalNarration = canonicalNarrationSegments.join('')
+  const historicalTimelineArtifacts = [
+    ...canonicalNarrationSegments.map((_, index) => ({
+      artifactId: `derived-package-${index + 1}`,
+      relatedShotId: `SHOT_${String(index + 1).padStart(2, '0')}`,
+      kind: 'SHOT_ASSET_PACKAGE',
+      isCurrent: true,
+      isStale: false,
+    })),
+    { artifactId: 'canonical-time-windows', kind: 'TIME_WINDOW_PLAN', isCurrent: true, isStale: false },
+    { artifactId: 'derived-video-prompts', kind: 'VIDEO_PROMPTS', isCurrent: true, isStale: false },
+  ]
+  const recoveredTimelineShots = completedShots.projectHistoricalShots(historicalTimelineArtifacts)
+  assert.equal(recoveredTimelineShots.length, canonicalNarrationSegments.length)
+  assert.ok(
+    recoveredTimelineShots.every(shot => shot.artifactIds.includes('canonical-time-windows')),
+    'every recovered Shot receives the canonical time-window plan as shared context',
+  )
+  const recoveredNarrations = recoveredTimelineShots.map((shot, index) => {
+    const shotId = `SHOT_${String(index + 1).padStart(2, '0')}`
+    const loaded = [
+      {
+        artifactId: `derived-package-${index + 1}`,
+        content: { shotId, narrationText: canonicalNarration, sourceScriptSegment: canonicalNarration },
+      },
+      {
+        artifactId: 'derived-video-prompts',
+        content: { videoPrompts: canonicalNarrationSegments.map((_, promptIndex) => ({
+          shotId: `SHOT_${String(promptIndex + 1).padStart(2, '0')}`,
+          narrationText: canonicalNarration,
+        })) },
+      },
+      {
+        artifactId: 'canonical-time-windows',
+        content: { timeWindows: canonicalNarrationSegments.map((narrationText, windowIndex) => ({
+          shotId: `SHOT_${String(windowIndex + 1).padStart(2, '0')}`,
+          startMs: windowIndex * 6000,
+          endMs: (windowIndex + 1) * 6000,
+          durationMs: 6000,
+          narrationText,
+          timelineRevision: 'timeline-v1',
+        })) },
+      },
+    ]
+    return completedShots.projectHistoricalShotReview(shot, loaded).narration
+  })
+  assert.deepEqual(
+    recoveredNarrations,
+    canonicalNarrationSegments,
+    'historical review prefers canonical per-Shot narration over repeated full-script text in derived artifacts',
+  )
+  assert.equal(
+    recoveredNarrations.join(''),
+    canonicalNarration,
+    'the recovered Shot narration segments concatenate to the complete narration exactly once',
+  )
   assert.ok(hundredShotWindow.items.length <= 12, '480px / 64px rows with overscan must render at most 12 queue rows')
   assert.deepEqual(hundredShotWindow.items, Array.from({ length: hundredShotWindow.items.length }, (_, index) => index))
   assert.equal(logic.selectedShotAfterAppend('shot-024', [{ id: 'shot-001' }], [{ id: 'shot-025' }]), 'shot-024', 'page append never clears the active Shot')

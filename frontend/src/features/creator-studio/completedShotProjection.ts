@@ -40,8 +40,10 @@ export interface HistoricalShotReview {
 }
 
 const sharedShotContextKinds = new Set([
-  'SHOT_LIST', 'VIDEO_PROMPTS', 'KEYFRAME_PROMPTS', 'IP_AROLL_PLAN', 'REFERENCE_ASSET_PLAN',
+  'SHOT_LIST', 'TIME_WINDOW_PLAN', 'VIDEO_PROMPTS', 'KEYFRAME_PROMPTS', 'IP_AROLL_PLAN', 'REFERENCE_ASSET_PLAN',
 ])
+const canonicalTimelineKinds = new Set(['TIME_WINDOW_PLAN'])
+const canonicalShotKinds = new Set(['SHOT_LIST'])
 const maxProjectionDepth = 8
 const maxArrayEntries = 96
 
@@ -89,6 +91,8 @@ export function projectHistoricalShotReview(
   loadedArtifacts: readonly HistoricalShotLoadedArtifact[],
 ): HistoricalShotReview {
   const sourceRecords: Record<string, unknown>[] = []
+  const timelineRecords: Record<string, unknown>[] = []
+  const canonicalShotRecords: Record<string, unknown>[] = []
   const referenceURLs: string[] = []
   const descriptorByID = new Map(shot.artifacts.map(artifact => [artifact.artifactId, artifact]))
 
@@ -97,9 +101,16 @@ export function projectHistoricalShotReview(
     if (!descriptor) continue
     const values = decodedArtifactValues(loaded)
     const direct = historicalShotNumber(descriptor.relatedShotId) === shot.sequenceIndex
+    const kind = (descriptor.kind ?? '').trim().toLocaleUpperCase()
     for (const value of values) {
       if (direct && isRecord(value)) sourceRecords.push(value)
       collectMatchingShotRecords(value, shot.sequenceIndex, sourceRecords, 0, new Set<object>())
+      if (canonicalTimelineKinds.has(kind)) {
+        collectMatchingShotRecords(value, shot.sequenceIndex, timelineRecords, 0, new Set<object>())
+      }
+      if (canonicalShotKinds.has(kind)) {
+        collectMatchingShotRecords(value, shot.sequenceIndex, canonicalShotRecords, 0, new Set<object>())
+      }
     }
   }
 
@@ -107,9 +118,12 @@ export function projectHistoricalShotReview(
     referenceURLs.push(...stringsForNamedValues(record, ['referenceImages', 'referenceImageUrls', 'referenceFrames']))
   }
 
-  const title = compactTitle(firstReadableString(sourceRecords, ['title', 'shotTitle', 'name', 'dramaticPurpose', 'whyThisShot', 'mainAction', 'visual'])) || `Shot ${shot.sequenceIndex}`
-  const narration = firstReadableString(sourceRecords, ['narrationText', 'narration', 'voiceoverText', 'sourceScriptSegment', 'spokenText'])
-  const durationSec = firstFiniteNumber(sourceRecords, ['durationSec', 'durationSeconds', 'duration'])
+  const canonicalRecords = [...timelineRecords, ...canonicalShotRecords]
+  const preferredRecords = [...canonicalRecords, ...sourceRecords]
+  const title = compactTitle(firstReadableString(preferredRecords, ['title', 'shotTitle', 'name', 'dramaticPurpose', 'whyThisShot', 'mainAction', 'visual'])) || `Shot ${shot.sequenceIndex}`
+  const narration = firstReadableString(preferredRecords, ['narrationText', 'narration', 'voiceoverText', 'sourceScriptSegment', 'spokenText'])
+  const durationSec = canonicalDurationSeconds(canonicalRecords)
+    ?? firstFiniteNumber(sourceRecords, ['durationSec', 'durationSeconds', 'duration'])
   const screenText = uniqueStrings(sourceRecords.flatMap(record => stringsForNamedValues(record, ['screenText', 'onScreenText', 'textOverlays', 'captions'])))
   const details = compactDetails([
     ['画面与动作', firstReadableString(sourceRecords, ['mainAction', 'visual', 'visualDescription', 'sceneSummary', 'action'])],
@@ -195,6 +209,25 @@ function firstFiniteNumber(records: readonly Record<string, unknown>[], keys: re
     if (Number.isFinite(numeric) && numeric >= 0) return numeric
   }
   return undefined
+}
+
+function canonicalDurationSeconds(records: readonly Record<string, unknown>[]): number | undefined {
+  const seconds = firstFiniteNumber(records, ['durationSec', 'durationSeconds', 'duration'])
+  if (seconds !== undefined) return seconds
+  for (const record of records) {
+    const durationMs = ownFiniteNumber(record, 'durationMs')
+    if (durationMs !== undefined) return durationMs / 1000
+    const startMs = ownFiniteNumber(record, 'startMs')
+    const endMs = ownFiniteNumber(record, 'endMs')
+    if (startMs !== undefined && endMs !== undefined && endMs >= startMs) return (endMs - startMs) / 1000
+  }
+  return undefined
+}
+
+function ownFiniteNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key]
+  const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : undefined
 }
 
 function stringsForNamedValues(record: Record<string, unknown>, keys: readonly string[]): string[] {
