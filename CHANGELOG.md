@@ -26,6 +26,7 @@ All notable release changes are tracked here. README only carries the current ve
 - Fixed full-content actions reflowing the review page, duplicating text, and leaving action buttons on uneven rows.
 - Fixed three independently generated layer descriptions drifting away from one shared composition, camera, lighting, reference, and time progression.
 - Fixed a generator-only schema label drifting to `shot_visual_layers_v2` while the frontend, planner, and local renderer still use the compatible `shot_visual_layers_v1` contract.
+- Fixed the release build dependency audit by moving to the patched Electron Builder toolchain, omitting its unused Squirrel.Windows peer tree, and updating the ESLint toolchain without weakening the high-severity audit gate.
 
 ## v0.2.1 - 2026-07-21
 

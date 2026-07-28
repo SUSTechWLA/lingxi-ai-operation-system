@@ -24,4 +24,3 @@
 - aigcPlan.primaryReferenceImage、aigcPlan.timeline、aigcPlan.prompt
 - visualLayers
 - voiceover、subtitle、shotAssemblyPlan/concatPlan
-

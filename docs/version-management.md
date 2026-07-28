@@ -65,6 +65,7 @@ v0.2.1 对应能力：
 - 动态规划保留时长、预览模式、production route 和 required layers，安装态媒体工具路径可确定发现。
 - 旁白音频母版下发唯一的逐 Shot 时间线；生成计划、提示词、素材包和渲染请求必须保留同一组毫秒范围、版本号和独立旁白。
 - 三层 Shot 计划共享统一视觉锚点、主参考图和开场/发展/收束节拍；已完成任务使用横向 Shot 回看与稳定详情抽屉。
+- 前端构建依赖必须通过完整 `npm audit --audit-level=high`；Linux 打包使用已修复的 Electron Builder 工具链，`.npmrc` 禁止自动安装未使用的 Squirrel.Windows peer 依赖，但不改变 NSIS、DMG 或 AppImage 目标声明。
 
 发布 v0.2.1 tag 前必须确认：
 
