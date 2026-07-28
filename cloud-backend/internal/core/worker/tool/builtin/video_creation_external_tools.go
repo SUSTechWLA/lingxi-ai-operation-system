@@ -5153,7 +5153,7 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"textSafeRequired":   true,
 		}
 		visualLayers := map[string]interface{}{
-			"schemaVersion": "shot_visual_layers_v2",
+			"schemaVersion": "shot_visual_layers_v1",
 			"shotId":        shotID,
 			"description":   "同一 Shot 始终设计 IP A-roll、HyperFrames 文字/特效和 AIGC 丰富素材三层；执行策略决定当前是否生成可选层。",
 			"visualAnchor":  visualAnchor,

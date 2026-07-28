@@ -1762,6 +1762,9 @@ func TestVideoPromptGeneratorBuildsCoordinatedTimedLayers(t *testing.T) {
 	}
 
 	layers, _ := mapValue(pkg["visualLayers"])
+	if got := firstStringInMap(layers, "schemaVersion"); got != "shot_visual_layers_v1" {
+		t.Fatalf("visual layer contract drifted to %q; coordinated fields must remain v1-compatible", got)
+	}
 	anchorRef := firstStringInMap(anchor, "anchorId")
 	for _, layerName := range []string{"ipAroll", "hyperframes", "aigc"} {
 		layer, ok := mapValue(layers[layerName])

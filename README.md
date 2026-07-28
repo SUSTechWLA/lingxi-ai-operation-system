@@ -39,6 +39,8 @@
 
 - 新增源码仓一键部署：自动安装锁定依赖、启动 Docker 后端与 HyperFrames、等待健康检查、打包 macOS 客户端，并可直接打开安装态应用。
 - 每个 Shot 统一使用 `shot_visual_layers_v1`：IP A-roll 负责正式 3D 角色口播，HyperFrames / HyperKeyframes 负责精确文字和可控特效，AIGC 负责无文字背景、B-roll 或局部动态素材；三层设计与合成计划始终存在。
+- 口播音频母版现在产生唯一的规范 Shot 时间线：每镜保存 `startMs`、`endMs`、`durationMs`、`timelineRevision` 和独立旁白，全部 Shot 按顺序拼接后必须与完整口播稿完全一致。
+- 三层画面共享同一个 `visualAnchor` 和开场、发展、收束节拍：IP A-roll 明确站位、眼神、表情、动作、镜头与灯光，HyperKeyframes 明确文字、样式、位置和时间，AIGC 使用主参考图与文学化 Vibe Prompt 补充环境和动态。
 - 制作路线与 AIGC 执行策略已解耦：口播默认按 Shot 自动使用 AIGC 丰富层，也可选择纯本地执行；`aigcEnabled=false` 只禁止本次 AIGC 调用，不会删除该层的提示词、安全区和未来重启执行所需设计。
 - 已安装 App 内置正式 IP 资产与 MCP provider，并显式发现 Homebrew FFmpeg/FFprobe；macOS `say` 只允许用于本地节奏预览，不能作为生产配音或正式成片的降级路径。
 - 动态审核 UI 可随真实 Agent review gate 推进；MCP 必需素材失败时会 fail closed，不再把失败渲染伪装成成功。
@@ -51,6 +53,7 @@
 - 口播类 shot 聚焦口播稿、HyperFrames 时间线、AIGC 插入素材和最终合成；影视类 shot 聚焦剧本、角色 / 场景 / 道具参考、故事板、AIGC 主画面提示词、跨 shot 一致性和完整 shot 预览。
 - 新增本地 IP 数字人口播渲染工具：当前主树懒 IP 使用可复用 Blender 母版、三段三指骨骼、口型与表情动作库、暖色工作室、GPT-SoVITS 固定声音和 FFmpeg 本地合成。
 - 图片和视频产物现在直接可预览，图片支持点击放大和对话式重新生成提示，视频支持大弹窗播放；页面隐藏 `local://...`、`已登记`、`预览已就绪` 等非创作信息。
+- 已完成项目的历史 Shot 使用横向镜头条与全宽审核档案；长内容通过不改变页面布局的详情抽屉阅读，并优先恢复规范时间线中的逐镜旁白，避免派生提示词里的整篇脚本覆盖单镜内容。
 - JiMeng/Dreamina 视频调用会优先投放 AIGC 层提示词，而不是 HyperFrames 字幕/文字层或完整工程说明，避免把错误层级发给视频模型。
 - 项目页启动体检会自动运行，只展示未就绪或需留意的问题；具体本地工具命令和排障细节保留在设置页、追踪页和诊断包中。
 - 无真实 AIGC provider 时可以跑通 fallback preview、shot QA report、machine-readable repairPlan、accepted shot provenance 和 final assembly diagnostics。
@@ -100,6 +103,8 @@ IP A-roll 使用三种互斥的正式声音来源：
 头像菜单中的“设置”统一管理文本生成、图片生成和视频生成接口，API 密钥仅在本地 Agent 持久化；外观可选择跟随系统、浅色或深色并自动记住。开始创作页只展示创作者需要做的选择，不暴露 Shot 内部三层编排术语，后端仍按 `shot_visual_layers_v1` 自动生成并执行完整的 IP A-roll、HyperFrames 与 AIGC 画面计划。
 
 项目按需求、创意方案、脚本、分镜与素材、成片预览、交付六步推进。单个 Shot 必须大于 0 且小于 15 秒；重生成和候选确认只影响该 Shot 与成片待更新状态，历史版本可恢复为新的当前版本。重新拼接会重试真实的预览审核节点，不会重生成任何 Shot。最终视频与下载入口只在当前交付产物明确记录成片检查通过后出现。
+
+旁白切分以音频母版时间线为唯一事实来源。每个 Shot 只能展示和消费自己时间窗内的旁白；派生素材包、视频提示词和渲染请求必须透传相同的时间范围与 `timelineRevision`，不能再使用项目主题或完整脚本代替单镜旁白。已完成项目回看时，前端同样优先读取该规范记录。
 
 常用验证：`cd cloud-backend && go test ./... && go vet ./... && make api-types-check`，`cd frontend && npm run test:creator && npm run test:settings && npm run test:developer-build && npm run lint && npm run build`，以及 `bash scripts/beta-smoke-check.sh`。
 
@@ -154,6 +159,8 @@ flowchart LR
 Shot split policy 固定为 `minShotDurationSec=3`、`maxShotDurationSec=15`、`preferredShotDurationSec=6-8`、`splitByScriptSemantics=true`、`splitByVisualChange=true`。切分优先参考剧情节点、场景、主体、动作、景别、视角、焦段、情绪节奏和旁白/对白语义段落；超过 15 秒必须继续拆分，短于 3 秒只在连续且合并后不超过 15 秒时合并。
 
 每个 Shot 都会输出 `visualLayers`，并明确拆分为 `ipArollPlan`、`hyperframesPlan`、`aigcPlan` 与 `ffmpegFusionPlan`。IP A-roll 提示词描述正式 3D 角色的口播、口型、表情和动作；AIGC 提示词只生成无文字背景、B-roll 或局部动态并预留主体/文字安全区；中文文字、标题、字幕、流程标签和 UI 文案由 HyperFrames / HyperKeyframes 精确渲染。最终合成器按同一个 Shot 时间窗融合三层。即使本次选择纯本地，`aigcPlan.designed=true` 仍保留，`executionPolicy=disabled` 且不会创建外部生成请求。
+
+三层不是三份互不相关的提示词。`visualAnchor` 先定义这一镜共同的表达命题、基础构图、镜头意图、灯光意图、主参考图以及开场/发展/收束节拍；三层通过 `visualAnchorRef` 对齐。AIGC 创作提示词只描述感受、环境、光线和随时间发生的画面变化，把分辨率、帧率、编码和像素格式留给合成与交付层处理。
 
 生成后的 `hyperframes/assets/data.json` 会在顶层和每个 Shot 同时保存 `designedLayers`、`layerExecutionPolicy`、`requiredLayers`、`visualLayers` 与可读的三层设计摘要。纯本地降级渲染使用 `storyboard_ip_composite`：IP A-roll 保持为连续画面和音频底层，HyperFrames 透明文字层按同一时间窗叠加，AIGC 设计保留但不伪造已执行状态。
 

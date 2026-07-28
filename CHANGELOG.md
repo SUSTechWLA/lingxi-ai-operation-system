@@ -8,6 +8,8 @@ All notable release changes are tracked here. README only carries the current ve
 
 - Added a production Creator settings route, accessible from the user-avatar menu, for separate local text, image, and video generation providers.
 - Added persisted system, light, and dark appearance modes backed by a shared semantic color system.
+- Added a canonical narration timeline that carries per-Shot millisecond ranges and revision identity from the audio master through generation plans, prompts, packages, and render requests.
+- Added a shared visual anchor for every Shot, with coordinated IP A-roll direction, timed HyperKeyframes, primary AIGC references, and literary time-aware Vibe prompts.
 
 ### Changed
 
@@ -15,6 +17,15 @@ All notable release changes are tracked here. README only carries the current ve
 - Reused the same settings implementation in the production Creator shell and the gated developer console.
 - Clarified that provider keys are persisted only by the local agent, transmitted only for the authenticated generation request that needs them, and never written into project configuration or cloud persistence.
 - Added explicit removal for locally saved provider keys and accessible keyboard navigation for settings tabs.
+- Changed completed-project Shot review to a horizontal selector and full-width dossier. Long retained content opens in a stable accessible drawer instead of duplicating itself inside cards.
+- Changed historical narration recovery to prefer canonical Shot/time-window records over repeated full-script text stored in derived artifacts.
+
+### Fixed
+
+- Fixed every historical Shot showing the same full narration instead of its own timed segment.
+- Fixed full-content actions reflowing the review page, duplicating text, and leaving action buttons on uneven rows.
+- Fixed three independently generated layer descriptions drifting away from one shared composition, camera, lighting, reference, and time progression.
+- Fixed a generator-only schema label drifting to `shot_visual_layers_v2` while the frontend, planner, and local renderer still use the compatible `shot_visual_layers_v1` contract.
 
 ## v0.2.1 - 2026-07-21
 
