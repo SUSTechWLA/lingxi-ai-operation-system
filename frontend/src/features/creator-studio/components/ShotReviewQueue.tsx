@@ -92,7 +92,7 @@ export default function ShotReviewQueue({ items, total, selectedShotId, filters,
               aria-current={selectedHistoricalShotId === shot.id ? 'true' : undefined}
               onClick={() => onSelectHistorical(shot.id)}
             >
-              <span className="shot-queue-copy"><strong>Shot {shot.sequenceIndex}</strong><small>{shot.layers.join(' · ')}</small></span>
+              <span className="shot-queue-copy"><strong>Shot {shot.sequenceIndex}</strong><small>旁白 · 画面 · 媒体</small></span>
               <span className="shot-queue-status">历史回看</span>
             </button>
           ))}

@@ -145,6 +145,49 @@ func TestArtifactContentReviewTextPreservesHydratedLocalSourceBytes(t *testing.T
 	}
 }
 
+func TestArtifactContentReviewTextHydratesLocalJSONForCompletedProjectReview(t *testing.T) {
+	node := &model.Node{
+		ID: "proposal_generator_exec", TaskID: "task-local-proposal", Status: model.NodeSuccess,
+		Input: map[string]interface{}{"parameters": map[string]interface{}{"stage": "proposal_generator"}},
+		Output: map[string]interface{}{
+			"content": "# 创意方案\n\n推荐路线：IP 口播与文字动效协同。",
+			"proposalPacket": map[string]interface{}{
+				"recommendedOption": "IP 口播强化版",
+				"audience":          "需要快速理解产品价值的内容创作者",
+			},
+			"artifacts": []interface{}{map[string]interface{}{
+				"unitId": "proposal", "kind": "JSON", "name": "proposal.json", "mimeType": "application/json",
+			}},
+		},
+	}
+	item := &Artifact{
+		ID: "artifact-local-proposal", ProjectID: "vp-1", WorkflowRunID: "run-missing", TaskID: node.TaskID,
+		StageName: "proposal_generator", UnitID: "proposal", Kind: KindJSON, Name: "proposal.json",
+		MimeType: "application/json", StorageType: StorageLocal,
+	}
+	handler := newHandlerForStore(
+		&fakeHandlerArtifactStore{artifact: item},
+		unavailableWorkflowRunRepository(t),
+		&reviewTextNodeRepo{node: node},
+	).WithProjectAccess(fakeArtifactProjectAccess{owners: map[string]string{"vp-1": "user-1"}})
+
+	data := requestArtifactContentData(t, handler, item.ID)
+	reviewText, ok := data["reviewText"].(string)
+	if !ok || reviewText == "" {
+		t.Fatalf("reviewText = %#v, want hydrated JSON source for completed-project review", data["reviewText"])
+	}
+	var hydrated map[string]interface{}
+	if err := json.Unmarshal([]byte(reviewText), &hydrated); err != nil {
+		t.Fatalf("reviewText is not valid JSON: %v; source = %q", err, reviewText)
+	}
+	if got := hydrated["content"]; got != "# 创意方案\n\n推荐路线：IP 口播与文字动效协同。" {
+		t.Fatalf("hydrated content = %#v", got)
+	}
+	if got := data["content"]; got != reviewText {
+		t.Fatalf("content = %#v, want same canonical hydrated source as reviewText", got)
+	}
+}
+
 func TestResolveReviewableTextPrefersNonEmptyInlineSourceOverHydration(t *testing.T) {
 	const inlineSource = "  # legacy inline source\n\nkeep this exact text  \n"
 	node := &model.Node{

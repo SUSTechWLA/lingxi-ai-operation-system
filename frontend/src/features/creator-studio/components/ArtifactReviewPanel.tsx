@@ -444,7 +444,12 @@ export default function ArtifactReviewPanel({ projectId, step, artifact, content
         <span className={`artifact-state is-${step.state}`}>{stateCopy(step.state)}</span>
       </div>
 
-      {!artifactId ? <p className="artifact-empty">这一步还没有可查看的内容。</p> : (
+      {step.id === 'direction' && <aside className="creator-step-purpose" aria-label="创意方案说明">
+        <strong>创意方案有什么用？</strong>
+        <p>创意方案用于在写脚本前确定视频的核心表达、目标受众、叙事节奏和视觉方向。确认后，脚本与每个 Shot 都会沿着这条制作路线展开。</p>
+      </aside>}
+
+      {!artifactId ? <p className="artifact-empty">{step.id === 'direction' ? '创意方案尚未生成，或旧任务没有留下可读内容。可以从此步骤重新生成。' : '这一步还没有可查看的内容。'}</p> : (
         <>
           {viewingHistorical && <div className="artifact-history-notice" role="status"><strong>正在查看历史产物</strong><span>当前版本不会被覆盖；需要时可从版本列表恢复。</span></div>}
           <ArtifactProofingCanvas

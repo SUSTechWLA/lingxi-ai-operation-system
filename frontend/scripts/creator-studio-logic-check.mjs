@@ -1087,18 +1087,56 @@ try {
   assert.equal(logic.canApplyShotListRequestState(4, 5, false), false, 'a stale Shot-list rejection cannot overwrite a newer request state')
   assert.equal(logic.canApplyShotListRequestState(5, 5, false), true, 'the current Shot-list request may update state')
   assert.equal(logic.canApplyShotListRequestState(5, 5, true), false, 'an aborted Shot-list request cannot update state')
+  const historicalShotArtifacts = [
+    { artifactId: 'shot-video', relatedShotId: 'shot-01', artifactType: 'composited_shot_video', kind: 'COMPOSITED_SHOT_VIDEO', isCurrent: true, isStale: false },
+    { artifactId: 'shot-package', relatedShotId: 'shot-01', artifactType: 'shot_asset_package', kind: 'SHOT_ASSET_PACKAGE', isCurrent: true, isStale: false },
+    { artifactId: 'shot-list', kind: 'SHOT_LIST', isCurrent: true, isStale: false },
+    { artifactId: 'old-video', relatedShotId: 'shot-01', artifactType: 'composited_shot_video', kind: 'COMPOSITED_SHOT_VIDEO', isCurrent: false, isStale: true },
+  ]
+  const [historicalShot] = completedShots.projectHistoricalShots(historicalShotArtifacts)
+  assert.deepEqual(historicalShot.artifactIds, ['shot-video', 'shot-package', 'shot-list'], 'historical Shot review keeps current direct artifacts and shared structured context without stale duplicates')
   assert.deepEqual(completedShots.projectHistoricalShots([
-    { artifactId: 'a', relatedShotId: 'shot-01', reviewCategory: 'text', reviewLabel: '视频提示词' },
-    { artifactId: 'b', relatedShotId: 'shot-01', reviewCategory: 'video', reviewLabel: '合成视频' },
-  ])[0].artifactIds, ['a', 'b'], 'historical artifacts are grouped under their numeric Shot')
-  assert.deepEqual(completedShots.projectHistoricalShots([
-    { artifactId: 'later', relatedShotId: 'shot_10', reviewCategory: 'audio', reviewLabel: '语音' },
-    { artifactId: 'first', relatedShotId: 'shot 2', reviewCategory: 'image', reviewLabel: '参考图' },
-    { artifactId: 'ignored', relatedShotId: 'draft-2', reviewCategory: 'text', reviewLabel: '文字内容' },
-  ]).map(shot => [shot.sequenceIndex, shot.layers]), [
-    [2, ['补充 / AIGC 层']],
-    [10, ['旁白']],
-  ], 'historical recovery sorts numeric Shot groups and exposes only creator-facing layer labels')
+    { artifactId: 'later', relatedShotId: 'shot_10', artifactType: 'shot_audio', kind: 'SHOT_AUDIO', isCurrent: true, isStale: false },
+    { artifactId: 'first', relatedShotId: 'shot 2', artifactType: 'shot_keyframe', kind: 'SHOT_KEYFRAME', isCurrent: true, isStale: false },
+    { artifactId: 'ignored', relatedShotId: 'draft-2', kind: 'VIDEO_PROMPTS', isCurrent: true, isStale: false },
+  ]).map(shot => shot.sequenceIndex), [2, 10], 'historical recovery sorts numeric Shot groups and ignores unrelated records')
+
+  const review = completedShots.projectHistoricalShotReview(historicalShot, [
+    {
+      artifactId: 'shot-list',
+      content: {
+        shotList: [{
+          id: 'SHOT_01', title: '开场亮相', durationSec: 6,
+          narrationText: '做一条好视频，不该从十几个工具间来回搬运开始。',
+          mainAction: '树懒 IP 正对镜头抬手问候', camera: '中景固定机位，轻微推进',
+          lighting: '左前方柔和主光，右后方轮廓光', screenText: ['一句创意', '完整成片'],
+        }],
+      },
+    },
+    {
+      artifactId: 'shot-package',
+      content: {
+        shotId: 'SHOT_01',
+        ipArollPlan: { designSummary: '树懒 IP 全程正对镜头口播并保持眼神交流。' },
+        hyperframesPlan: { designSummary: '关键词以两行以内标题卡分段出现。' },
+        aigcPlan: { designSummary: '使用本地产品界面截图补充说明，不遮挡角色。' },
+        referenceImages: [{ imageUrl: 'https://media.test/reference-01.png', label: '角色构图参考' }],
+      },
+    },
+    { artifactId: 'shot-video', content: {}, mediaUrl: 'https://media.test/shot-01.mp4' },
+  ])
+  assert.equal(review.title, '开场亮相')
+  assert.equal(review.durationSec, 6)
+  assert.equal(review.narration, '做一条好视频，不该从十几个工具间来回搬运开始。')
+  assert.deepEqual(review.screenText, ['一句创意', '完整成片'])
+  assert.match(review.details.map(item => item.value).join('\n'), /正对镜头抬手问候/)
+  assert.match(review.layers.find(layer => layer.key === 'ip')?.summary ?? '', /眼神交流/)
+  assert.match(review.layers.find(layer => layer.key === 'text')?.summary ?? '', /标题卡/)
+  assert.match(review.layers.find(layer => layer.key === 'enrichment')?.summary ?? '', /界面截图/)
+  assert.deepEqual(review.media.map(item => [item.kind, item.url]), [
+    ['video', 'https://media.test/shot-01.mp4'],
+    ['image', 'https://media.test/reference-01.png'],
+  ], 'historical Shot review exposes registered video and reference-image previews instead of link-only metadata')
   assert.ok(hundredShotWindow.items.length <= 12, '480px / 64px rows with overscan must render at most 12 queue rows')
   assert.deepEqual(hundredShotWindow.items, Array.from({ length: hundredShotWindow.items.length }, (_, index) => index))
   assert.equal(logic.selectedShotAfterAppend('shot-024', [{ id: 'shot-001' }], [{ id: 'shot-025' }]), 'shot-024', 'page append never clears the active Shot')
@@ -1565,6 +1603,7 @@ try {
   assert.match(stripSource, /step\.hasHistory/)
   assert.match(stripSource, /已有内容/)
   assert.match(reviewSource, /确认并继续/)
+  assert.match(reviewSource, /创意方案用于在写脚本前确定视频的核心表达、目标受众、叙事节奏和视觉方向/, 'the proposal step explains its creator-facing purpose')
   assert.match(reviewSource, /previewStepRevision/)
   assert.match(reviewSource, /confirmedAffectedShotIds/)
   assert.match(reviewSource, /normalizeRectSelection/)
@@ -1593,6 +1632,15 @@ try {
   assert.match(proofingSource, /SimpleVideoPlayer/)
   assert.doesNotMatch(proofingSource, /<video\b/, 'artifact proofing delegates video playback to the shared player')
   assert.match(proofingSource, /projectCreatorReviewContent\(displayedContent\)/)
+  assert.match(inspectorSource, /projectHistoricalShotReview/, 'completed Shot review projects readable source content')
+  assert.match(inspectorSource, /<SimpleVideoPlayer\b/, 'completed Shot review previews its retained video')
+  assert.match(inspectorSource, /<SimpleAudioPlayer\b/, 'completed Shot review previews its retained narration')
+  assert.match(inspectorSource, /<img\b/, 'completed Shot review renders reference images, rather than links only')
+  assert.match(inspectorSource, /画面与动作/)
+  assert.match(inspectorSource, /IP A-roll/)
+  assert.match(inspectorSource, /文字层/)
+  assert.match(inspectorSource, /补充画面/)
+  assert.doesNotMatch(inspectorSource, /可回看的创作层|已保留|未保留/, 'completed Shot review never replaces readable content with retention flags')
   assert.doesNotMatch(proofingSource, /artifactContentText\(displayedContent\)/, 'creator plain-text proofing must never serialize non-string content')
   assert.match(proofingSource, /const selectionSource = safeCreatorReviewText\(content\.reviewText\)/, 'scoped selection must use the exact reviewText contract')
   assert.doesNotMatch(

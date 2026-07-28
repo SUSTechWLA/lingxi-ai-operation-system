@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { acceptShotCandidate, getCreatorArtifactContent } from '../../../services/creatorApi'
 import type { ShotListItem, ShotRegenerationResult, ShotUnit, ShotWorkspace } from '../types'
-import type { HistoricalShot } from '../completedShotProjection'
-import { canSubmitShotDuration, isCreatorConflict, SHOT_QUEUE_CONFLICT_COPY } from '../logic'
+import {
+  projectHistoricalShotReview,
+  type HistoricalShot,
+  type HistoricalShotLoadedArtifact,
+  type HistoricalShotReview,
+} from '../completedShotProjection'
+import { canSubmitShotDuration, isCreatorConflict, mapWithConcurrency, SHOT_QUEUE_CONFLICT_COPY } from '../logic'
 import ShotImprovePanel from './ShotImprovePanel'
+import SimpleAudioPlayer from './SimpleAudioPlayer'
+import SimpleVideoPlayer from './SimpleVideoPlayer'
 
 interface ShotInspectorProps {
   projectId: string
@@ -81,19 +88,7 @@ export default function ShotInspector({ projectId, workspace, historicalShot, it
 
   useEffect(() => () => { controllerRef.current?.abort(); acceptControllerRef.current?.abort() }, [])
 
-  if (historicalShot) return (
-    <section className="shot-inspector artifact-review-panel" aria-labelledby="shot-inspector-title">
-      <div className="artifact-review-heading"><div><p className="creator-eyebrow">历史任务回看</p><h2 id="shot-inspector-title">Shot {historicalShot.sequenceIndex}</h2></div><span className="artifact-state">已完成</span></div>
-      <p className="artifact-empty">此项目保留了可回看的创作层，未找到可继续编辑的 Shot 记录。</p>
-      <div className="shot-inspector-meta">
-        <p><strong>IP A-roll</strong>{historicalShot.layers.includes('IP A-roll') ? '已保留' : '未保留'}</p>
-        <p><strong>文字层</strong>{historicalShot.layers.includes('文字层') ? '已保留' : '未保留'}</p>
-        <p><strong>补充 / AIGC 层</strong>{historicalShot.layers.includes('补充 / AIGC 层') ? '已保留' : '未保留'}</p>
-        <p><strong>旁白</strong>{historicalShot.layers.includes('旁白') ? '已保留' : '未保留'}</p>
-        <p><strong>输出成片</strong>{historicalShot.layers.includes('输出成片') ? '已保留' : '未保留'}</p>
-      </div>
-    </section>
-  )
+  if (historicalShot) return <HistoricalShotInspector shot={historicalShot} />
 
   if (!workspace || !shot) return <section className="shot-inspector artifact-review-panel"><p className="artifact-empty">从左侧队列选择一个 Shot 开始审核。</p></section>
 
@@ -151,6 +146,121 @@ export default function ShotInspector({ projectId, workspace, historicalShot, it
       <ShotImprovePanel projectId={projectId} workspace={workspace} item={item} totalShots={totalShots} onRegenerationStarted={onRegenerationStarted} onConflict={onReload} />
     </section>
   )
+}
+
+function HistoricalShotInspector({ shot }: { shot: HistoricalShot }) {
+  const [loadedArtifacts, setLoadedArtifacts] = useState<HistoricalShotLoadedArtifact[]>([])
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'partial'>('loading')
+  const [expandedImage, setExpandedImage] = useState<{ src: string; label: string } | null>(null)
+  const artifactKey = shot.artifactIds.join('|')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setLoadedArtifacts([])
+    setLoadState('loading')
+    setExpandedImage(null)
+    void mapWithConcurrency(shot.artifactIds, 3, async artifactId => {
+      try {
+        const response = await getCreatorArtifactContent(artifactId, controller.signal)
+        return {
+          artifactId,
+          content: response.content,
+          reviewText: response.reviewText,
+          mediaUrl: response.mediaUrl,
+          mediaUrls: response.mediaUrls,
+        } satisfies HistoricalShotLoadedArtifact
+      } catch (caught) {
+        if (controller.signal.aborted) throw caught
+        return null
+      }
+    }).then(results => {
+      if (controller.signal.aborted) return
+      const available = results.filter((item): item is NonNullable<typeof item> => item !== null)
+      setLoadedArtifacts(available)
+      setLoadState(available.length === shot.artifactIds.length ? 'ready' : 'partial')
+    }).catch(() => {
+      if (!controller.signal.aborted) setLoadState('partial')
+    })
+    return () => controller.abort()
+  }, [artifactKey, shot.artifactIds])
+
+  useEffect(() => {
+    if (!expandedImage) return
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setExpandedImage(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [expandedImage])
+
+  const review = useMemo(() => projectHistoricalShotReview(shot, loadedArtifacts), [loadedArtifacts, shot])
+  const videos = review.media.filter(item => item.kind === 'video')
+  const images = review.media.filter(item => item.kind === 'image')
+  const audio = review.media.filter(item => item.kind === 'audio')
+
+  return (
+    <section className="shot-inspector historical-shot-dossier artifact-review-panel" aria-labelledby="shot-inspector-title">
+      <div className="artifact-review-heading historical-shot-heading">
+        <div>
+          <p className="creator-eyebrow">Shot 审核档案</p>
+          <h2 id="shot-inspector-title">Shot {shot.sequenceIndex} · {review.title}</h2>
+          <p>集中审阅这一镜的旁白、画面、三层设计和实际媒体。</p>
+        </div>
+        <span className="artifact-state">{review.durationSec !== undefined ? `${review.durationSec} 秒` : '已完成'}</span>
+      </div>
+
+      {loadState === 'loading' && <p className="artifact-empty" role="status">正在整理这一镜的创作内容…</p>}
+      {loadState === 'partial' && <p className="historical-shot-read-notice" role="status">部分旧媒体无法读取，下面仍展示已经找回的脚本与画面设计。</p>}
+      {loadState !== 'loading' && !review.hasReadableContent && <p className="artifact-empty">这个旧项目没有留下可读的 Shot 内容，可从“分镜与素材”步骤重新生成。</p>}
+
+      {review.narration && <section className="historical-shot-narration" aria-labelledby="historical-shot-narration-title">
+        <p className="creator-eyebrow">旁白</p>
+        <h3 id="historical-shot-narration-title">这一镜说什么</h3>
+        <blockquote>{review.narration}</blockquote>
+      </section>}
+
+      {(review.details.length > 0 || review.screenText.length > 0) && <section className="historical-shot-section" aria-labelledby="historical-shot-visual-title">
+        <div className="historical-shot-section-heading">
+          <div><p className="creator-eyebrow">镜头设计</p><h3 id="historical-shot-visual-title">画面与动作</h3></div>
+          {review.screenText.length > 0 && <div className="historical-shot-screen-text" aria-label="画面文字">{review.screenText.map(text => <span key={text}>{text}</span>)}</div>}
+        </div>
+        <dl className="historical-shot-details">{review.details.map(item => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
+      </section>}
+
+      <section className="historical-shot-section" aria-labelledby="historical-shot-layers-title">
+        <p className="creator-eyebrow">画面分层</p>
+        <h3 id="historical-shot-layers-title">三层如何配合</h3>
+        <div className="historical-shot-layers">
+          <HistoricalLayerCard index="01" title="IP A-roll" summary={layerSummary(review, 'ip')} empty="这个旧 Shot 没有留下角色口播设计说明。" />
+          <HistoricalLayerCard index="02" title="文字层" summary={layerSummary(review, 'text')} empty="这个旧 Shot 没有留下文字动效设计说明。" />
+          <HistoricalLayerCard index="03" title="补充画面" summary={layerSummary(review, 'enrichment')} empty="这个旧 Shot 没有留下补充素材设计说明。" />
+        </div>
+      </section>
+
+      <section className="historical-shot-section historical-shot-media" aria-labelledby="historical-shot-media-title">
+        <p className="creator-eyebrow">实际产物</p>
+        <h3 id="historical-shot-media-title">视频、参考图与语音</h3>
+        {videos.length > 0 ? <div className="historical-shot-videos">{videos.map(item => <article key={`${item.artifactId}:${item.url}`}><h4>{item.label}</h4><SimpleVideoPlayer src={item.url} title={`Shot ${shot.sequenceIndex} ${item.label}`} downloadName={`shot-${shot.sequenceIndex}.mp4`} /></article>)}</div> : <p className="artifact-empty">这一镜没有可单独播放的视频片段，可在“成片预览”查看完整视频。</p>}
+        {images.length > 0 ? <div className="historical-shot-images">{images.map(item => <button key={`${item.artifactId}:${item.url}`} type="button" onClick={() => setExpandedImage({ src: item.url, label: item.label })} aria-label={`放大查看 ${item.label}`}><img src={item.url} alt={`Shot ${shot.sequenceIndex} ${item.label}`} /><span>{item.label} · 点击放大</span></button>)}</div> : <p className="artifact-empty">这一镜没有可预览的独立参考图。</p>}
+        {audio.length > 0 ? <div className="historical-shot-audio">{audio.map(item => <SimpleAudioPlayer key={`${item.artifactId}:${item.url}`} src={item.url} title={`Shot ${shot.sequenceIndex} ${item.label}`} downloadName={`shot-${shot.sequenceIndex}-audio`} />)}</div> : <p className="artifact-empty">这一镜没有可单独播放的语音文件，旁白文字仍可在上方审核。</p>}
+      </section>
+
+      {expandedImage && <div className="historical-shot-image-backdrop" role="presentation" onPointerDown={event => { if (event.currentTarget === event.target) setExpandedImage(null) }}>
+        <aside className="historical-shot-image-dialog" role="dialog" aria-modal="true" aria-label={`查看 ${expandedImage.label}`}>
+          <button type="button" className="creator-secondary-button" onClick={() => setExpandedImage(null)}>关闭</button>
+          <img src={expandedImage.src} alt={`放大的 ${expandedImage.label}`} />
+        </aside>
+      </div>}
+    </section>
+  )
+}
+
+function HistoricalLayerCard({ index, title, summary, empty }: { index: string; title: string; summary?: string; empty: string }) {
+  return <article><span>{index}</span><h4>{title}</h4><p>{summary || empty}</p></article>
+}
+
+function layerSummary(review: HistoricalShotReview, key: HistoricalShotReview['layers'][number]['key']): string | undefined {
+  return review.layers.find(layer => layer.key === key)?.summary
 }
 
 function qualityCopy(status: string | undefined): string {

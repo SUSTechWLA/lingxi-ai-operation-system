@@ -68,7 +68,7 @@ func NewHandler(service *Service, runRepo *workflow.RunRepository, nodeRepo mode
 func newHandlerForStore(service handlerArtifactStore, runRepo *workflow.RunRepository, nodeRepo modelRepo.NodeRepo) *Handler {
 	handler := &Handler{service: service, runRepo: runRepo, nodeRepo: nodeRepo}
 	handler.revisions = NewRevisionService(service)
-	handler.revisions.SetContentResolver(handler.hydrateLocalTextArtifactContent)
+	handler.revisions.SetContentResolver(handler.hydrateLocalReviewArtifactContent)
 	return handler
 }
 
@@ -182,7 +182,7 @@ func (h *Handler) ResolveReviewableText(ctx context.Context, item *Artifact) (st
 	if item.InlineJSON != "" || item.StorageType == StorageInline {
 		return item.InlineJSON, nil
 	}
-	if hydrated, ok := h.hydrateLocalTextArtifactContent(ctx, item); ok {
+	if hydrated, ok := h.hydrateLocalReviewArtifactContent(ctx, item); ok {
 		return string(hydrated), nil
 	}
 	return "", ErrRevisionContentUnavailable
@@ -374,8 +374,8 @@ func taskProjectID(task *model.Task) string {
 	return ""
 }
 
-func (h *Handler) hydrateLocalTextArtifactContent(ctx context.Context, artifact *Artifact) ([]byte, bool) {
-	if !shouldHydrateLocalTextArtifact(artifact) || h.runRepo == nil || h.nodeRepo == nil {
+func (h *Handler) hydrateLocalReviewArtifactContent(ctx context.Context, artifact *Artifact) ([]byte, bool) {
+	if !shouldHydrateLocalReviewArtifact(artifact) || h.runRepo == nil || h.nodeRepo == nil {
 		return nil, false
 	}
 	taskID := strings.TrimSpace(artifact.TaskID)
@@ -401,7 +401,7 @@ func (h *Handler) hydrateLocalTextArtifactContent(ctx context.Context, artifact 
 	return nil, false
 }
 
-func shouldHydrateLocalTextArtifact(artifact *Artifact) bool {
+func shouldHydrateLocalReviewArtifact(artifact *Artifact) bool {
 	if artifact == nil || artifact.StorageType != StorageLocal {
 		return false
 	}
@@ -411,7 +411,12 @@ func shouldHydrateLocalTextArtifact(artifact *Artifact) bool {
 	if strings.TrimSpace(artifact.InlineJSON) != "" {
 		return false
 	}
-	return artifact.Kind == KindMarkdown || strings.HasPrefix(artifact.MimeType, "text/")
+	mimeType := strings.ToLower(strings.TrimSpace(artifact.MimeType))
+	return artifact.Kind == KindMarkdown ||
+		strings.HasPrefix(mimeType, "text/") ||
+		mimeType == "application/json" ||
+		strings.HasSuffix(mimeType, "+json") ||
+		isStructuredJSONArtifactKind(artifact.Kind)
 }
 
 func contentFromMatchingNodeArtifact(projectID, workflowRunID string, artifact *Artifact, node *model.Node) ([]byte, bool) {

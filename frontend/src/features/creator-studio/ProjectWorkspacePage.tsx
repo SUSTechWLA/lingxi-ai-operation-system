@@ -40,7 +40,6 @@ import ProjectBriefPanel from './components/ProjectBriefPanel'
 import {
   authoritativeDeliveryReviewArtifacts,
   currentCreatorReviewArtifacts,
-  projectCreatorReviewArtifacts,
   selectCreatorReviewArtifact,
   shouldShowCreatorArtifactSwitcher,
   type CreatorReviewArtifact,
@@ -102,7 +101,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const isPreviewDeliveryStep = stepId === 'preview' || stepId === 'delivery'
   const completedDeliveryStep = stepId === 'delivery' && (view?.project.status === 'COMPLETED' || view?.project.status === 'ARCHIVED')
   const historicalShots = useMemo(
-    () => projectHistoricalShots(projectCreatorReviewArtifacts(view?.stepArtifacts?.shots ?? [])),
+    () => projectHistoricalShots(view?.stepArtifacts?.shots ?? []),
     [view?.stepArtifacts],
   )
   const historicalShotMode = durableShotsKnownEmpty && historicalShots.length > 0
