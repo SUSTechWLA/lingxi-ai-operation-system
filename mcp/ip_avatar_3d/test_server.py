@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import io
+import inspect
 import json
 import os
 import pathlib
@@ -82,6 +83,135 @@ def test_wav_bytes(*, sample_rate: int = 48000, channels: int = 1) -> bytes:
 
 
 class IPAvatar3DMCPTests(unittest.TestCase):
+    def test_render_talking_video_mcp_signature_remains_stable(self) -> None:
+        server = load_server()
+        self.assertEqual(tuple(inspect.signature(server.render_talking_video).parameters), (
+            "script", "modelPath", "characterProfilePath", "audioPath", "subtitlePath",
+            "backgroundPath", "sceneBlendPath", "outputDir", "characterId", "shotId",
+            "durationSec", "fps", "width", "height", "transparent", "faceScreenMode",
+            "rigMode", "preserveExistingRig", "enhanceExistingRig", "elbowRig",
+            "mouthMode", "mouthHeightRatio", "mouthScale", "mouthStyle",
+            "facialDetailMode", "facialTopologyMode", "backgroundBrightness",
+            "cameraPreset", "lightingPreset", "renderEngine", "qualityPreset",
+            "renderDetailMode", "targetCharacterHeight", "motionStyle", "voiceName",
+            "speakingRate", "voiceProvider", "voiceId", "voiceLanguage", "voiceSpeed",
+            "blenderTimeoutSec", "dryRun", "renderMode", "fallbackPolicy",
+            "presentationMode", "actionSequence",
+        ))
+
+    def test_production_audio_master_requires_hash_bound_provenance(self) -> None:
+        server = load_server()
+        modes = {
+            "default_ip": ("gpt_sovits_local", "main_ip_warm_knowledge_host_v1"),
+            "reference_clone": ("gpt_sovits_local", "project_reference_voice_project_001"),
+            "recorded_narration": ("user_recording", ""),
+        }
+        for mode, (provider, voice_id) in modes.items():
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                audio = root / "narration_master.wav"
+                audio.write_bytes(test_wav_bytes())
+                digest = hashlib.sha256(audio.read_bytes()).hexdigest()
+                provenance = {
+                    "schemaVersion": "tangying-production-audio-provenance/v1",
+                    "sourceMode": mode,
+                    "provider": provider,
+                    "voiceId": voice_id,
+                    "outputFileSha256": digest,
+                    "durationSec": 0.01,
+                    "usageRightsConfirmed": True,
+                    "referenceTextVerified": mode != "reference_clone" or True,
+                    "productionReady": True,
+                    "mastering": {
+                        "sampleRateHz": 48000,
+                        "channels": 1,
+                        "sampleFormat": "pcm_s16le",
+                        "integratedLufs": -16.0,
+                        "truePeakDbtp": -1.7,
+                        "loudnessRangeLu": 2.4,
+                    },
+                }
+                (root / "narration_master.provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
+                verified = server._validate_production_audio_master(audio, root)
+                self.assertEqual(verified["sourceMode"], mode)
+                self.assertEqual(verified["masteredFileSha256"], digest)
+
+    def test_production_audio_master_rejects_tampering_escape_and_invalid_policy(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+
+            def write_case(case_root: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+                case_root.mkdir(parents=True, exist_ok=True)
+                audio = case_root / "narration_master.wav"
+                audio.write_bytes(test_wav_bytes())
+                provenance_path = case_root / "narration_master.provenance.json"
+                provenance_path.write_text(json.dumps({
+                    "schemaVersion": "tangying-production-audio-provenance/v1",
+                    "sourceMode": "reference_clone",
+                    "provider": "gpt_sovits_local",
+                    "voiceId": "project_reference_voice_project_001",
+                    "outputFileSha256": hashlib.sha256(audio.read_bytes()).hexdigest(),
+                    "usageRightsConfirmed": True,
+                    "referenceTextVerified": True,
+                    "productionReady": True,
+                    "mastering": {"sampleRateHz": 48000, "channels": 1, "sampleFormat": "pcm_s16le", "integratedLufs": -16.0, "truePeakDbtp": -1.7, "loudnessRangeLu": 2.4},
+                }), encoding="utf-8")
+                return audio, provenance_path
+
+            mutations = {
+                "tampered audio": lambda audio, _sidecar, _data: audio.write_bytes(audio.read_bytes() + b"tampered"),
+                "preview only": lambda _audio, _sidecar, data: data.update(productionReady=False),
+                "missing consent": lambda _audio, _sidecar, data: data.update(usageRightsConfirmed=False),
+                "unapproved provider": lambda _audio, _sidecar, data: data.update(provider="chattts_local"),
+                "wrong format": lambda _audio, _sidecar, data: data["mastering"].update(sampleRateHz=44100),
+            }
+            for name, mutate in mutations.items():
+                with self.subTest(name=name):
+                    case_root = root / name.replace(" ", "_")
+                    audio, sidecar = write_case(case_root)
+                    data = json.loads(sidecar.read_text(encoding="utf-8"))
+                    mutate(audio, sidecar, data)
+                    sidecar.write_text(json.dumps(data), encoding="utf-8")
+                    with self.assertRaises(server.ProductionVoiceUnavailable):
+                        server._validate_production_audio_master(audio, case_root)
+
+            outside, _ = write_case(root / "outside")
+            allowed = root / "allowed"
+            allowed.mkdir()
+            with self.assertRaisesRegex(server.ProductionVoiceUnavailable, "outputDir"):
+                server._validate_production_audio_master(outside, allowed)
+
+    def test_verified_production_master_is_authoritative_and_skips_internal_tts(self) -> None:
+        server = load_server()
+        for mode, provider, voice_id in (
+            ("default_ip", "gpt_sovits_local", "main_ip_warm_knowledge_host_v1"),
+            ("reference_clone", "gpt_sovits_local", "project_reference_voice_project_001"),
+            ("recorded_narration", "user_recording", ""),
+        ):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                model = root / "model.glb"
+                model.write_bytes(b"glTF placeholder")
+                audio = root / "narration_master.wav"
+                audio.write_bytes(test_wav_bytes())
+                digest = hashlib.sha256(audio.read_bytes()).hexdigest()
+                (root / "narration_master.provenance.json").write_text(json.dumps({
+                    "schemaVersion": "tangying-production-audio-provenance/v1", "sourceMode": mode,
+                    "provider": provider, "voiceId": voice_id, "outputFileSha256": digest,
+                    "usageRightsConfirmed": True, "referenceTextVerified": True, "productionReady": True,
+                    "mastering": {"sampleRateHz": 48000, "channels": 1, "sampleFormat": "pcm_s16le", "integratedLufs": -16.0, "truePeakDbtp": -1.7, "loudnessRangeLu": 2.4},
+                }), encoding="utf-8")
+                with mock.patch.object(server, "ensure_audio") as ensure_audio:
+                    result = server.render_talking_video(
+                        script="验证生产母带。", modelPath=str(model), audioPath=str(audio), outputDir=str(root),
+                        renderMode="production", voiceProvider="gpt_sovits_local",
+                        voiceId="main_ip_warm_knowledge_host_v1", fallbackPolicy="error", dryRun=True,
+                    )
+                ensure_audio.assert_not_called()
+                self.assertEqual(result["audioSource"], "production_audio_master")
+                self.assertEqual(pathlib.Path(result["audioPath"]), audio.resolve())
+
     def test_synthesize_reference_voice_delegates_to_shared_service(self) -> None:
         server = load_server()
         expected = {

@@ -2988,6 +2988,117 @@ def resolve_presentation_mode(value: str) -> str:
     return "standing" if selected == "auto" else selected
 
 
+def _validate_production_audio_master(
+    audio_path: str | Path,
+    output_dir: str | Path,
+) -> dict[str, Any]:
+    output_root = Path(output_dir).expanduser().resolve()
+    raw_audio = Path(audio_path).expanduser()
+    if raw_audio.is_symlink():
+        raise ProductionVoiceUnavailable("production audio master must not be a symlink")
+    master_path = raw_audio.resolve()
+    try:
+        master_path.relative_to(output_root)
+    except ValueError as exc:
+        raise ProductionVoiceUnavailable("production audio master must be inside outputDir") from exc
+    if master_path.name != "narration_master.wav" or not master_path.is_file():
+        raise ProductionVoiceUnavailable("production audioPath must name an existing narration_master.wav")
+    provenance_path = (master_path.parent / "narration_master.provenance.json").resolve()
+    try:
+        provenance_path.relative_to(output_root)
+    except ValueError as exc:
+        raise ProductionVoiceUnavailable("production audio provenance must be inside outputDir") from exc
+    if not provenance_path.is_file() or provenance_path.is_symlink():
+        raise ProductionVoiceUnavailable("production audio provenance sidecar is missing")
+    try:
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProductionVoiceUnavailable("production audio provenance is not valid JSON") from exc
+    if not isinstance(provenance, dict):
+        raise ProductionVoiceUnavailable("production audio provenance must be an object")
+    if provenance.get("schemaVersion") != "tangying-production-audio-provenance/v1":
+        raise ProductionVoiceUnavailable("production audio provenance schema is unsupported")
+    if provenance.get("productionReady") is not True:
+        raise ProductionVoiceUnavailable("production audio provenance is preview-only")
+
+    source_mode = str(provenance.get("sourceMode") or "").strip().lower()
+    provider = str(provenance.get("provider") or "").strip().lower()
+    voice_id = str(provenance.get("voiceId") or "").strip()
+    if source_mode not in {"default_ip", "reference_clone", "recorded_narration"}:
+        raise ProductionVoiceUnavailable("production audio source mode is unsupported")
+    if source_mode in {"default_ip", "reference_clone"} and provider != "gpt_sovits_local":
+        raise ProductionVoiceUnavailable("production synthesis provider is not approved")
+    if source_mode == "recorded_narration" and provider != "user_recording":
+        raise ProductionVoiceUnavailable("recorded narration provider must be user_recording")
+    if source_mode == "default_ip" and voice_id != "main_ip_warm_knowledge_host_v1":
+        raise ProductionVoiceUnavailable("default IP production voice ID is not approved")
+    if source_mode == "reference_clone" and (
+        not voice_id or provenance.get("referenceTextVerified") is not True
+    ):
+        raise ProductionVoiceUnavailable("reference clone requires a voice ID and verified transcript")
+    if provenance.get("usageRightsConfirmed") is not True:
+        raise ProductionVoiceUnavailable("production audio usage rights are not confirmed")
+
+    expected_hash = str(provenance.get("outputFileSha256") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        raise ProductionVoiceUnavailable("production audio output hash is invalid")
+    actual_hash = _sha256_file(master_path)
+    if actual_hash != expected_hash:
+        raise ProductionVoiceUnavailable("production audio master hash mismatch")
+    _validate_gpt_sovits_master_wav(master_path)
+
+    mastering = provenance.get("mastering") or {}
+    if not isinstance(mastering, dict) or (
+        mastering.get("sampleRateHz") != 48000
+        or mastering.get("channels") != 1
+        or mastering.get("sampleFormat") != "pcm_s16le"
+    ):
+        raise ProductionVoiceUnavailable("production audio mastering format is invalid")
+    try:
+        integrated = float(mastering["integratedLufs"])
+        true_peak = float(mastering["truePeakDbtp"])
+        loudness_range = float(mastering["loudnessRangeLu"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProductionVoiceUnavailable("production audio loudness provenance is invalid") from exc
+    if (
+        not all(math.isfinite(value) for value in (integrated, true_peak, loudness_range))
+        or abs(integrated - (-16.0)) > 0.5
+        or true_peak > -1.5
+        or loudness_range < 0
+        or loudness_range > 7.0
+    ):
+        raise ProductionVoiceUnavailable("production audio master is outside the loudness target")
+    try:
+        with wave.open(str(master_path), "rb") as wav_file:
+            duration_sec = wav_file.getnframes() / float(wav_file.getframerate())
+    except (OSError, wave.Error, ZeroDivisionError) as exc:
+        raise ProductionVoiceUnavailable("production audio master duration is invalid") from exc
+    if duration_sec <= 0:
+        raise ProductionVoiceUnavailable("production audio master duration is invalid")
+    return {
+        "schemaVersion": provenance["schemaVersion"],
+        "sourceMode": source_mode,
+        "provider": provider,
+        "voiceId": voice_id,
+        "tts_provider": provider,
+        "voice_id": voice_id,
+        "masteredFileSha256": actual_hash,
+        "durationSec": duration_sec,
+        "usageRightsConfirmed": True,
+        "referenceTextVerified": provenance.get("referenceTextVerified") is True,
+        "productionReady": True,
+        "mastering": {
+            "sampleRateHz": 48000,
+            "channels": 1,
+            "sampleFormat": "pcm_s16le",
+            "integratedLufs": integrated,
+            "truePeakDbtp": true_peak,
+            "loudnessRangeLu": loudness_range,
+        },
+        "provenancePath": str(provenance_path),
+    }
+
+
 @mcp.tool()
 def render_talking_video(
     script: str,
@@ -3216,6 +3327,7 @@ def render_talking_video(
     ).strip()
     resolved_voice: ResolvedVoice | None = None
     voice_policy_error = ""
+    production_audio_provenance: dict[str, Any] = {}
     try:
         resolved_voice = resolve_voice(
             mode=render_mode,
@@ -3230,13 +3342,20 @@ def render_talking_video(
             raise
         voice_policy_error = str(exc)
     if resolved_voice and render_mode == "production" and audioPath:
-        upload_error = ProductionVoiceUnavailable(
-            "production audioPath is rejected because uploaded audio provenance is unverified"
-        )
-        if not dryRun:
-            raise upload_error
-        resolved_voice = None
-        voice_policy_error = str(upload_error)
+        try:
+            production_audio_provenance = _validate_production_audio_master(
+                audioPath,
+                outputDir,
+            )
+        except ProductionVoiceUnavailable as exc:
+            upload_error = ProductionVoiceUnavailable(
+                "production audioPath is rejected because uploaded audio provenance is unverified: "
+                f"{exc}"
+            )
+            if not dryRun:
+                raise upload_error from exc
+            resolved_voice = None
+            voice_policy_error = str(upload_error)
     voice_policy = _voice_policy_metadata(
         render_mode=render_mode,
         requested_provider=voice_provider,
@@ -3265,7 +3384,9 @@ def render_talking_video(
     initial_duration = requested_duration
     if audioPath:
         resolved_audio = str(_readable_path(audioPath))
-        uploaded_duration = audio_duration_sec(resolved_audio)
+        uploaded_duration = float(production_audio_provenance.get("durationSec") or 0)
+        if uploaded_duration <= 0:
+            uploaded_duration = audio_duration_sec(resolved_audio)
         if render_mode == "production" or requested_duration <= 0:
             initial_duration = uploaded_duration or initial_duration
     duration = initial_duration or estimate_duration(script)
@@ -3325,60 +3446,78 @@ def render_talking_video(
         "allowPreviewFallback": voice_policy["allowPreviewFallback"],
         "policyStatus": voice_policy["policyStatus"],
     }
+    if production_audio_provenance:
+        audio_out = str(_readable_path(audioPath))
+        audioSource = "production_audio_master"
+        audio_metadata = {
+            **production_audio_provenance,
+            "requestedProvider": voice_policy["requestedProvider"],
+            "requestedVoiceId": voice_policy["requestedVoiceId"],
+            "language": voice_policy["language"],
+            "speed": voice_policy["speed"],
+            "humanVoiceProvider": True,
+            "renderMode": render_mode,
+            "fallbackPolicy": fallback_policy,
+            "allowPreviewFallback": False,
+            "policyStatus": "ready",
+        }
+        voice_policy["productionReady"] = True
+        voice_policy["policyStatus"] = "ready"
     if not dryRun:
-        if resolved_voice is None:
-            raise ProductionVoiceUnavailable(voice_policy_error or "production voice policy is blocked")
-        try:
-            audio_out, audioSource, audio_metadata = ensure_audio(
-                script,
-                output_dir,
-                duration,
-                audioPath,
-                voiceName,
-                speakingRate,
-                voice_provider=resolved_voice.provider,
-                voice_id=resolved_voice.voice_id,
-                voice_language=resolved_voice.language,
-                voice_speed=resolved_voice.speed,
-                voice_config=local_voice_config if resolved_voice.provider == "gpt_sovits_local" else None,
-            )
-        except Exception as exc:
+        if not production_audio_provenance:
+            if resolved_voice is None:
+                raise ProductionVoiceUnavailable(voice_policy_error or "production voice policy is blocked")
+            try:
+                audio_out, audioSource, audio_metadata = ensure_audio(
+                    script,
+                    output_dir,
+                    duration,
+                    audioPath,
+                    voiceName,
+                    speakingRate,
+                    voice_provider=resolved_voice.provider,
+                    voice_id=resolved_voice.voice_id,
+                    voice_language=resolved_voice.language,
+                    voice_speed=resolved_voice.speed,
+                    voice_config=local_voice_config if resolved_voice.provider == "gpt_sovits_local" else None,
+                )
+            except Exception as exc:
+                if render_mode == "production":
+                    raise ProductionVoiceUnavailable(
+                        f"production voice synthesis failed: {exc}"
+                    ) from exc
+                raise
             if render_mode == "production":
-                raise ProductionVoiceUnavailable(
-                    f"production voice synthesis failed: {exc}"
-                ) from exc
-            raise
-        if render_mode == "production":
-            actual_audio = Path(str(audio_out or "")).expanduser()
-            if not audio_out or not actual_audio.is_file():
-                raise ProductionVoiceUnavailable(
-                    "production synthesis did not return a successful audio path"
-                )
-            actual_provider = str(audio_metadata.get("tts_provider") or "").strip().lower()
-            actual_voice_id = str(audio_metadata.get("voice_id") or "").strip()
-            if not actual_provider or not actual_voice_id:
-                raise ProductionVoiceUnavailable(
-                    "production synthesis requires explicit tts_provider and voice_id provenance"
-                )
-            if actual_provider != resolved_voice.provider or actual_voice_id != resolved_voice.voice_id:
-                raise ProductionVoiceUnavailable(
-                    "production synthesis did not return the pinned provider and voice ID"
-                )
-            audio_metadata["provider"] = actual_provider
-            audio_metadata["voiceId"] = actual_voice_id
-            audio_metadata["humanVoiceProvider"] = actual_provider in PRODUCTION_PROVIDERS
-            voice_policy["productionReady"] = True
-        audio_metadata.update(
-            {
-                "requestedProvider": resolved_voice.provider,
-                "requestedVoiceId": resolved_voice.voice_id,
-                "renderMode": render_mode,
-                "fallbackPolicy": fallback_policy,
-                "productionReady": render_mode == "production",
-                "allowPreviewFallback": resolved_voice.allow_preview_fallback,
-                "policyStatus": "ready",
-            }
-        )
+                actual_audio = Path(str(audio_out or "")).expanduser()
+                if not audio_out or not actual_audio.is_file():
+                    raise ProductionVoiceUnavailable(
+                        "production synthesis did not return a successful audio path"
+                    )
+                actual_provider = str(audio_metadata.get("tts_provider") or "").strip().lower()
+                actual_voice_id = str(audio_metadata.get("voice_id") or "").strip()
+                if not actual_provider or not actual_voice_id:
+                    raise ProductionVoiceUnavailable(
+                        "production synthesis requires explicit tts_provider and voice_id provenance"
+                    )
+                if actual_provider != resolved_voice.provider or actual_voice_id != resolved_voice.voice_id:
+                    raise ProductionVoiceUnavailable(
+                        "production synthesis did not return the pinned provider and voice ID"
+                    )
+                audio_metadata["provider"] = actual_provider
+                audio_metadata["voiceId"] = actual_voice_id
+                audio_metadata["humanVoiceProvider"] = actual_provider in PRODUCTION_PROVIDERS
+                voice_policy["productionReady"] = True
+            audio_metadata.update(
+                {
+                    "requestedProvider": resolved_voice.provider,
+                    "requestedVoiceId": resolved_voice.voice_id,
+                    "renderMode": render_mode,
+                    "fallbackPolicy": fallback_policy,
+                    "productionReady": render_mode == "production",
+                    "allowPreviewFallback": resolved_voice.allow_preview_fallback,
+                    "policyStatus": "ready",
+                }
+            )
         generated_audio_duration = audio_duration_sec(audio_out)
         if generated_audio_duration > 0:
             if render_mode != "production" and requested_duration > 0:
@@ -3550,6 +3689,9 @@ def render_talking_video(
             "riggedBlendPath": str(rigged_blend_path),
             "riggedGlbPath": str(rigged_glb_path),
             "rigReportPath": str(rig_report_path),
+            "audioPath": audio_out,
+            "audioSource": audioSource,
+            "voice": audio_metadata,
             "voicePolicy": voice_policy,
         }
 
