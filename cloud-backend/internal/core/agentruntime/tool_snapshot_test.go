@@ -287,6 +287,41 @@ func TestRunnerPinsOneToolSnapshotPerRunAndNewRunsSeeRegistryChanges(t *testing.
 	}
 }
 
+func TestRunnerKeepsExistingToolSnapshotWhenSynthesisToolRegisters(t *testing.T) {
+	original := []*tool.ToolManifest{
+		{Name: "ip_avatar_3d.check_status", Version: "1"},
+		{Name: "ip_avatar_3d.check_gpt_sovits_voice", Version: "1"},
+		{Name: "ip_avatar_3d.render_talking_video", Version: "1"},
+	}
+	resolver := &mutableSnapshotResolver{manifests: original}
+	runner := NewRunner(
+		&fakeOrchestrator{taskID: "task-voice-snapshot"}, newMemoryRunStore(),
+		staticPlanner{plan: &AgentPlan{Goal: "voice", Domain: "general", Steps: []AgentStep{{ID: "check", Tool: "ip_avatar_3d.check_status"}}}},
+		NewPlanGuard(nil, nil), NewPlanCompiler(nil),
+	).WithRequestToolResolver(resolver)
+	ctx := context.Background()
+	firstReq := StartRunRequest{RunID: "voice-run-one", UserID: "user-a", Message: "voice"}
+	firstShell := newRunShell(firstReq)
+	if err := runner.attachToolSnapshot(ctx, &firstReq, firstShell); err != nil {
+		t.Fatal(err)
+	}
+	firstJSON := append([]byte(nil), firstShell.toolSnapshot.CanonicalJSON...)
+	resolver.manifests = append(resolver.manifests, &tool.ToolManifest{Name: "ip_avatar_3d.synthesize_reference_voice", Version: "1"})
+	if _, err := runner.completeStart(ctx, firstReq, firstShell); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstJSON, firstShell.toolSnapshot.CanonicalJSON) || bytes.Contains(firstShell.toolSnapshot.CanonicalJSON, []byte("synthesize_reference_voice")) {
+		t.Fatal("running task tool snapshot changed after registration")
+	}
+	second, err := runner.Start(ctx, StartRunRequest{RunID: "voice-run-two", UserID: "user-a", Message: "voice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(firstJSON, second.toolSnapshot.CanonicalJSON) || !bytes.Contains(second.toolSnapshot.CanonicalJSON, []byte("synthesize_reference_voice")) {
+		t.Fatal("new task did not discover the appended synthesis tool")
+	}
+}
+
 func TestRunnerRejectsDuplicateNamesBeforePlanning(t *testing.T) {
 	resolver := &fixedRequestToolResolver{snapshot: newRequestToolSnapshot([]*tool.ToolManifest{
 		{Name: "alpha", Version: "1", Endpoint: "builtin://alpha"},

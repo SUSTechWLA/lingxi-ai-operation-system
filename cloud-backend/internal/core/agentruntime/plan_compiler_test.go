@@ -1,6 +1,8 @@
 package agentruntime
 
 import (
+	"bytes"
+	"encoding/json"
 	"reflect"
 	"sort"
 	"testing"
@@ -1116,6 +1118,10 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 	if got := arguments["renderMode"]; got != "preview" {
 		t.Fatalf("renderMode = %#v, want preview", got)
 	}
+	voiceSelection, ok := arguments["voiceSelection"].(map[string]interface{})
+	if !ok || voiceSelection["mode"] != "default_ip" || voiceSelection["provider"] != "gpt_sovits_local" || voiceSelection["voiceId"] != "main_ip_warm_knowledge_host_v1" {
+		t.Fatalf("default production voice selection = %#v", arguments["voiceSelection"])
+	}
 	if got := arguments["durationSec"]; got != float64(15) {
 		t.Fatalf("durationSec = %#v, want 15", got)
 	}
@@ -1179,6 +1185,65 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 	}
 	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
 		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_ProjectsVoiceSelectionIntoIPAroll(t *testing.T) {
+	tests := []struct {
+		name      string
+		selection map[string]interface{}
+		want      map[string]interface{}
+	}{
+		{
+			name: "missing defaults to approved IP voice",
+			want: map[string]interface{}{"mode": "default_ip", "provider": "gpt_sovits_local", "voiceId": "main_ip_warm_knowledge_host_v1"},
+		},
+		{
+			name: "authorized reference clone",
+			selection: map[string]interface{}{
+				"mode": "reference_clone", "provider": "gpt_sovits_local", "voiceId": "project_reference_voice_project_001",
+				"referenceArtifactId": "voice-1", "referenceStorageRef": "local://projects/project_001/artifacts/voice-1/hash/reference.wav",
+				"referenceContentHash": "sha256:1234", "referenceMimeType": "audio/wav", "referenceText": "逐字原文",
+				"referenceTextVerified": true, "usageRightsConfirmed": true,
+				"referenceAudioPath": "/Users/private/reference.wav", "audioBytes": "secret",
+			},
+			want: map[string]interface{}{
+				"mode": "reference_clone", "provider": "gpt_sovits_local", "voiceId": "project_reference_voice_project_001",
+				"referenceArtifactId": "voice-1", "referenceStorageRef": "local://projects/project_001/artifacts/voice-1/hash/reference.wav",
+				"referenceContentHash": "sha256:1234", "referenceMimeType": "audio/wav", "referenceText": "逐字原文",
+				"referenceTextVerified": true, "usageRightsConfirmed": true,
+			},
+		},
+		{
+			name: "finished recorded narration",
+			selection: map[string]interface{}{
+				"mode": "recorded_narration", "provider": "must-not-survive", "voiceId": "must-not-survive",
+				"recordedNarrationArtifactId": "narration-1", "recordedNarrationStorageRef": "local://projects/project_001/artifacts/narration-1/hash/narration.wav",
+				"recordedNarrationContentHash": "sha256:5678", "recordedNarrationMimeType": "audio/wav", "usageRightsConfirmed": true,
+			},
+			want: map[string]interface{}{
+				"mode": "recorded_narration", "recordedNarrationArtifactId": "narration-1",
+				"recordedNarrationStorageRef":  "local://projects/project_001/artifacts/narration-1/hash/narration.wav",
+				"recordedNarrationContentHash": "sha256:5678", "recordedNarrationMimeType": "audio/wav", "usageRightsConfirmed": true,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments := map[string]interface{}{"productionRoute": "talking_head", "projectId": "project_001"}
+			if tc.selection != nil {
+				arguments["voiceSelection"] = tc.selection
+			}
+			plan := &AgentPlan{Domain: "video_creation", Steps: []AgentStep{{ID: "script", Arguments: arguments}}}
+			got := requestedVoiceSelection(plan)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("requestedVoiceSelection() = %#v, want %#v", got, tc.want)
+			}
+			encoded, _ := json.Marshal(got)
+			if bytes.Contains(encoded, []byte("/Users/")) || bytes.Contains(encoded, []byte("audioBytes")) {
+				t.Fatalf("private voice data leaked into compiled selection: %s", encoded)
+			}
+		})
 	}
 }
 

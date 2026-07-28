@@ -1104,25 +1104,32 @@ func TestApplyRequestPlanDefaultsCopiesSafeVideoContext(t *testing.T) {
 		Message: "user supplied cinematic story request",
 		Domain:  "video_creation",
 		Context: map[string]interface{}{
-			"renderTimeoutSec":      float64(12),
-			"profileId":             "cinematic_story",
-			"videoType":             "cinematic_story",
-			"projectMode":           "cinematic_story",
-			"aigcProvider":          "jimeng_mcp",
-			"aigcEnabled":           false,
-			"aigcPolicy":            "disabled",
-			"ipRenderMode":          "preview",
-			"productionRoute":       "talking_head",
-			"canonicalProfileId":    "talking_head",
-			"requiredLayers":        []interface{}{"ip_aroll", "hyperframes_text"},
-			"visualLayerContract":   "shot_visual_layers_v1",
-			"designedLayers":        []interface{}{"ip_aroll", "hyperframes_text", "aigc_enrichment"},
-			"layerExecutionPolicy":  map[string]interface{}{"ip_aroll": "required", "hyperframes_text": "required", "aigc_enrichment": "disabled"},
-			"projectId":             "vp-123",
-			"presentationMode":      "standing",
-			"cameraPreset":          "front_talking",
-			"actionSequence":        []interface{}{"Aroll_Greeting_Wave"},
-			"characterProfilePath":  "ip-assets/main-ip/character-profile.json",
+			"renderTimeoutSec":     float64(12),
+			"profileId":            "cinematic_story",
+			"videoType":            "cinematic_story",
+			"projectMode":          "cinematic_story",
+			"aigcProvider":         "jimeng_mcp",
+			"aigcEnabled":          false,
+			"aigcPolicy":           "disabled",
+			"ipRenderMode":         "preview",
+			"productionRoute":      "talking_head",
+			"canonicalProfileId":   "talking_head",
+			"requiredLayers":       []interface{}{"ip_aroll", "hyperframes_text"},
+			"visualLayerContract":  "shot_visual_layers_v1",
+			"designedLayers":       []interface{}{"ip_aroll", "hyperframes_text", "aigc_enrichment"},
+			"layerExecutionPolicy": map[string]interface{}{"ip_aroll": "required", "hyperframes_text": "required", "aigc_enrichment": "disabled"},
+			"projectId":            "vp-123",
+			"presentationMode":     "standing",
+			"cameraPreset":         "front_talking",
+			"actionSequence":       []interface{}{"Aroll_Greeting_Wave"},
+			"characterProfilePath": "ip-assets/main-ip/character-profile.json",
+			"voiceSelection": map[string]interface{}{
+				"mode": "reference_clone", "provider": "gpt_sovits_local", "voiceId": "project_reference_voice_vp-123",
+				"referenceArtifactId": "voice-1", "referenceStorageRef": "local://projects/vp-123/artifacts/voice-1/hash/reference.wav",
+				"referenceContentHash": "sha256:abc", "referenceMimeType": "audio/wav", "referenceText": "录音逐字原文",
+				"referenceTextVerified": true, "usageRightsConfirmed": true,
+				"referenceAudioPath": "/Users/private/reference.wav", "audioBytes": "secret-bytes",
+			},
 			"modelProviders":        map[string]interface{}{"text_to_text": map[string]interface{}{"apiKey": "secret"}},
 			"unrelatedContextValue": "ignored",
 		},
@@ -1153,10 +1160,21 @@ func TestApplyRequestPlanDefaultsCopiesSafeVideoContext(t *testing.T) {
 		"cameraPreset",
 		"actionSequence",
 		"characterProfilePath",
+		"voiceSelection",
 	} {
 		if got := plan.Steps[0].Arguments[key]; got == nil {
 			t.Fatalf("%s was not copied to plan defaults: %#v", key, plan.Steps[0].Arguments)
 		}
+	}
+	voiceSelection, _ := plan.Steps[0].Arguments["voiceSelection"].(map[string]interface{})
+	if voiceSelection["referenceText"] != "录音逐字原文" || voiceSelection["usageRightsConfirmed"] != true {
+		t.Fatalf("safe voice selection was not preserved: %#v", voiceSelection)
+	}
+	if _, exists := voiceSelection["referenceAudioPath"]; exists {
+		t.Fatalf("absolute voice path leaked into plan: %#v", voiceSelection)
+	}
+	if _, exists := voiceSelection["audioBytes"]; exists {
+		t.Fatalf("audio bytes leaked into plan: %#v", voiceSelection)
 	}
 	if _, exists := plan.Steps[0].Arguments["modelProviders"]; exists {
 		t.Fatalf("sensitive model provider context should not be copied: %#v", plan.Steps[0].Arguments)

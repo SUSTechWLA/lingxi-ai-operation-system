@@ -130,3 +130,36 @@ func TestAudioMasterValidationRejectsInvalidCueAndDuration(t *testing.T) {
 		t.Fatalf("expected duration and cue issues, got %+v", issues)
 	}
 }
+
+func TestAudioMasterFingerprintIncludesProductionVoiceInputs(t *testing.T) {
+	base := AudioMasterRequest{
+		ScriptRevision: "script-r1", VoiceRevision: "voice-r1", VoiceMode: "reference_clone",
+		VoiceProfileID: "main-ip", VoiceProfileVersion: "v1", ReferenceContentHash: "sha256:ref-a",
+		ReferenceTranscriptHash: "sha256:text-a", SynthesisSettingsHash: "sha256:settings-a",
+		MasteredOutputHash: "sha256:master-a", VoiceoverArtifactRef: "local://narration-a",
+		ScriptSpans: []model.ScriptSpan{{ID: "s1", StartSec: 0, EndSec: 4, Text: "测试"}},
+	}
+	baseline, _ := BuildAudioMasterTimeline(base)
+	tests := []struct {
+		name   string
+		mutate func(*AudioMasterRequest)
+	}{
+		{"mode", func(req *AudioMasterRequest) { req.VoiceMode = "recorded_narration" }},
+		{"profile", func(req *AudioMasterRequest) { req.VoiceProfileVersion = "v2" }},
+		{"reference hash", func(req *AudioMasterRequest) { req.ReferenceContentHash = "sha256:ref-b" }},
+		{"transcript hash", func(req *AudioMasterRequest) { req.ReferenceTranscriptHash = "sha256:text-b" }},
+		{"settings hash", func(req *AudioMasterRequest) { req.SynthesisSettingsHash = "sha256:settings-b" }},
+		{"recorded narration hash", func(req *AudioMasterRequest) { req.VoiceoverArtifactRef = "local://narration-b" }},
+		{"mastered output hash", func(req *AudioMasterRequest) { req.MasteredOutputHash = "sha256:master-b" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := base
+			tc.mutate(&changed)
+			master, _ := BuildAudioMasterTimeline(changed)
+			if master.Fingerprint == baseline.Fingerprint || master.Revision == baseline.Revision {
+				t.Fatalf("%s did not change audio-master identity", tc.name)
+			}
+		})
+	}
+}

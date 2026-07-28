@@ -1602,6 +1602,7 @@ func (c *PlanCompiler) injectIPArollGenerationRunner(plan *AgentPlan) {
 		"width":            width,
 		"height":           height,
 		"fps":              fps,
+		"voiceSelection":   requestedVoiceSelection(plan),
 	}
 	if renderArguments["presentationMode"] == "" {
 		renderArguments["presentationMode"] = "auto"
@@ -2383,6 +2384,73 @@ func requestedIPArollEnabled(plan *AgentPlan) bool {
 		}
 	}
 	return true
+}
+
+func projectCreatorVoiceSelection(value interface{}) map[string]interface{} {
+	raw, ok := value.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	text := func(key string) string {
+		value, _ := raw[key].(string)
+		return strings.TrimSpace(value)
+	}
+	boolean := func(key string) bool {
+		value, _ := raw[key].(bool)
+		return value
+	}
+	mode := strings.ToLower(text("mode"))
+	switch mode {
+	case "default_ip":
+		provider := text("provider")
+		if provider != "" && provider != "gpt_sovits_local" {
+			return nil
+		}
+		voiceID := text("voiceId")
+		if voiceID == "" {
+			voiceID = "main_ip_warm_knowledge_host_v1"
+		}
+		return map[string]interface{}{
+			"mode": "default_ip", "provider": "gpt_sovits_local", "voiceId": voiceID,
+		}
+	case "reference_clone":
+		provider := text("provider")
+		if provider != "" && provider != "gpt_sovits_local" {
+			return nil
+		}
+		storageRef := text("referenceStorageRef")
+		if !strings.HasPrefix(storageRef, "local://projects/") {
+			return nil
+		}
+		return map[string]interface{}{
+			"mode": "reference_clone", "provider": "gpt_sovits_local", "voiceId": text("voiceId"),
+			"referenceArtifactId": text("referenceArtifactId"), "referenceStorageRef": storageRef,
+			"referenceContentHash": text("referenceContentHash"), "referenceMimeType": text("referenceMimeType"),
+			"referenceText": text("referenceText"), "referenceTextVerified": boolean("referenceTextVerified"),
+			"usageRightsConfirmed": boolean("usageRightsConfirmed"),
+		}
+	case "recorded_narration":
+		storageRef := text("recordedNarrationStorageRef")
+		if !strings.HasPrefix(storageRef, "local://projects/") {
+			return nil
+		}
+		return map[string]interface{}{
+			"mode": "recorded_narration", "recordedNarrationArtifactId": text("recordedNarrationArtifactId"),
+			"recordedNarrationStorageRef": storageRef, "recordedNarrationContentHash": text("recordedNarrationContentHash"),
+			"recordedNarrationMimeType": text("recordedNarrationMimeType"), "usageRightsConfirmed": boolean("usageRightsConfirmed"),
+		}
+	default:
+		return nil
+	}
+}
+
+func requestedVoiceSelection(plan *AgentPlan) map[string]interface{} {
+	if selection := projectCreatorVoiceSelection(requestedPlanValue(plan, "voiceSelection")); selection != nil {
+		return selection
+	}
+	return map[string]interface{}{
+		"mode": "default_ip", "provider": "gpt_sovits_local", "voiceId": "main_ip_warm_knowledge_host_v1",
+	}
 }
 
 func requestedPlanString(plan *AgentPlan, keys ...string) string {

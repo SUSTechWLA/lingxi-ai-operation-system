@@ -915,6 +915,11 @@ func applyRequestSafeContextDefaults(plan *AgentPlan, ctx map[string]interface{}
 	if plan.Steps[0].Arguments == nil {
 		plan.Steps[0].Arguments = map[string]interface{}{}
 	}
+	if _, exists := plan.Steps[0].Arguments["voiceSelection"]; !exists {
+		if selection := projectCreatorVoiceSelection(ctx["voiceSelection"]); selection != nil {
+			plan.Steps[0].Arguments["voiceSelection"] = selection
+		}
+	}
 	for _, key := range []string{
 		"projectId",
 		"videoProjectId",
