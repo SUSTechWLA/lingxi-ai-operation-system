@@ -3,7 +3,7 @@ import { createVideoProject, startAgentRun } from '../../services/api'
 import { buildClientModelProvidersForRun, uploadLocalArtifactFile, type LocalArtifactUploadResponse } from '../../services/localAgent'
 import { registerProjectMaterial } from '../../services/creatorApi'
 import type { ProjectMaterial, ProjectMaterialKind } from './types'
-import type { CreatorVoiceMode, CreatorVoiceProvider, CreatorVoiceSelection } from './types'
+import type { CreatorVoiceMode, CreatorVoiceSelection } from './types'
 import { buildCreationRequest, buildProjectMaterialStorageRef, creatorStartIdempotencyKey, validateCreatorVoiceSelection } from './logic'
 import type { CreatorAIGCPolicy, CreatorProductionRoute } from './logic'
 
@@ -53,7 +53,6 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
   const [productionRoute, setProductionRoute] = useState<CreatorProductionRoute>('talking_head')
   const [aigcPolicy, setAigcPolicy] = useState<CreatorAIGCPolicy>('auto')
   const [voiceMode, setVoiceMode] = useState<CreatorVoiceMode>('default_ip')
-  const [voiceProvider, setVoiceProvider] = useState<CreatorVoiceProvider>('gpt_sovits_local')
   const [referenceText, setReferenceText] = useState('')
   const [referenceTextVerified, setReferenceTextVerified] = useState(false)
   const [usageRightsConfirmed, setUsageRightsConfirmed] = useState(false)
@@ -212,7 +211,7 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
     if (voiceMode === 'reference_clone') {
       return {
         mode: 'reference_clone',
-        provider: voiceProvider,
+        provider: 'gpt_sovits_local',
         voiceId: `project_reference_voice_${projectIdRef.current || 'pending'}`,
         referenceText: referenceText.trim(),
         referenceTextVerified,
@@ -456,12 +455,6 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
               <div className="creator-voice-custom">
                 {voiceMode === 'reference_clone' && (
                   <>
-                    <label>本地声音引擎
-                      <select value={voiceProvider} onChange={(event) => setVoiceProvider(event.target.value as CreatorVoiceProvider)} disabled={starting}>
-                        <option value="gpt_sovits_local">GPT-SoVITS（推荐）</option>
-                        <option value="chattts_local">ChatTTS（需本机安装）</option>
-                      </select>
-                    </label>
                     <label>录音中实际说出的完整文字
                       <textarea
                         value={referenceText}

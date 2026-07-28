@@ -98,7 +98,7 @@ export type ProjectMaterial = GeneratedProjectMaterial
 export type ProjectMaterialManifest = GeneratedProjectMaterialManifest
 
 export type CreatorVoiceMode = 'default_ip' | 'reference_clone' | 'recorded_narration'
-export type CreatorVoiceProvider = 'gpt_sovits_local' | 'chattts_local'
+export type CreatorVoiceProvider = 'gpt_sovits_local'
 
 export interface CreatorVoiceSelection {
   mode: CreatorVoiceMode
