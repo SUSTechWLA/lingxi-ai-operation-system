@@ -49,6 +49,7 @@ decision: GO
 - `bash scripts/beta-smoke-check.sh` passes.
 - Local agent is running and can export `beta-diagnostics.zip`.
 - HyperFrames Render Service is healthy.
+- HyperFrames Render Service production dependencies pass `npm audit --omit=dev --audit-level=high`; unresolved upstream findings must stay below the release-blocking severity threshold and be recorded in the changelog.
 - FFmpeg is available.
 - Video QA MCP produces structured shot reports.
 - Each shot QA report includes a machine-readable `repairPlan`.

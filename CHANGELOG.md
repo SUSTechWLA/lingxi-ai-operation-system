@@ -28,6 +28,10 @@ All notable release changes are tracked here. README only carries the current ve
 - Fixed a generator-only schema label drifting to `shot_visual_layers_v2` while the frontend, planner, and local renderer still use the compatible `shot_visual_layers_v1` contract.
 - Fixed the release build dependency audit by moving to the patched Electron Builder toolchain, omitting its unused Squirrel.Windows peer tree, and updating the ESLint toolchain without weakening the high-severity audit gate.
 
+### Security
+
+- Updated the HyperFrames render-service lockfile to patched `find-my-way` and `postcss` releases so production dependencies pass the high-severity audit gate; the remaining upstream Hono findings are moderate and currently have no available fix.
+
 ## v0.2.1 - 2026-07-21
 
 ### Added
