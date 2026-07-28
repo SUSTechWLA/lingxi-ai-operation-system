@@ -25,7 +25,7 @@ The current version is best suited for private beta testing, engineering demos, 
 - Works for opinion, knowledge, tutorial, and visual-card videos.
 - The cloud backend generates scripts, time windows, visual structure, prompts, and review gates.
 - The local runner creates HyperFrames projects, preview snapshots, final renders, and delivery packages.
-- The local IP talking-avatar renderer can create A-roll with the canonical sloth master: Blender drives the body, three-segment digits, face, visemes, camera, and warm studio while the pinned GPT-SoVITS voice and FFmpeg complete the delivery.
+- The local IP talking-avatar renderer can create A-roll with the canonical sloth master: Blender drives the body, three-segment digits, face, visemes, camera, and warm studio, while a verified production narration master and FFmpeg complete delivery.
 - Users can approve, edit, reject, or regenerate key stages.
 
 ### 2. Cinematic / AIGC Shot Videos
@@ -72,7 +72,9 @@ flowchart LR
 - Model API keys are configured locally by the user and are not uploaded to the cloud.
 - Dreamina CLI installation requires explicit user confirmation. The app does not silently install external tools.
 - Cinematic asset generation can use JiMeng MCP automatically or fall back to manual external generation.
-- Local IP talking-avatar rendering does not call AIGC video generation. Production voice should use uploaded natural narration that matches the character; the segmented local `say` fallback is only for timing, lip-sync, and rhythm preview.
+- Local IP talking-avatar rendering does not call AIGC video generation. Production narration has three explicit modes: the pinned GPT-SoVITS IP voice, a project-scoped reference clone with exact transcript verification and confirmed usage rights, or the user's complete recorded narration with no TTS. ChatTTS and macOS `say` are never production providers.
+- Voice files stay local. The cloud receives only project artifact identifiers, `local://` references, hashes, MIME types, transcript/consent flags, and non-sensitive settings; it does not receive audio bytes or persist absolute local paths.
+- Every mode produces a local 48 kHz mono PCM16 `narration_master.wav` plus a provenance sidecar. Production rendering fails closed unless source mode, provider, consent, transcript verification, content hash, format, and loudness all validate.
 - Local files are registered as `local://projects/...` references. The cloud stores references and dependency metadata instead of forcing large media uploads.
 
 ## Beta Readiness Notes

@@ -271,6 +271,7 @@ python3 mcp/ip_avatar_3d/server.py
 |---|---|---|
 | `ip_avatar_3d.check_status` | `check_status` | 检查 Blender、FFmpeg、FFprobe 是否可用。 |
 | `ip_avatar_3d.check_gpt_sovits_voice` | `check_gpt_sovits_voice` | 校验固定 GPT-SoVITS 音色的参考音频、模型和哈希。 |
+| `ip_avatar_3d.synthesize_reference_voice` | `synthesize_reference_voice` | 使用固定 IP 音色或当前项目内已授权参考录音生成带 provenance 的正式旁白母带。 |
 | `ip_avatar_3d.prepare_character_master` | `prepare_character_master` | 从带骨骼 FBX/GLB 生成并校验 A-roll 主资产；精修资产只写入 staging。 |
 | `ip_avatar_3d.record_character_master_visual_inspection` | `record_character_master_visual_inspection` | 将审查人结论与 staged SHA、QA 图和对比图绑定。 |
 | `ip_avatar_3d.create_character_master_publication_report` | `create_character_master_publication_report` | 通过 Blender 生成可验证的 v2 发布证据包。 |
@@ -300,7 +301,15 @@ python3 mcp/ip_avatar_3d/server.py
 
 `talking_head` 计划在该能力可用时自动插入 `ip_aroll_generation`。本地 runner 会把结果封装为独立的 `aRollAssetPackages`；HyperFrames 将其作为全程连续的角色画面和独立音轨，并按 `startSec` / `durationSec` 叠加 HyperKeyframes、即梦或其他 AIGC B-roll。显式传入 `ipArollEnabled=false` 可以关闭自动插入。
 
-主 IP 的生产配置固定使用 `production_1080p`、1920x1080、30 fps 和本地 `gpt_sovits_local` 音色 `main_ip_warm_knowledge_host_v1`。没有显式 `audioPath` 时，口播稿由该固定音色合成并经 48 kHz、`-16 LUFS`、`-1.5 dBTP` 门限处理；固定音色不可用时直接失败，不回退到系统 TTS。
+主 IP 的生产配置固定使用 `production_1080p`、1920x1080、30 fps。云端为每次 Agent run 固化 `voiceSelection` 与工具 catalog 快照；同一任务重试不会因 provider 重新发现而改变工具定义，新任务才会看到新增工具。音频始终先由本地 runner 预处理，再调用 `render_talking_video`：
+
+- `default_ip`：通过 `synthesize_reference_voice` 使用固定 `gpt_sovits_local` 音色 `main_ip_warm_knowledge_host_v1`；
+- `reference_clone`：只接受当前项目内可解析的本地参考录音、完全一致且已确认的逐字稿，以及明确的使用权确认；
+- `recorded_narration`：不调用 TTS，直接把用户完整实录母带化。
+
+预处理原子写入 48 kHz、单声道 PCM16 的 `narration_master.wav` 与 `narration_master.provenance.json`，目标为 `-16 LUFS`、真峰值不高于 `-1.5 dBTP`。渲染器只接受位于本次输出目录、哈希与 sidecar 一致且 `productionReady=true` 的正式母带。固定音色、授权、格式或 provenance 任一校验失败都会 fail closed；ChatTTS 和 macOS `say` 不属于生产 provider。
+
+云端不会接收音频字节或本机绝对路径。跨边界的声音上下文只允许包含项目内 artifact ID、`local://` storage ref、SHA-256、MIME、逐字稿、授权状态和非敏感设置；本地 runner 在执行时才把这些引用解析成项目根目录内的真实文件，并拒绝路径穿越、远程 URL、跨项目引用和哈希不一致。
 
 站姿和坐姿共用已批准的暖色演播室、角色主资产和声音配置，直接调用参数仅切换 `presentationMode`：
 

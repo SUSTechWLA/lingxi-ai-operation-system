@@ -40,7 +40,7 @@
 - 新增源码仓一键部署：自动安装锁定依赖、启动 Docker 后端与 HyperFrames、等待健康检查、打包 macOS 客户端，并可直接打开安装态应用。
 - 每个 Shot 统一使用 `shot_visual_layers_v1`：IP A-roll 负责正式 3D 角色口播，HyperFrames / HyperKeyframes 负责精确文字和可控特效，AIGC 负责无文字背景、B-roll 或局部动态素材；三层设计与合成计划始终存在。
 - 制作路线与 AIGC 执行策略已解耦：口播默认按 Shot 自动使用 AIGC 丰富层，也可选择纯本地执行；`aigcEnabled=false` 只禁止本次 AIGC 调用，不会删除该层的提示词、安全区和未来重启执行所需设计。
-- 已安装 App 内置正式 IP 资产与 MCP provider，并显式发现 macOS `say`、Homebrew FFmpeg/FFprobe；本地预览严格遵守用户时长。
+- 已安装 App 内置正式 IP 资产与 MCP provider，并显式发现 Homebrew FFmpeg/FFprobe；macOS `say` 只允许用于本地节奏预览，不能作为生产配音或正式成片的降级路径。
 - 动态审核 UI 可随真实 Agent review gate 推进；MCP 必需素材失败时会 fail closed，不再把失败渲染伪装成成功。
 - Closed beta runbook、beta smoke、fallback fixture、diagnostics、artifact provenance 和 readiness gate 已就绪。
 - 视频流水线已对齐 shot 级生产闭环：语义/画面变化切分、3-15 秒时长校验、candidate 级 QA、保守 repair loop、accepted shot gate、FFmpeg final assembly 和 final QA。
@@ -80,6 +80,16 @@ ip-assets/main-ip/manifests/default-aroll-assets.json
 演播室不再依赖外部或打包 PNG 贴图，也不保存 demo 音轨。角色的 4 张 PBR 图已打包在角色母版内；`main-ip-rigged.glb` 仅作为兼容运行时导出，正式角色来源仍是唯一的 Blender 母版。预览、烟测图片、turnaround 和渲染输出只能写入 `tmp/` 或 `outputs/`，不得作为发布资产提交。所有跟踪路径必须使用英文 ASCII 名称。
 
 资产结构、完整性校验和升级规则见 [Default IP A-roll Assets](docs/default-ip-aroll-assets.md) 与 [本地 IP 数字人口播渲染](docs/local-ip-talking-avatar-render.md)。
+
+### 生产配音模式
+
+IP A-roll 使用三种互斥的正式声音来源：
+
+1. **默认 IP 音色**：使用资产清单固定的 GPT-SoVITS 参考音频、逐字稿、模型权重和哈希；任一校验不通过即停止。
+2. **授权参考音色**：用户在当前项目上传参考录音，填写与录音完全一致的逐字稿，并确认使用权后，才允许通过标准 MCP 工具 `ip_avatar_3d.synthesize_reference_voice` 合成。
+3. **用户实录旁白**：用户上传已经录好的完整口播，不做声音克隆和 TTS，只在本地执行格式、响度和真峰值母带化。
+
+三种模式最终都在本地生成 48 kHz、单声道 PCM16 的 `narration_master.wav` 和同目录 provenance sidecar。渲染器会校验来源模式、provider、授权状态、逐字稿确认、内容哈希、格式和响度后再消费；ChatTTS 与 macOS `say` 都不是生产 provider。云端只接收项目内 artifact ID、`local://` 引用、内容哈希、MIME、逐字稿和授权标记，不上传音频字节，也不保存本机绝对路径。
 
 ## 一句话理解
 
