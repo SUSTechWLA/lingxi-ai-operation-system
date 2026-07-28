@@ -72,6 +72,7 @@ const presentationBundle = join(temp, 'artifact-presentation.mjs')
 const authBundle = join(temp, 'auth.mjs')
 const reviewArtifactsBundle = join(temp, 'creator-review-artifacts.mjs')
 const completedShotsBundle = join(temp, 'completed-shots.mjs')
+const historicalDetailBundle = join(temp, 'historical-detail.mjs')
 const projectionBundle = join(temp, 'creator-review-projection.mjs')
 const textSelectionBundle = join(temp, 'text-selection.mjs')
 const mediaRangeBundle = join(temp, 'media-range.mjs')
@@ -137,6 +138,16 @@ try {
     outfile: completedShotsBundle,
   })
   const completedShots = await import(pathToFileURL(completedShotsBundle))
+  const historicalDetailUrl = new URL('../src/features/creator-studio/historicalDetail.ts', import.meta.url)
+  assert.equal(existsSync(historicalDetailUrl), true, 'historical Shot details need one stable drawer data contract')
+  await build({
+    entryPoints: [historicalDetailUrl.pathname],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    outfile: historicalDetailBundle,
+  })
+  const historicalDetail = await import(pathToFileURL(historicalDetailBundle))
   const projectionUrl = new URL('../src/features/creator-studio/creatorReviewProjection.ts', import.meta.url)
   assert.equal(existsSync(projectionUrl), true, 'creator review content needs one safe projection module')
   await build({
@@ -165,6 +176,23 @@ try {
     outfile: mediaRangeBundle,
   })
   const mediaRange = await import(pathToFileURL(mediaRangeBundle))
+
+  assert.deepEqual(
+    historicalDetail.buildHistoricalDetail('shot-1-camera', '镜头', '  65mm 中景，缓慢推进。  '),
+    {
+      id: 'shot-1-camera',
+      title: '镜头',
+      text: '65mm 中景，缓慢推进。',
+      titleId: 'historical-detail-shot-1-camera-title',
+      bodyId: 'historical-detail-shot-1-camera-body',
+    },
+    'the detail drawer receives one trimmed, stable, labelled content record',
+  )
+  assert.equal(
+    historicalDetail.buildHistoricalDetail('shot-1-empty', '灯光', '   '),
+    null,
+    'an empty retained value never opens a blank detail drawer',
+  )
 
   assert.equal(mediaRange.secondsToIntegerMilliseconds(1.2346), 1235, 'the current playhead is stored as integer milliseconds')
   assert.equal(mediaRange.secondsToIntegerMilliseconds(-1), 0, 'negative media times clamp to zero')
@@ -1717,12 +1745,18 @@ try {
   assert.match(workspaceSource, /shot-review-workspace\$\{historicalShotMode \? ' is-historical' : ''\}/, 'historical Shot review uses a dedicated full-width workspace mode')
   assert.match(queueSource, /historical-shot-filmstrip/, 'historical Shot choices render as a horizontal filmstrip')
   assert.match(queueSource, /aria-current=\{selectedHistoricalShotId === shot\.id \? 'true' : undefined\}/, 'the selected historical Shot remains exposed to assistive technology')
-  assert.match(inspectorSource, /historical-shot-disclosure/, 'long historical Shot text has an explicit disclosure')
-  assert.match(inspectorSource, /查看完整内容/, 'the disclosure explains that it reveals the exact retained content')
+  assert.match(inspectorSource, /historical-detail-drawer/, 'historical Shot details open in one stable overlay drawer')
+  assert.match(inspectorSource, /role="dialog" aria-modal="true" aria-labelledby={activeDetail\.titleId} aria-describedby={activeDetail\.bodyId}/, 'the detail drawer exposes an accessible dialog contract')
+  assert.match(inspectorSource, /查看完整内容/, 'detail actions explain that they reveal the exact retained content')
+  assert.match(inspectorSource, /detailTriggerRef\.current\?\.focus\(\)/, 'closing the detail drawer restores focus to its triggering action')
+  assert.doesNotMatch(inspectorSource, /<details\b|historical-shot-disclosure/, 'historical details never expand duplicate content inside the card layout')
   assert.match(creatorStylesSource, /\.shot-review-workspace\.is-historical\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s, 'historical Shot review removes the sidebar column')
   assert.match(creatorStylesSource, /\.creator-main:has\(\.shot-review-workspace\.is-historical\)/, 'the completed Shot review may use the wider editing canvas without widening unrelated steps')
   assert.match(creatorStylesSource, /\.historical-shot-filmstrip\s*\{[^}]*overflow-x:\s*auto/s, 'the Shot filmstrip stays usable when all choices do not fit')
   assert.match(creatorStylesSource, /\.historical-shot-details\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*12\.5rem\),\s*1fr\)\)/s, 'historical detail cards fill the available row instead of leaving a one-card orphan row')
+  assert.match(creatorStylesSource, /\.historical-shot-detail-button\s*\{[^}]*margin-top:\s*auto/s, 'every detail action aligns at the bottom of its card')
+  assert.match(creatorStylesSource, /\.historical-detail-backdrop\s*\{[^}]*position:\s*fixed/s, 'opening a detail never reflows the Shot review layout')
+  assert.match(creatorStylesSource, /\.historical-detail-drawer\s*\{[^}]*width:\s*min\(92vw,\s*38rem\)/s, 'desktop detail content uses a readable right-side drawer')
   assert.doesNotMatch(inspectorSource, /可回看的创作层|已保留|未保留/, 'completed Shot review never replaces readable content with retention flags')
   assert.doesNotMatch(proofingSource, /artifactContentText\(displayedContent\)/, 'creator plain-text proofing must never serialize non-string content')
   assert.match(proofingSource, /const selectionSource = safeCreatorReviewText\(content\.reviewText\)/, 'scoped selection must use the exact reviewText contract')

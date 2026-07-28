@@ -8,6 +8,7 @@ import {
   type HistoricalShotLoadedArtifact,
   type HistoricalShotReview,
 } from '../completedShotProjection'
+import { buildHistoricalDetail, type HistoricalDetail } from '../historicalDetail'
 import { canSubmitShotDuration, isCreatorConflict, mapWithConcurrency, resolveCreatorArtifactMediaUrl, SHOT_QUEUE_CONFLICT_COPY } from '../logic'
 import ShotImprovePanel from './ShotImprovePanel'
 import SimpleAudioPlayer from './SimpleAudioPlayer'
@@ -153,6 +154,9 @@ function HistoricalShotInspector({ projectId, shot }: { projectId: string; shot:
   const [loadedArtifacts, setLoadedArtifacts] = useState<HistoricalShotLoadedArtifact[]>([])
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'partial'>('loading')
   const [expandedImage, setExpandedImage] = useState<{ src: string; label: string } | null>(null)
+  const [activeDetail, setActiveDetail] = useState<HistoricalDetail | null>(null)
+  const detailTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const detailCloseRef = useRef<HTMLButtonElement | null>(null)
   const artifactKey = shot.artifactIds.join('|')
 
   useEffect(() => {
@@ -160,6 +164,7 @@ function HistoricalShotInspector({ projectId, shot }: { projectId: string; shot:
     setLoadedArtifacts([])
     setLoadState('loading')
     setExpandedImage(null)
+    setActiveDetail(null)
     void mapWithConcurrency(shot.artifactIds, 3, async artifactId => {
       try {
         const response = await getCreatorArtifactContent(artifactId, controller.signal)
@@ -195,6 +200,28 @@ function HistoricalShotInspector({ projectId, shot }: { projectId: string; shot:
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [expandedImage])
 
+  useEffect(() => {
+    if (!activeDetail) return
+    detailCloseRef.current?.focus()
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') closeHistoricalDetail()
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [activeDetail])
+
+  const openHistoricalDetail = (id: string, title: string, text: string, trigger: HTMLButtonElement) => {
+    const detail = buildHistoricalDetail(id, title, text)
+    if (!detail) return
+    detailTriggerRef.current = trigger
+    setActiveDetail(detail)
+  }
+
+  const closeHistoricalDetail = () => {
+    setActiveDetail(null)
+    window.requestAnimationFrame(() => detailTriggerRef.current?.focus())
+  }
+
   const review = useMemo(() => projectHistoricalShotReview(shot, loadedArtifacts), [loadedArtifacts, shot])
   const videos = review.media.filter(item => item.kind === 'video')
   const images = review.media.filter(item => item.kind === 'image')
@@ -218,8 +245,8 @@ function HistoricalShotInspector({ projectId, shot }: { projectId: string; shot:
       {review.narration && <section className="historical-shot-narration" aria-labelledby="historical-shot-narration-title">
         <p className="creator-eyebrow">旁白</p>
         <h3 id="historical-shot-narration-title">这一镜说什么</h3>
-        <blockquote className="historical-shot-text-preview">{review.narration}</blockquote>
-        <HistoricalTextDisclosure text={review.narration} label="查看完整旁白" />
+        <blockquote className="historical-shot-text-preview">{historicalTextPreview(review.narration)}</blockquote>
+        <HistoricalDetailButton onOpen={openHistoricalDetail} detailId={`${shot.id}-narration`} title="完整旁白" text={review.narration} label="查看完整旁白" />
       </section>}
 
       {(review.details.length > 0 || review.screenText.length > 0) && <section className="historical-shot-section" aria-labelledby="historical-shot-visual-title">
@@ -227,16 +254,16 @@ function HistoricalShotInspector({ projectId, shot }: { projectId: string; shot:
           <div><p className="creator-eyebrow">镜头设计</p><h3 id="historical-shot-visual-title">画面与动作</h3></div>
           {review.screenText.length > 0 && <div className="historical-shot-screen-text" aria-label="画面文字">{review.screenText.map(text => <span key={text}>{text}</span>)}</div>}
         </div>
-        <dl className="historical-shot-details">{review.details.map(item => <div key={item.label}><dt>{item.label}</dt><dd><span className="historical-shot-text-preview">{item.value}</span><HistoricalTextDisclosure text={item.value} /></dd></div>)}</dl>
+        <dl className="historical-shot-details">{review.details.map(item => <div key={item.label}><dt>{item.label}</dt><dd><span className="historical-shot-text-preview">{historicalTextPreview(item.value)}</span><HistoricalDetailButton onOpen={openHistoricalDetail} detailId={`${shot.id}-${item.label}`} title={item.label} text={item.value} /></dd></div>)}</dl>
       </section>}
 
       <section className="historical-shot-section" aria-labelledby="historical-shot-layers-title">
         <p className="creator-eyebrow">画面分层</p>
         <h3 id="historical-shot-layers-title">三层如何配合</h3>
         <div className="historical-shot-layers">
-          <HistoricalLayerCard index="01" title="IP A-roll" summary={layerSummary(review, 'ip')} empty="这个旧 Shot 没有留下角色口播设计说明。" />
-          <HistoricalLayerCard index="02" title="文字层" summary={layerSummary(review, 'text')} empty="这个旧 Shot 没有留下文字动效设计说明。" />
-          <HistoricalLayerCard index="03" title="补充画面" summary={layerSummary(review, 'enrichment')} empty="这个旧 Shot 没有留下补充素材设计说明。" />
+          <HistoricalLayerCard index="01" title="IP A-roll" summary={layerSummary(review, 'ip')} empty="这个旧 Shot 没有留下角色口播设计说明。" detailId={`${shot.id}-ip-aroll`} onOpen={openHistoricalDetail} />
+          <HistoricalLayerCard index="02" title="文字层" summary={layerSummary(review, 'text')} empty="这个旧 Shot 没有留下文字动效设计说明。" detailId={`${shot.id}-text-layer`} onOpen={openHistoricalDetail} />
+          <HistoricalLayerCard index="03" title="补充画面" summary={layerSummary(review, 'enrichment')} empty="这个旧 Shot 没有留下补充素材设计说明。" detailId={`${shot.id}-enrichment-layer`} onOpen={openHistoricalDetail} />
         </div>
       </section>
 
@@ -254,17 +281,39 @@ function HistoricalShotInspector({ projectId, shot }: { projectId: string; shot:
           <img src={expandedImage.src} alt={`放大的 ${expandedImage.label}`} />
         </aside>
       </div>}
+
+      {activeDetail && <div className="historical-detail-backdrop" role="presentation" onPointerDown={event => { if (event.currentTarget === event.target) closeHistoricalDetail() }}>
+        <aside className="historical-detail-drawer" role="dialog" aria-modal="true" aria-labelledby={activeDetail.titleId} aria-describedby={activeDetail.bodyId} onKeyDown={event => {
+          if (event.key === 'Tab') {
+            event.preventDefault()
+            detailCloseRef.current?.focus()
+          }
+        }}>
+          <header>
+            <div><p className="creator-eyebrow">Shot {shot.sequenceIndex} · 完整内容</p><h3 id={activeDetail.titleId}>{activeDetail.title}</h3></div>
+            <button ref={detailCloseRef} type="button" className="creator-secondary-button" onClick={closeHistoricalDetail} aria-label="关闭完整内容">关闭</button>
+          </header>
+          <p id={activeDetail.bodyId} className="historical-detail-body">{activeDetail.text}</p>
+        </aside>
+      </div>}
     </section>
   )
 }
 
-function HistoricalLayerCard({ index, title, summary, empty }: { index: string; title: string; summary?: string; empty: string }) {
+type OpenHistoricalDetail = (id: string, title: string, text: string, trigger: HTMLButtonElement) => void
+
+function HistoricalLayerCard({ index, title, summary, empty, detailId, onOpen }: { index: string; title: string; summary?: string; empty: string; detailId: string; onOpen: OpenHistoricalDetail }) {
   const text = summary || empty
-  return <article><span>{index}</span><h4>{title}</h4><p className="historical-shot-text-preview">{text}</p><HistoricalTextDisclosure text={text} /></article>
+  return <article><span>{index}</span><h4>{title}</h4><p className="historical-shot-text-preview">{historicalTextPreview(text)}</p><HistoricalDetailButton onOpen={onOpen} detailId={detailId} title={title} text={text} /></article>
 }
 
-function HistoricalTextDisclosure({ text, label = '查看完整内容' }: { text: string; label?: string }) {
-  return <details className="historical-shot-disclosure"><summary>{label}</summary><p>{text}</p></details>
+function HistoricalDetailButton({ detailId, title, text, label = '查看完整内容', onOpen }: { detailId: string; title: string; text: string; label?: string; onOpen: OpenHistoricalDetail }) {
+  return <button type="button" className="historical-shot-detail-button" onClick={event => onOpen(detailId, title, text, event.currentTarget)}>{label}</button>
+}
+
+function historicalTextPreview(text: string, maximumCharacters = 180): string {
+  const compact = text.replace(/\s+/gu, ' ').trim()
+  return compact.length <= maximumCharacters ? compact : `${compact.slice(0, maximumCharacters).trimEnd()}…`
 }
 
 function layerSummary(review: HistoricalShotReview, key: HistoricalShotReview['layers'][number]['key']): string | undefined {
