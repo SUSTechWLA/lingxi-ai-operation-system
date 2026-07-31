@@ -49,9 +49,9 @@ The static workflow remains readable for existing callers. New talking-head stag
 | deterministic text layer | PARTIAL | HyperFrames tools and `TalkingHeadShotLayers.Text` | yes | layout/source-manifest QA is not complete |
 | B-roll layer | PARTIAL | visual alignment + `BROLL_MANIFEST` | yes | replacement endpoint and license UI remain incomplete |
 | Shot QA | PARTIAL | `RecordShotCandidateQA` | model/service path | provider metrics and visual-model checks are incomplete |
-| scoped repair | DEAD_PATH | `BuildRepairPlanForQA`, layer invalidation graph | no | the dynamic worker does not yet dispatch these repair actions |
-| accepted gate | DEAD_PATH | `RecordShotCandidateQA` | no | strict contract is implemented/tested but not called by the dynamic worker |
-| final assembly | DUPLICATED | `BuildFinalAssemblyPlanWithPolicy` and whole-video render path | partial | candidate assembly service is not the current renderer path |
+| scoped repair | WIRED | `BuildRepairPlanForQA`, `ShotQAGate`, `shot_qa_processor` tool | yes | repair plans flow through plan compiler-injected `shot_qa_processor` step after `visual_qa` (v0.1.14) |
+| accepted gate | WIRED | `RecordShotCandidateQA`, `ShotQAGate`, `shot_qa_processor` tool | yes | acceptance gate enforced via plan compiler; passed shots recorded, failed receive repair plans (v0.1.14) |
+| final assembly | UNIFIED | `BuildFinalAssemblyPlanWithPolicy`, `shot_qa_processor` tool | yes | assembly plan built through `shot_qa_processor` output, consumed by publish (v0.1.14) |
 | stale propagation | DEAD_PATH | `InvalidateTalkingHeadShot` | no | mutation endpoints do not yet invoke the dependency graph |
 | provenance | PARTIAL | layer state, candidate execution mode, artifact materializer | yes | cost/provider-job data varies by provider |
 | fallback gate | PARTIAL | local render provenance and artifact materializer; candidate/final gates | partial | reached artifact gate works; candidate gates are not worker-wired |

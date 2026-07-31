@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-07-31T16:20:01Z",
+  "durationSec": 3,
+  "total": 38,
+  "passed": 28,
+  "failed": 5,
+  "skipped": 1,
+  "warnings": 4,
+  "result": "FAIL"
+}

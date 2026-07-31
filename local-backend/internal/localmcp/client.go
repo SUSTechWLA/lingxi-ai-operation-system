@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"io"
 	"net/http"
 	"os"
@@ -409,11 +410,17 @@ func (s *stdioSession) close() error {
 
 func (s *stdioSession) withStderr(err error) error {
 	if err == nil {
+		// Log provider stderr on success too (useful for debugging).
+		if stderr := strings.TrimSpace(s.stderr.String()); stderr != "" {
+			log.Printf("[mcp-stdio] provider stderr (success): %s", stderr)
+		}
 		return nil
 	}
 	stderr := strings.TrimSpace(s.stderr.String())
 	if stderr == "" {
+		log.Printf("[mcp-stdio] provider error (no stderr): %v", err)
 		return err
 	}
+	log.Printf("[mcp-stdio] provider error: %s (err=%v)", stderr, err)
 	return fmt.Errorf("%w: %s", err, stderr)
 }

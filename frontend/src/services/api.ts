@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { getAuthAccessToken, refreshAuthSession, logout } from './auth'
+import { logFrontendError } from '../utils/errorLog'
 import {
   ApiResponse,
   SkillCatalogResponse,
@@ -71,9 +72,15 @@ api.interceptors.response.use(
       } catch (refreshError) {
         refreshPromise = null
         logout()
+        logFrontendError('api:auth-refresh', refreshError, { url: original?.url })
         throw refreshError
       }
     }
+    logFrontendError('api', error, {
+      url: original?.url,
+      method: original?.method,
+      status: error.response?.status,
+    })
     throw error
   }
 )

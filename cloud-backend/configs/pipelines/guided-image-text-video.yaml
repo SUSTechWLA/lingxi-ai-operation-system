@@ -1,4 +1,9 @@
-# Guided Image-Text Video Pipeline
+# ⚠️ DEPRECATED — 2026-07: This pipeline YAML is no longer loaded by the Director Studio runtime.
+# The pipeline ID `wf-guided-image-text-video` is preserved as a historical profile ID
+# (mapped to `talking_head` via NormalizeVideoProfileID) for backward compatibility.
+# New development should NOT reference this file. Use `PlanCompiler` for talking-head workflows.
+#
+# Original: Guided Image-Text Video Pipeline
 # 引导式图文视频创作流水线
 #
 # 一句话启动 → 确认方案 → 确认脚本 → 确认结构 → 确认预览 → 渲染MP4 → 打包导出

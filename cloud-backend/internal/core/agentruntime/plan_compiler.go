@@ -1080,6 +1080,36 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 		}
 	}
 
+	// Inject shot QA gate after visual QA to enforce the repair/acceptance
+	// contract. This closes the DEAD_PATH gap in the production pipeline
+	// documented at docs/talking-head-production-runtime.md.
+	if visualQAAnchor != "" && c.manifestFor("shot_qa_processor") != nil {
+		qaExists := false
+		for i := range plan.Steps {
+			if plan.Steps[i].Tool == "shot_qa_processor" {
+				qaExists = true
+				break
+			}
+		}
+		if !qaExists {
+			insertPlanStepAfter(plan, visualQAAnchor, AgentStep{
+				ID:     uniqueStepID(plan, "shot_qa_gate"),
+				Intent: "根据抽帧 QA 报告执行 shot 接受门控：通过则标记接受，失败则生成修复计划",
+				Tool:   "shot_qa_processor",
+				Arguments: map[string]interface{}{
+					"stage":       "shot_qa_gate",
+					"shotList":    stepOutputRef(shotAnchor, shotField),
+					"qaReport":    stepOutputRef(visualQAAnchor, "visualQAReport"),
+					"shotReports": stepOutputRef(visualQAAnchor, "shotReports"),
+				},
+				DependsOn:       dependencyList(visualQAAnchor),
+				ExpectedOutput:  []string{"qaGateResult", "acceptedShotCount", "failedShotCount", "repairPlans", "needsRepair", "needsRegeneration", "assemblyPlan", "assemblyBlocked"},
+				ProduceArtifact: true,
+			})
+			applyProjectContextToStep(planStepByID(plan, "shot_qa_gate"), projectID)
+		}
+	}
+
 	publishAnchor := ""
 	if step := planStepByID(plan, "publish_copy"); step != nil {
 		publishAnchor = step.ID

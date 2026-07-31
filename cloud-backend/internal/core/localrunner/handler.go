@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/tangying-ai/aios-core/internal/core/auth"
 )
@@ -75,6 +76,12 @@ func (h *Handler) registerRunner(c *gin.Context) {
 	if deviceID, ok := auth.DeviceIDFromContext(c.Request.Context()); ok {
 		req.DeviceID = deviceID
 	}
+	zap.L().Info("local runner registered",
+		zap.String("deviceId", req.DeviceID),
+		zap.String("version", req.RunnerVersion),
+		zap.String("os", req.Platform.OS),
+		zap.String("arch", req.Platform.Arch),
+	)
 	resp, err := h.service.RegisterRunner(c.Request.Context(), req)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, err.Error())
@@ -150,10 +157,17 @@ func (h *Handler) completeJob(c *gin.Context) {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}
-	jobContext, _ := h.service.GetJob(c.Request.Context(), c.Param("jobId"))
+	jobID := c.Param("jobId")
+	jobContext, _ := h.service.GetJob(c.Request.Context(), jobID)
 	req.Output = normalizeCompleteJobOutput(jobContext, req.Output)
-	job, err := h.service.CompleteJob(c.Request.Context(), c.Param("jobId"), req)
+	job, err := h.service.CompleteJob(c.Request.Context(), jobID, req)
 	if err != nil {
+		zap.L().Error("local job completion failed",
+			zap.String("jobId", jobID),
+			zap.String("nodeId", safeNodeID(jobContext)),
+			zap.String("projectId", safeProjectID(jobContext)),
+			zap.Error(err),
+		)
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -352,4 +366,18 @@ func writeError(c *gin.Context, status int, message string) {
 		"code":    status,
 		"message": message,
 	})
+}
+
+func safeNodeID(job *LocalJob) string {
+	if job == nil {
+		return ""
+	}
+	return job.NodeID
+}
+
+func safeProjectID(job *LocalJob) string {
+	if job == nil {
+		return ""
+	}
+	return job.ProjectID
 }

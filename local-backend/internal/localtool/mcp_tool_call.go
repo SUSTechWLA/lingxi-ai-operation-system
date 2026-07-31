@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"log"
 
 	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localmcp"
 )
@@ -68,13 +69,19 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 	client := localmcp.NewClient(provider, &http.Client{Timeout: timeout})
 	defer client.Close()
 	if requests := slicePayload(job.Payload, "externalGenerationRequests"); len(requests) > 0 {
+		log.Printf("[mcp-call] batch %s/%s job=%s requests=%d", provider.ID, toolName, job.ID, len(requests))
 		return e.executeExternalGenerationBatch(ctx, client, provider.ID, toolName, job, requests)
 	}
 	args := mapPayload(job.Payload, "arguments")
+	start := time.Now()
+	log.Printf("[mcp-call] %s/%s job=%s started", provider.ID, toolName, job.ID)
 	callResult, err := client.CallTool(ctx, toolName, args)
+	elapsed := time.Since(start)
 	if err != nil {
+		log.Printf("[mcp-call] %s/%s job=%s FAILED in %s: %v", provider.ID, toolName, job.ID, elapsed, err)
 		return nil, err
 	}
+	log.Printf("[mcp-call] %s/%s job=%s OK in %s isError=%v", provider.ID, toolName, job.ID, elapsed, callResult.IsError)
 	return &Result{Output: map[string]interface{}{
 		"providerId":        provider.ID,
 		"toolName":          toolName,

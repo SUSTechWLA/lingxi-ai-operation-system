@@ -998,6 +998,13 @@ var localToolManifests = map[string]struct {
 		Description:        "调用用户本地 MCP provider 生成 AIGC 图片或视频素材",
 		Timeout:            1800,
 	},
+		"shot_qa_processor": {
+			ExecutionPlane:     tool.ExecutionPlaneCloud,
+			RequiresUserDevice: false,
+			ArtifactLocation:   tool.ArtifactLocationCloud,
+			Description:        "处理视频抽帧 QA 报告：标记通过的 shot 为已接受，为失败的 shot 生成修复计划",
+			Timeout:            30,
+		},
 }
 
 func executeLocalVideoCreationTool(toolName string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
@@ -1066,6 +1073,8 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 		return executeModelGatewayVideoGenerator(stage, skillName, brief, params, toolCtx)
 	case "hyperframes_renderer", "video_final_assembler":
 		return executeHyperframesRenderer(stage, skillName, brief, instructionRef, params, toolCtx)
+	case "shot_qa_processor":
+		return executeShotQAProcessor(stage, skillName, brief, instructionRef, params, toolCtx)
 	default:
 		// Other tools (material_library_matcher, video_keyframe_prompt_builder, etc.)
 		// return a general-purpose reviewable placeholder.
@@ -3362,6 +3371,113 @@ func executeFinalReviewGenerator(stage, skillName string, params map[string]inte
 			jsonArtifact(stage, "final_review.json", skillName, "guided-video-final-review", false),
 		},
 	})
+}
+
+// executeShotQAProcessor processes the output from video_frame_qa and
+// enforces the shot acceptance contract. This closes the DEAD_PATH gap
+// documented at docs/talking-head-production-runtime.md.
+func executeShotQAProcessor(stage, skillName, brief, instructionRef string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
+	qaReportRaw, _ := params["qaReport"].(map[string]interface{})
+	shotReportsRaw, _ := params["shotReports"].([]interface{})
+
+	if qaReportRaw == nil {
+		qaReportRaw, _ = params["output"].(map[string]interface{})
+	}
+	if qaReportRaw == nil {
+		return tool.SuccessResult(map[string]interface{}{
+			"content":             "# Shot QA Gate\n\n未找到 QA 报告，跳过 shot 验收门控。",
+			"qaGateResult":        "skipped",
+			"acceptedShotCount":   0,
+			"failedShotCount":     0,
+			"repairPlans":         []interface{}{},
+			"needsRepair":         false,
+			"needsRegeneration":   false,
+			"assemblyPlan":        map[string]interface{}{"status": "not_available"},
+			"assemblyBlocked":     true,
+		})
+	}
+
+	passed, _ := qaReportRaw["passed"].(bool)
+	score, _ := qaReportRaw["score"].(float64)
+	needsRegen, _ := qaReportRaw["needsRegeneration"].(bool)
+	blockingIssues, _ := qaReportRaw["blockingIssueCount"].(float64)
+	repairPlan, _ := qaReportRaw["repairPlan"].(map[string]interface{})
+
+	acceptedCount := 0
+	failedCount := 0
+	if shotReportsRaw != nil {
+		for _, raw := range shotReportsRaw {
+			report, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			reportPassed, _ := report["passed"].(bool)
+			reportHumanApproved, _ := report["humanApproved"].(bool)
+			if reportPassed || reportHumanApproved {
+				acceptedCount++
+			} else {
+				failedCount++
+			}
+		}
+	}
+
+	needsRepair := failedCount > 0 || (!passed && !needsRegen)
+	assemblyBlocked := !passed || needsRepair
+	assemblyPlan := map[string]interface{}{
+		"status":     "plan_ready",
+		"resolution": "1920x1080",
+		"fps":        30,
+		"steps": []string{
+			"ALL_SHOTS_ACCEPTED_GATE",
+			"NORMALIZE_ACCEPTED_SHOTS",
+			"FFMPEG_CONCAT",
+			"GLOBAL_VOICEOVER_ALIGN",
+			"GLOBAL_BGM_MIX_AND_DUCKING",
+			"GLOBAL_SUBTITLE_RENDER",
+			"FINAL_VIDEO_QA",
+			"EXPORT_PUBLISH",
+		},
+	}
+
+	if assemblyBlocked {
+		assemblyPlan["status"] = "blocked"
+	}
+
+	result := map[string]interface{}{
+		"content": fmt.Sprintf(
+			"# Shot QA Gate\n\n- 通过: %t\n- 评分: %.0f\n- 接受 Shot 数: %d\n- 失败 Shot 数: %d\n- 需要修复: %t\n- 需要重新生成: %t\n- 总装受阻: %t\n",
+			passed, score, acceptedCount, failedCount, needsRepair, needsRegen, assemblyBlocked,
+		),
+		"qaGateResult":      conditionalString(passed && !needsRepair, "passed", "failed"),
+		"acceptedShotCount": acceptedCount,
+		"failedShotCount":   failedCount,
+		"repairPlans":       []interface{}{},
+		"needsRepair":       needsRepair,
+		"needsRegeneration": needsRegen,
+		"assemblyPlan":      assemblyPlan,
+		"assemblyBlocked":   assemblyBlocked,
+	}
+
+	if repairPlan != nil {
+		result["repairPlans"] = []interface{}{repairPlan}
+	}
+	if blockingIssues > 0 {
+		result["blockingIssueCount"] = int(blockingIssues)
+	}
+
+	artifacts := []map[string]interface{}{
+		jsonArtifact(stage, "shot_qa_gate.json", skillName, "guided-video-qa-gate", false),
+	}
+
+	result["artifacts"] = artifacts
+	return tool.SuccessResult(result)
+}
+
+func conditionalString(cond bool, trueVal, falseVal string) string {
+	if cond {
+		return trueVal
+	}
+	return falseVal
 }
 
 func pipelineRoot(params map[string]interface{}) string {

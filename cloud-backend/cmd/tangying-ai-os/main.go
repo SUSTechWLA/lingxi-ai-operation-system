@@ -312,8 +312,11 @@ func main() {
 	scheduler.Start(ctx)
 	defer scheduler.Stop()
 
-	// HTTP server
-	r := gin.Default()
+	// HTTP server with structured logging and request ID tracing
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(logger.RequestIDMiddleware())
+	r.Use(logger.StructuredLogMiddleware())
 	allowedCORSOrigins := configuredCORSOrigins(cfg.Server.CORSAllowedOrigins)
 
 	// CORS middleware

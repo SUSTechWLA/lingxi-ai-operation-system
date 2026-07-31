@@ -12,6 +12,7 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
 	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
+	"github.com/tangying-ai/aios-core/internal/core/logger"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 )
 
@@ -156,7 +157,9 @@ func (h *Handler) StartRun(c *gin.Context) {
 	if req.UserID == "" {
 		req.UserID = ginUserID(c)
 	}
-	run, err := h.runner.StartAsync(c.Request.Context(), req)
+	// Inject request ID for end-to-end traceability through cloud → agent → MCP.
+	ctx := logger.InjectRequestIDIntoContext(c.Request.Context(), c)
+	run, err := h.runner.StartAsync(ctx, req)
 	if err != nil {
 		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return

@@ -5,8 +5,10 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
+	"github.com/tangying-ai/aios-core/internal/core/logger"
 	videoSvc "github.com/tangying-ai/aios-core/internal/agents/video/service"
 )
 
@@ -99,6 +101,12 @@ func (h *CreationHandler) UpsertSpec(c *gin.Context) {
 }
 
 func (h *CreationHandler) GenerateSpec(c *gin.Context) {
+	ctx := logger.InjectRequestIDIntoContext(c.Request.Context(), c)
+	projectID := c.Param("id")
+	zap.L().Info("video spec generation requested",
+		zap.String("projectId", projectID),
+		logger.RequestIDField(ctx),
+	)
 	userID, okAuth := authenticatedUserID(c)
 	if !okAuth {
 		return

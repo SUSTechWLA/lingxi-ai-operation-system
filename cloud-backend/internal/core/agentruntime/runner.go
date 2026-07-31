@@ -169,6 +169,11 @@ func newRunShell(req StartRunRequest) *Run {
 }
 
 func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
+	zap.L().Info("agent run starting",
+		zap.String("runId", run.ID),
+		zap.String("domain", run.Domain),
+		zap.String("message", req.Message),
+	)
 	ctx, cancel := context.WithTimeout(context.Background(), asyncRunStartTimeout)
 	defer cancel()
 	if _, err := r.completeStart(ctx, req, run); err != nil {

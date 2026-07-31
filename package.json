@@ -7,8 +7,8 @@
     "local-backend:dev": "bash scripts/start-local-backend.sh",
     "cloud-backend:dev": "bash scripts/start-cloud-backend.sh",
     "desktop:build": "bash scripts/build-local-desktop.sh",
-    "test:beta-smoke": "cd frontend && npm run test:director && cd ../cloud-backend && go test ./internal/core/localrunner",
-    "electron:dev": "cd frontend && npm run electron:dev",
-    "electron:build": "bash scripts/build-local-desktop.sh"
+    "test:director-localrunner": "cd frontend && npm run test:director && cd ../cloud-backend && go test ./internal/core/localrunner",
+    "test:api-smoke": "bash scripts/api-smoke-test.sh",
+    "electron:dev": "cd frontend && npm run electron:dev"
   }
 }

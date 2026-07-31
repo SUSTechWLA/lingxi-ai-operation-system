@@ -33,6 +33,26 @@ vendor/
 __pycache__/
 *.py[cod]
 
+# IP Character Assets - large binary files
+ip-assets/**/*.blend1
+ip-assets/**/checkpoints/
+ip-assets/**/renders/
+ip-assets/**/turnaround/
+ip-assets/**/demos/
+ip-assets/**/voice/
+ip-assets/**/models/
+ip-assets/**/backgrounds/
+ip-assets/**/manifests/
+ip-assets/**/reports/
+ip-assets/**/scripts/__pycache__/
+
+# Demo / temporary output
+demo-output/
+current-render.png
+creator-review-diagnostics-complete.bundle
+.codex-worktree-creator-review/
+.workspace-archive/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -47,7 +67,11 @@ cloud-backend/build/
 cloud-backend/sandbox/target/
 local-backend/build/
 local-backend/dist/
+frontend/build/
+frontend/dist/
+frontend/release/
 frontend/resources/bin/
+hyperframes-render-service/dist/
 *.tsbuildinfo
 frontend/vite.config.d.ts
 frontend/vite.config.js
