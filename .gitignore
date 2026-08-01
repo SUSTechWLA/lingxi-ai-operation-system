@@ -60,16 +60,6 @@ local-backend/build/
 local-backend/dist/
 
 # IP Assets — intermediate files
-ip-assets/**/*.blend1
-ip-assets/**/checkpoints/
-ip-assets/**/renders/
-ip-assets/**/turnaround/
-ip-assets/**/demos/
-ip-assets/**/voice/
-ip-assets/**/reports/
-ip-assets/**/scripts/__pycache__/
-ip-assets/*.png
-ip-assets/*.wav
 
 # Demo / temporary output
 demo-output/
@@ -92,3 +82,6 @@ trace.json
 .lingxi-core-loop/
 .superpowers/
 
+
+# MCP IP Assets — intermediate files
+mcp/ip_avatar_3d/assets/legacy-scripts/

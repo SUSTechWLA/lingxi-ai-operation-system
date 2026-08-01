@@ -371,7 +371,7 @@ def build_scene() -> dict[str, bpy.types.Object]:
 def main() -> None:
     args = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     root = Path(__file__).resolve().parents[2]
-    blend_path = Path(args[0]).expanduser().resolve() if args else root / "ip形象/main_ip/scenes/editorial-news-studio.blend"
+    blend_path = Path(args[0]).expanduser().resolve() if args else root / "mcp/ip_avatar_3d/assets/editorial-news-studio.blend"
     preview_path = Path(args[1]).expanduser().resolve() if len(args) > 1 else blend_path.with_name("editorial-news-studio-preview.png")
     blend_path.parent.mkdir(parents=True, exist_ok=True)
     preview_path.parent.mkdir(parents=True, exist_ok=True)
