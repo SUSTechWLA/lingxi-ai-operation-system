@@ -76,7 +76,7 @@ demo-output/
 current-render.png
 creator-review-diagnostics-complete.bundle
 .codex-worktree-creator-review/
-.workspace-archive/
+/.workspace-archive/
 
 # Tool config
 blender_scripts/
@@ -91,3 +91,4 @@ trace.json
 .claude/
 .lingxi-core-loop/
 .superpowers/
+
