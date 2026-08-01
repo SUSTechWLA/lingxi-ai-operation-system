@@ -1,0 +1,19 @@
+{
+  "schema": "sloth_demo_render_manifest_v1",
+  "status": "PASS",
+  "character_collection": "COL_CHR_SLOTH_FINAL",
+  "rig": "RIG_Sloth",
+  "demo_scene": "SCENE_DEMO_PRODUCTION",
+  "camera": "CXR_DEMO_Camera",
+  "rig_action": "CXR_DEMO_TalkLoop_Slow",
+  "face_action": "CXR_DEMO_FaceAction",
+  "output": "/Users/wanglian/Projects/tangying-ai-operation-system/ip形象/main_ip/renders/demo/sloth_production_demo.mp4",
+  "frame_sequence": "/Users/wanglian/Projects/tangying-ai-operation-system/ip形象/main_ip/renders/demo/frames/frame_####.jpg",
+  "fps": 24,
+  "resolution": [
+    960,
+    540
+  ],
+  "duration_seconds": 5.0,
+  "audio": null
+}

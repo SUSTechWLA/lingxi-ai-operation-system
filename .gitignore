@@ -11,7 +11,7 @@
 target/
 scripts/tmp/
 
-# Environment files with secrets - NEVER commit these!
+# Environment files with secrets — NEVER commit these!
 .env
 .env.*
 .env.local
@@ -33,18 +33,43 @@ vendor/
 __pycache__/
 *.py[cod]
 
-# IP Character Assets - large binary files
+# Node / Frontend
+node_modules/
+frontend/node_modules
+electron/node_modules
+frontend/build/
+frontend/dist/
+frontend/release/
+frontend/resources/bin/
+frontend/vite.config.d.ts
+frontend/vite.config.js
+*.tsbuildinfo
+
+# HyperFrames
+hyperframes-render-service/node_modules
+hyperframes-render-service/dist/
+
+# Cloud Backend
+cloud-backend/build/
+cloud-backend/sandbox/target/
+cloud-backend/tangying-ai-os
+cloud-backend/runtime-model-provider.json
+
+# Local Backend
+local-backend/build/
+local-backend/dist/
+
+# IP Assets — intermediate files
 ip-assets/**/*.blend1
 ip-assets/**/checkpoints/
 ip-assets/**/renders/
 ip-assets/**/turnaround/
 ip-assets/**/demos/
 ip-assets/**/voice/
-ip-assets/**/models/
-ip-assets/**/backgrounds/
-ip-assets/**/manifests/
 ip-assets/**/reports/
 ip-assets/**/scripts/__pycache__/
+ip-assets/*.png
+ip-assets/*.wav
 
 # Demo / temporary output
 demo-output/
@@ -53,27 +78,16 @@ creator-review-diagnostics-complete.bundle
 .codex-worktree-creator-review/
 .workspace-archive/
 
+# Tool config
+blender_scripts/
+
 # OS
 .DS_Store
 Thumbs.db
 trace.json
-frontend/node_modules
-electron/node_modules
-node_modules/
+
+# Claude / AI tools
 .codex/
+.claude/
 .lingxi-core-loop/
 .superpowers/
-cloud-backend/build/
-cloud-backend/sandbox/target/
-local-backend/build/
-local-backend/dist/
-frontend/build/
-frontend/dist/
-frontend/release/
-frontend/resources/bin/
-hyperframes-render-service/dist/
-*.tsbuildinfo
-frontend/vite.config.d.ts
-frontend/vite.config.js
-cloud-backend/tangying-ai-os
-cloud-backend/runtime-model-provider.json
